@@ -1,0 +1,9 @@
+build/
+
+*.o
+*.out
+*.obj
+*.exe
+
+run4coder.bat
+project.4coder
