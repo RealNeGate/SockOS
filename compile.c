@@ -27,12 +27,23 @@ int main() {
 	cmd_append("nasm -f bin -o build/loader.bin src/loader.s");
 	if (cmd_dump(cmd_run())) return 1;
 	
+#if __linux__
+#pragma message "The linker stuff doesn't work here, just warning you"
+	
+	cmd_append("ld.lld -subsystem:efi_application -nodefaultlib -dll ");
+	cmd_append("-entry:efi_main build/uefi.obj -out:build/boot.efi");
+	if (cmd_dump(cmd_run())) return 1;
+	
+	cmd_append("./make_iso.sh");
+	if (cmd_dump(cmd_run())) return 1;
+#else
 	cmd_append("lld-link -subsystem:efi_application -nodefaultlib -dll ");
 	cmd_append("-entry:efi_main build/uefi.obj -out:build/boot.efi");
 	if (cmd_dump(cmd_run())) return 1;
 	
 	cmd_append("wsl ./make_iso.sh");
 	if (cmd_dump(cmd_run())) return 1;
+#endif
 	
 	return 0;
 }
