@@ -1,1 +1,1 @@
-W:\Qemu\qemu-system-x86_64.exe -m 2048 -hda efi.img -boot c
+W:\Qemu\qemu-system-x86_64.exe -L OVMF_dir/ -pflash OVMF.fd -cdrom cdimage.iso

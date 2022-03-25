@@ -1,46 +1,58 @@
 #include "compile.h"
 
+#if !defined(__clang__)
+#error "Must be compiling with clang"
+#endif
+
+#define EFI_CFLAGS \
+"-target x86_64-pc-win32-coff " \
+"-fno-stack-protector " \
+"-nostdlib " \
+"-fshort-wchar " \
+"-mno-red-zone "
+
+#define KERNEL_CFLAGS \
+"-target x86_64-pc-none-elf " \
+"-fno-stack-protector " \
+"-fpic " \
+"-nostdlib " \
+"-march=x86-64 " \
+"-mno-red-zone "
+
+#define LLD_FLAGS \
+"-subsystem:efi_application " \
+"-nodefaultlib " \
+"-dll " \
+"-entry:efi_main "
+
 int main() {
 	// don't wanna buffer stdout
 	setvbuf(stdout, NULL, _IONBF, 0);
-	
-#if defined(__clang__)
-	printf("Compiling on Clang %d.%d.%d...\n", __clang_major__, __clang_minor__, __clang_patchlevel__);
-#else
-#error "Must be compiling with clang"
-#endif
+	printf("Compiling with Clang %d.%d.%d...\n", __clang_major__, __clang_minor__, __clang_patchlevel__);
 	
 	create_dir_if_not_exists("build/");
 	
 	// Compile EFI STUB
-	cmd_append("clang -I efi -target x86_64-pc-win32-coff ");
-	cmd_append("-fno-stack-protector -nostdlib -fshort-wchar -mno-red-zone ");
-	cmd_append("-c src/efi_stub.c -o build/uefi.obj");
+	cmd_append("clang -I efi -c src/efi_stub.c -o build/uefi.obj ");
+	cmd_append(EFI_CFLAGS);
 	if (cmd_dump(cmd_run())) return 1;
 	
 	// Compile Kernel
-	cmd_append("clang -o build/kernel.o  -c src/kernel.c ");
-	cmd_append("-fno-stack-protector -fpic -mno-red-zone -nostdlib ");
-	cmd_append("--target=x86_64-pc-none-elf -march=x86-64");
+	cmd_append("clang -o build/kernel.o -c src/kernel.c ");
+	cmd_append(KERNEL_CFLAGS);
 	if (cmd_dump(cmd_run())) return 1;
 	
 	cmd_append("nasm -f bin -o build/loader.bin src/loader.s");
 	if (cmd_dump(cmd_run())) return 1;
 	
-#if __linux__
-#pragma message "The linker stuff doesn't work here, just warning you"
-	
-	cmd_append("ld.lld -subsystem:efi_application -nodefaultlib -dll ");
-	cmd_append("-entry:efi_main build/uefi.obj -out:build/boot.efi");
+	cmd_append("lld-link build/uefi.obj -out:build/boot.efi ");
+	cmd_append(LLD_FLAGS);
 	if (cmd_dump(cmd_run())) return 1;
 	
-	cmd_append("./make_iso.sh");
+#if __linux__
+	cmd_append("make_iso.sh");
 	if (cmd_dump(cmd_run())) return 1;
 #else
-	cmd_append("lld-link -subsystem:efi_application -nodefaultlib -dll ");
-	cmd_append("-entry:efi_main build/uefi.obj -out:build/boot.efi");
-	if (cmd_dump(cmd_run())) return 1;
-	
 	cmd_append("wsl ./make_iso.sh");
 	if (cmd_dump(cmd_run())) return 1;
 #endif

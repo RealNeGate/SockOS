@@ -1,4 +1,5 @@
 build/
+OVMF_dir/
 
 *.o
 *.out

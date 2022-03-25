@@ -4,6 +4,15 @@
 
 #include "efi.h"
 
+typedef struct VideoModeInformation {
+	uint8_t valid : 1, edidValid : 1;
+	uint8_t bitsPerPixel;
+	uint16_t widthPixels, heightPixels;
+	uint16_t bytesPerScanlineLinear;
+	uint64_t bufferPhysical;
+	uint8_t edid[128];
+} VideoModeInformation;
+
 void itoa(uint32_t i, uint8_t base, uint16_t* buf) {
 	static const char bchars[] = "0123456789ABCDEF";
 	
@@ -33,7 +42,7 @@ void itoa(uint32_t i, uint8_t base, uint16_t* buf) {
 
 void printhex(EFI_SYSTEM_TABLE *st, uint32_t number) {
 	uint16_t buffer[32];
-	itoa(number, 10, buffer);
+	itoa(number, 16, buffer);
 	buffer[31] = 0;
 	
 	st->ConOut->OutputString(st->ConOut, (int16_t *)buffer);
@@ -47,21 +56,18 @@ void println(EFI_SYSTEM_TABLE *st, uint16_t *str) {
 
 #define panic(x, y) do { println((x), (y)); return 1; } while (false);
 
-#define LOADER_BUFFER_SIZE (1 * 1024 * 512)
-#define LOADER_BUFFER_LOC 0x180000
-
+#define LOADER_BUFFER_SIZE (1 * 1024 * 1024)
 #define KERNEL_BUFFER_SIZE (1 * 1024 * 1024)
-#define KERNEL_BUFFER_LOC 0x200000
 
 #define MEM_MAP_BUFFER_SIZE (16 * 1024)
-char mem_map_buffer[MEM_MAP_BUFFER_SIZE];
+static char mem_map_buffer[MEM_MAP_BUFFER_SIZE];
 
 typedef struct {
 	uintptr_t base, pages;
 } MemRegion;
 
 #define MAX_MEM_REGIONS (1024)
-MemRegion mem_regions[MAX_MEM_REGIONS];
+static MemRegion mem_regions[MAX_MEM_REGIONS];
 
 void *memset(void *buffer, int c, size_t n) {
 	uint8_t *buf = (uint8_t *)buffer;
@@ -78,6 +84,16 @@ void *memcpy(void *dest, const void *src, size_t n) {
 	}
 	return (void *)dest;
 }
+int memcmp(const void *a, const void *b, size_t n) {
+	uint8_t *aa = (uint8_t *)a;
+	uint8_t *bb = (uint8_t *)b;
+	
+	for (size_t i = 0; i < n; i++) {
+		if (aa[i] != bb[i]) return aa[i] - bb[i];
+	}
+	
+	return 0;
+}
 
 EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE *st) {
 	EFI_STATUS status;
@@ -86,20 +102,21 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE *st) {
 	println(st, L"Beginning EFI Boot...");
 	
 	// Load the kernel and loader from disk
+	char* kernel_loader_region;
 	{
-		// 1:1 maps 2MB, starting at 0x100000
-		
-		EFI_PHYSICAL_ADDRESS addr = 0x100000;
-		status = st->BootServices->AllocatePages(AllocateAddress, EfiLoaderData, 0x200, &addr);
-		if (status < 0) {
+		EFI_PHYSICAL_ADDRESS addr;
+		status = st->BootServices->AllocatePages(AllocateAnyPages, EfiLoaderData, 0x200, &addr);
+		if (status != 0) {
+			printhex(st, status);
 			panic(st, L"Failed to allocate space for loader + kernel!");
 		}
-		
+		kernel_loader_region = (char*)addr;
 		
 		EFI_GUID loaded_img_proto_guid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
 		EFI_LOADED_IMAGE_PROTOCOL *loaded_img_proto;
 		status = st->BootServices->OpenProtocol(img_handle, &loaded_img_proto_guid, (void **)&loaded_img_proto, img_handle, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL);
-		if (status < 0) {
+		if (status != 0) {
+			printhex(st, status);
 			panic(st, L"Failed to load img protocol!");
 		}
 		
@@ -107,39 +124,49 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE *st) {
 		EFI_HANDLE dev_handle = loaded_img_proto->DeviceHandle;
 		EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *simple_fs_proto;
 		status = st->BootServices->OpenProtocol(dev_handle, &simple_fs_proto_guid, (void **)&simple_fs_proto, img_handle, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL);
-		if (status < 0) {
+		if (status != 0) {
+			printhex(st, status);
 			panic(st, L"Failed to load fs protocol!");
 		}
 		
 		EFI_FILE *fs_root;
 		status = simple_fs_proto->OpenVolume(simple_fs_proto, &fs_root);
-		if (status < 0) {
+		if (status != 0) {
+			printhex(st, status);
 			panic(st, L"Failed to open fs root!");
 		}
 		
 		
 		EFI_FILE *kernel_file;
 		status = fs_root->Open(fs_root, &kernel_file, (int16_t *)L"kernel.o", EFI_FILE_MODE_READ, 0);
-		if (status < 0) {
+		if (status != 0) {
+			printhex(st, status);
 			panic(st, L"Failed to open kernel.o!");
 		}
 		
+		// Kernel buffer is right after the loader region
 		size_t size = KERNEL_BUFFER_SIZE;
-		char *kernel_buffer = (char *)KERNEL_BUFFER_LOC;
+		char *kernel_buffer = &kernel_loader_region[LOADER_BUFFER_SIZE];
 		kernel_file->Read(kernel_file, &size, kernel_buffer);
 		
 		if (size == KERNEL_BUFFER_SIZE) {
 			panic(st, L"Kernel too large to fit into buffer!");
 		}
 		
+		// Verify ELF magic number
+		if (memcmp(kernel_buffer, (uint8_t[]){ 0x7F, 'E', 'L', 'F' }, 4) != 0) {
+			panic(st, L"kernel.o is not a valid ELF file!");
+		}
+		
 		EFI_FILE *loader_file;
 		status = fs_root->Open(fs_root, &loader_file, (int16_t *)L"loader.bin", EFI_FILE_MODE_READ, 0);
-		if (status < 0) {
+		if (status != 0) {
+			printhex(st, status);
 			panic(st, L"Failed to open loader.bin!");
 		}
 		
 		size = LOADER_BUFFER_SIZE;
-		char *loader_buffer = (char *)LOADER_BUFFER_LOC;
+		char *loader_buffer = &kernel_loader_region[0];
 		loader_file->Read(loader_file, &size, loader_buffer);
 		
 		if (size == LOADER_BUFFER_SIZE) {
@@ -147,11 +174,55 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE *st) {
 		}
 		
 		println(st, L"Loaded the kernel and loader!");
+		printhex(st, (uint32_t) ((uintptr_t)loader_buffer));
+		printhex(st, (uint32_t) ((uintptr_t)kernel_buffer));
 	}
 	
+#if 0
+	// Get linear framebuffer
+	uint32_t* framebuffer;
+	size_t framebuffer_width, framebuffer_height, framebuffer_stride;
+	{
+        EFI_GRAPHICS_OUTPUT_PROTOCOL* graphics_output_protocol;
+        EFI_GUID graphics_output_protocol_guid = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
+		
+		status = st->BootServices->LocateProtocol(3, &graphics_output_protocol_guid, NULL, (void **) &graphics_output_protocol);
+        if (status != 0) {
+            panic(st, L"Error: Could not open protocol 3.\n");
+        }
+		
+		framebuffer_width = graphics_output_protocol->Mode->Info->HorizontalResolution;
+		framebuffer_height = graphics_output_protocol->Mode->Info->VerticalResolution;
+        framebuffer_stride = graphics_output_protocol->Mode->Info->PixelsPerScanLine;
+		framebuffer = (uint32_t*) graphics_output_protocol->Mode->FrameBufferBase;
+	}
 	
-	size_t map_key;
+	// Generate the kernel page tables
+	//   they don't get used quite yet but it's
+	//   far easier to just parse ELF in C than it is in assembly so we wanna get
+	//   it out of the way
+	{
+		char* elf_file = &kernel_loader_region[LOADER_BUFFER_SIZE];
+		Elf64_Ehdr* elf_header = (Elf64_Ehdr*) elf_file;
+		
+		// Figure out how much space we actually need
+		size_t pages_necessary = 0;
+		for (size_t i = 0; i < elf_header->e_phnum; i++) {
+			Elf64_Phdr* segment = (Elf64_Phdr*) &elf_file[elf_header->e_phoff + (i * elf_header->e_phentsize)];
+			
+			pages_necessary += ();
+		}
+		
+		// Allocate said space
+		
+		
+		// Slap some pages on it
+		
+	}
+#endif
+	
 	// Load latest memory map
+	size_t map_key;
 	{
 		size_t desc_size;
 		uint32_t desc_version;
@@ -161,16 +232,10 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE *st) {
 												&map_key, &desc_size,
 												&desc_version);
 		
-		if (status < 0) {
+		if (status != 0) {
+			printhex(st, status);
 			panic(st, L"Failed to get memory map!");
 		}
-		
-		// Printing here will cause the code to be emotionally
-		// stable but once we either remove the printing or just
-		// do newlines... it doesn't appreciate us anymore
-		printhex(st, size);
-		printhex(st, desc_size);
-		//st->ConOut->OutputString(st->ConOut, (int16_t *)L"\n\r");
 		
 		size_t desc_count = size / desc_size;
 		size_t mem_region_count = 0;
@@ -178,6 +243,11 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE *st) {
 			EFI_MEMORY_DESCRIPTOR *desc = (EFI_MEMORY_DESCRIPTOR *)(mem_map_buffer + (i * desc_size));
 			
 			if (desc->Type == EfiConventionalMemory && desc->PhysicalStart >= 0x300000) {
+				/*println(st, L"Range:");
+				printhex(st, desc->PhysicalStart);
+				printhex(st, desc->NumberOfPages * 4096);
+				println(st, L"");*/
+				
 				mem_regions[mem_region_count].base = desc->PhysicalStart;
 				mem_regions[mem_region_count].pages = desc->NumberOfPages;
 				mem_region_count++;
@@ -187,15 +257,14 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE *st) {
 	}
 	
 	status = st->BootServices->ExitBootServices(img_handle, map_key);
-	if (status < 0) {
+	if (status != 0) {
+		printhex(st, status);
 		panic(st, L"Failed to exit EFI");
 	}
 	
-	println(st, L"Starting the loader");
-	
 	// Boot the loader
 	typedef void LoaderFunction(void* kernel_elf_file);
-	((LoaderFunction*) LOADER_BUFFER_LOC)((void*) KERNEL_BUFFER_LOC);
+	((LoaderFunction*)kernel_loader_region)(&kernel_loader_region[LOADER_BUFFER_SIZE]);
 	
 	return 0;
 }
