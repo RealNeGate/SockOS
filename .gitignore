@@ -1,4 +1,5 @@
 build/
+bin/
 OVMF_dir/
 
 *.o
