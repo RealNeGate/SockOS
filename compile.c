@@ -15,6 +15,7 @@
 "-target x86_64-pc-none-elf " \
 "-fno-stack-protector " \
 "-fpic " \
+"-ffreestanding " \
 "-nostdlib " \
 "-march=x86-64 " \
 "-mno-red-zone "
