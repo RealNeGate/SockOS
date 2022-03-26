@@ -66,7 +66,11 @@ typedef uint64_t    Elf64_Xword;
 // http://web.mit.edu/freebsd/head/sys/sys/elf64.h
 // https://cirosantilli.com/elf-hello-world#minimal-elf-file
 // https://en.wikipedia.org/wiki/Executable_and_Linkable_Format
-# define EI_NIDENT 16
+#define EI_NIDENT 16
+
+#define ELF64_R_SYM(i)     ((i) >> 32)
+#define ELF64_R_TYPE(i)    ((i) & 0xffffffffL)
+#define ELF64_R_INFO(s, t) (((s) << 32) + ((t)&0xffffffffL))
 
 typedef struct {
 	unsigned char   e_ident[EI_NIDENT];
@@ -118,3 +122,14 @@ typedef struct {
 	Elf64_Addr      st_value;
 	Elf64_Xword     st_size;
 } Elf64_Sym;
+
+typedef struct {
+	Elf64_Addr   r_offset;
+	Elf64_Xword  r_info;
+	Elf64_Sxword r_addend;
+} Elf64_Rela;
+
+typedef struct {
+	Elf64_Addr   r_offset;
+	Elf64_Xword  r_info;
+} Elf64_Rel;

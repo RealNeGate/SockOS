@@ -25,8 +25,17 @@ typedef struct {
 	} fb;
 } BootInfo;
 
+/*
+void foobar() {
+}
+*/
+
 void kernel_main(BootInfo* info) {
 	for (size_t i = 0; i < 10000; i++) {
 		info->fb.pixels[i] = 0xFF00FF00;
 	}
+
+/*
+	foobar();
+*/
 }

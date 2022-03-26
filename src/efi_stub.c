@@ -366,16 +366,16 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 
 		// Figure out how much space we actually need
 		size_t pages_necessary = 0;
-		Elf64_Shdr* text_section = NULL;
+		uint8_t* text_section = NULL;
 		for (size_t i = 0; i < elf_header->e_shnum; i++) {
 			Elf64_Shdr* section = (Elf64_Shdr*) &elf_file[elf_header->e_shoff + (i * elf_header->e_shentsize)];
 
-			if (section->sh_flags & SHF_ALLOC) {
-				char* name = &elf_file[string_table->sh_offset + section->sh_name];
-				if (memcmp(name, ".text", 5) == 0) {
-					text_section = section;
-				}
+			char* name = &elf_file[string_table->sh_offset + section->sh_name];
+			if (memcmp(name, ".text", 5) == 0) {
+				text_section = (uint8_t *)section;
+			}
 
+			if (section->sh_flags & SHF_ALLOC) {
 				pages_necessary += (section->sh_size + (PAGE_SIZE-1)) / PAGE_SIZE;
 			}
 		}
@@ -402,7 +402,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 			printhex(st, status);
 			panic(st, L"Failed to allocate space for kernel!");
 		}
-		char* section_memory = (char*) addr;
+		uint8_t* section_memory = (uint8_t*) addr;
 
 		// 512 entries per page
 		status = st->BootServices->AllocatePages(AllocateAnyPages, EfiLoaderData,
@@ -415,30 +415,33 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 
 		// Load stuff into those newly minted pages
 		size_t pages_used = 0;
+		uint8_t* text_reloc_section = NULL;
 		for (size_t i = 0; i < elf_header->e_shnum; i++) {
 			Elf64_Shdr* section = (Elf64_Shdr*) &elf_file[elf_header->e_shoff + (i * elf_header->e_shentsize)];
 
+			char* name = &elf_file[string_table->sh_offset + section->sh_name];
+			uint8_t* dst_memory = &section_memory[pages_used*PAGE_SIZE];
+			if (memcmp(name, ".text", 5) == 0) {
+				text_section = dst_memory;
+			} else if (memcmp(name, ".rela.text", 10) == 0) {
+				text_reloc_section = dst_memory;
+			}
+
+			// Load ELF stuff into memory
 			if (section->sh_flags & SHF_ALLOC) {
-				char* name = &elf_file[string_table->sh_offset + section->sh_name];
-				char* dst_memory = &section_memory[pages_used*PAGE_SIZE];
-
-				if (memcmp(name, ".text", 5) == 0) {
-					// mark offbrand entrypoint
-					// TODO(NeGate): We're assuming that the entrypoint is
-					// at the start of .text... like ballers
-					boot_info.entrypoint = dst_memory;
-				}
-
-				// Load ELF stuff into memory
-				memcpy(dst_memory,
-					   &elf_file[section->sh_offset],
-					   section->sh_size);
-
+				memcpy(dst_memory, &elf_file[section->sh_offset], section->sh_size);
 				pages_used += (section->sh_size + (PAGE_SIZE-1)) / PAGE_SIZE;
 			}
 		}
 
 		// TODO(NeGate): handle any relocations
+		if (text_reloc_section) {
+
+		}
+
+		// TODO(NeGate): We're assuming that the entrypoint is
+		// at the start of .text... like ballers
+		boot_info.entrypoint = text_section;
 
 		// setup root PML4 thingy
 		boot_info.kernel_pml4 = &page_tables[0];
@@ -534,6 +537,6 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 	}
 
 	// Boot the loader
-	((LoaderFunction)kernel_loader_region)(&boot_info, kernel_stack + KERNEL_STACK_SIZE - 8);
+	((LoaderFunction)kernel_loader_region)(&boot_info, kernel_stack + KERNEL_STACK_SIZE);
 	return 0;
 }
