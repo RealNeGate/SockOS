@@ -49,9 +49,9 @@ void println(EFI_SYSTEM_TABLE *st, uint16_t *str) {
 
 #define panic(x, y) do { println((x), (y)); return 1; } while (false);
 
-#define FLOOR_4K(x) (((x) + 0xFFF) / 0x1000)
-#define FLOOR_2M(x) (((x) + 0x1FFFFF) / 0x200000)
-#define FLOOR_1G(x) (((x) + 0x3FFFFFFF) / 0x40000000)
+#define PAGE_4K(x) (((x) + 0xFFF) / 0x1000)
+#define PAGE_2M(x) (((x) + 0x1FFFFF) / 0x200000)
+#define PAGE_1G(x) (((x) + 0x3FFFFFFF) / 0x40000000)
 
 #define LOADER_BUFFER_SIZE (1 * 1024 * 1024)
 #define KERNEL_BUFFER_SIZE (1 * 1024 * 1024)
@@ -88,7 +88,7 @@ typedef struct {
 	} fb;
 } BootInfo;
 
-typedef void(*LoaderFunction)(BootInfo* info);
+typedef void(*LoaderFunction)(BootInfo* info, uint8_t *stack);
 
 void* memset(void* buffer, int c, size_t n) {
 	uint8_t* buf = (uint8_t*) buffer;
@@ -129,13 +129,16 @@ typedef struct {
 
 static size_t estimate_page_table_count(size_t size) {
 	size_t count = 0;
-	count += FLOOR_4K(size); // 4KiB pages
-	count += FLOOR_2M(size); // 2MiB pages
-	count += FLOOR_1G(size); // 1GiB pages
+	count += PAGE_4K(size); // 4KiB pages
+	count += PAGE_2M(size); // 2MiB pages
+	count += PAGE_1G(size); // 1GiB pages
 	return count;
 }
 
 static _Alignas(4096) BootInfo boot_info;
+
+#define KERNEL_STACK_SIZE 0x200000
+static _Alignas(4096) uint8_t kernel_stack[KERNEL_STACK_SIZE];
 
 static void print_memory_map(EFI_SYSTEM_TABLE* st, PageTable* table, int depth) {
 	wchar_t buffer[64];
@@ -343,6 +346,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 		boot_info.fb.stride = graphics_output_protocol->Mode->Info->PixelsPerScanline;
 		boot_info.fb.pixels = (uint32_t*) graphics_output_protocol->Mode->FrameBufferBase;
 	}
+	println(st, L"Got the framebuffer!");
 
 	// Generate the kernel page tables
 	//   they don't get used quite yet but it's
@@ -386,7 +390,9 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 			estimate_page_table_count(pages_necessary) +
 			estimate_page_table_count(boot_info.fb.width * boot_info.fb.height * 4) +
 			estimate_page_table_count(MEM_MAP_BUFFER_SIZE) +
+			estimate_page_table_count(LOADER_BUFFER_SIZE) +
 			estimate_page_table_count(4096) +
+			estimate_page_table_count(KERNEL_STACK_SIZE) +
 			1;
 
 		EFI_PHYSICAL_ADDRESS addr;
@@ -449,12 +455,20 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 			return 1;
 		}
 
-		uint64_t fb_page_count = FLOOR_4K(boot_info.fb.width * boot_info.fb.height * 4);
+		uint64_t fb_page_count = PAGE_4K(boot_info.fb.width * boot_info.fb.height * 4);
 		if (identity_map_some_pages(st, &ctx, (uint64_t) boot_info.fb.pixels, fb_page_count)) {
 			return 1;
 		}
 
-		if (identity_map_some_pages(st, &ctx, (uint64_t) &mem_map_buffer[0], FLOOR_4K(MEM_MAP_BUFFER_SIZE))) {
+		if (identity_map_some_pages(st, &ctx, (uint64_t) &mem_map_buffer[0], PAGE_4K(MEM_MAP_BUFFER_SIZE))) {
+			return 1;
+		}
+
+		if (identity_map_some_pages(st, &ctx, (uint64_t) &kernel_loader_region[0], PAGE_4K(LOADER_BUFFER_SIZE))) {
+			return 1;
+		}
+
+		if (identity_map_some_pages(st, &ctx, (uint64_t) &kernel_stack[0], PAGE_4K(KERNEL_STACK_SIZE))) {
 			return 1;
 		}
 
@@ -520,6 +534,6 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 	}
 
 	// Boot the loader
-	((LoaderFunction)kernel_loader_region)(&boot_info);
+	((LoaderFunction)kernel_loader_region)(&boot_info, kernel_stack + KERNEL_STACK_SIZE - 8);
 	return 0;
 }

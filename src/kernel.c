@@ -13,10 +13,10 @@ typedef struct {
 typedef struct {
 	void* entrypoint;
 	PageTable* kernel_pml4;
-	
+
 	size_t mem_region_count;
 	MemRegion* mem_regions;
-	
+
 	struct {
 		uint32_t width, height;
 		uint32_t stride; // in pixels

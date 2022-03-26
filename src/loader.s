@@ -1,23 +1,53 @@
 [bits 64]
 [section .text]
+[default rel]
 
 ; We got ourselves boot info in RCX
 start:
-	; Setup GDT descriptor
-	; lea rax, [gdt64]
-	; mov [gdt64.pointer + 2], rax
+	; switch to new kernel stack
+	mov rsp, rdx
+
+
+	; setup GDT descriptor
+	lea rax, [gdt64]
+	mov [gdt64.pointer + 2], rax
 
 	; set new page table crap
-	; mov rax, [rcx + 8]
-	; mov cr3, rax
+	mov rax, [rcx + 8]
+	mov cr3, rax
+
+
+	mov rdi, rcx
+	call [rcx]
+	hlt
+
+
+	lgdt [gdt64.pointer]
+
+reload_segments:
+	mov rax, 0x8
+	push rax
+
+	lea rax, [.reload_cs]
+	push rax
+	retf
+.reload_cs:
+	mov ax, 0x10
+	mov ds, ax
+	mov es, ax
+	mov fs, ax
+	mov gs, ax
+	mov ss, ax
+
+doodle:
 
 	; Put some pixels
 	mov rax, [rcx + 48]
 	mov rdx, 40000
-.loop:
-	mov dword [rax + rdx * 4], 0xFF00FF00
+.loop2:
+	mov dword [rax + rdx * 4], 0xFFFF00FF
 	sub rdx, 1
-	jnz .loop
+	jnz .loop2
 	hlt
 
 gdt64:
