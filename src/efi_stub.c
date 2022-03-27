@@ -415,7 +415,10 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 
 		// Load stuff into those newly minted pages
 		size_t pages_used = 0;
-		uint8_t* text_reloc_section = NULL;
+		size_t text_reloc_offset = 0;
+		size_t symbol_offset = 0;
+		size_t reloc_size = 0;
+		size_t symbols_size = 0;
 		for (size_t i = 0; i < elf_header->e_shnum; i++) {
 			Elf64_Shdr* section = (Elf64_Shdr*) &elf_file[elf_header->e_shoff + (i * elf_header->e_shentsize)];
 
@@ -424,7 +427,11 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 			if (memcmp(name, ".text", 5) == 0) {
 				text_section = dst_memory;
 			} else if (memcmp(name, ".rela.text", 10) == 0) {
-				text_reloc_section = dst_memory;
+				text_reloc_offset = section->sh_offset;
+				reloc_size = section->sh_size;
+			} else if (memcmp(name, ".symtab", 7) == 0) {
+				symbol_offset = section->sh_offset;
+				symbols_size = section->sh_size;
 			}
 
 			// Load ELF stuff into memory
@@ -435,13 +442,46 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 		}
 
 		// TODO(NeGate): handle any relocations
-		if (text_reloc_section) {
+		if (text_reloc_offset) {
+			for (size_t i = 0; i < reloc_size; i += sizeof(Elf64_Rela)) {
+				Elf64_Rela* rela = (Elf64_Rela*) &elf_file[text_reloc_offset + i];
+				uint8_t type = ELF64_R_TYPE(rela->r_info);
 
+				// We're only handling PLT32's for now
+				if (type != R_X86_64_PLT32) {
+					panic(st, L"Unable to handle unknown relocation type!\n");
+				}
+
+				// Get the symbol we're using for patch reference
+				uint64_t sym_idx = ELF64_R_SYM(rela->r_info);
+				Elf64_Sym* sym = (Elf64_Sym*)((elf_file + symbol_offset) + (sizeof(Elf64_Sym) * sym_idx));
+
+				// Compute the new address to patch, based on symbol location and addend
+				uint64_t patch_address = (uint64_t)(text_section + rela->r_offset);
+				uint64_t new_address = (sym->st_value + rela->r_addend) - patch_address;
+
+				// Apply patch to CALL address
+				*(uint32_t*)(text_section + rela->r_offset) = (uint32_t)new_address;
+			}
 		}
 
-		// TODO(NeGate): We're assuming that the entrypoint is
-		// at the start of .text... like ballers
-		boot_info.entrypoint = text_section;
+		// Find kernel main
+		boot_info.entrypoint = 0;
+		for (size_t i = 0; i < symbols_size; i += sizeof(Elf64_Sym)) {
+			Elf64_Sym* sym = (Elf64_Sym*) &elf_file[symbol_offset + i];
+
+			char* name = &elf_file[string_table->sh_offset + sym->st_name];
+			if (memcmp(name, "kmain", 5) == 0) {
+				boot_info.entrypoint = (void *)(text_section + sym->st_value);
+				break;
+			}
+		}
+		if (!boot_info.entrypoint) {
+			panic(st, L"Failed to find kmain entrypoint!\n");
+		}
+
+		println(st, L"Found kmain!");
+		printhex(st, (uint32_t)(uint64_t)boot_info.entrypoint);
 
 		// setup root PML4 thingy
 		boot_info.kernel_pml4 = &page_tables[0];

@@ -50,6 +50,13 @@
 #define	SHF_MASKOS           0x0ff00000	/* OS-specific semantics. */
 #define	SHF_MASKPROC         0xf0000000	/* Processor-specific semantics. */
 
+/* Values for relocation */
+#define R_X86_64_NONE  0
+#define R_X86_64_64    1
+#define R_X86_64_PC32  2
+#define R_X86_64_GOT32 3
+#define R_X86_64_PLT32 4
+
 typedef uint64_t    Elf64_Addr;
 typedef uint16_t    Elf64_Half;
 typedef uint64_t    Elf64_Off;
