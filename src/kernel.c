@@ -25,7 +25,7 @@ typedef struct {
 	} fb;
 } BootInfo;
 
-static void foobar(BootInfo *info) {
+void foobar(BootInfo *info) {
 	for (size_t i = 500; i < 1000; i++) {
 		info->fb.pixels[i] = 0xFF00FFFF;
 	}

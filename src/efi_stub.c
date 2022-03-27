@@ -458,7 +458,8 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 
 				// Compute the new address to patch, based on symbol location and addend
 				uint64_t patch_address = (uint64_t)(text_section + rela->r_offset);
-				uint64_t new_address = (sym->st_value + rela->r_addend) - patch_address;
+				uint64_t symbol_address = (uint64_t)(text_section + sym->st_value);
+				uint64_t new_address = (symbol_address + rela->r_addend) - patch_address;
 
 				// Apply patch to CALL address
 				*(uint32_t*)(text_section + rela->r_offset) = (uint32_t)new_address;
