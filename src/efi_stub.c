@@ -435,7 +435,11 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
             if (section->sh_flags & SHF_ALLOC) {
                 section_table[i] = dst_memory;
 
-                memcpy(dst_memory, &elf_file[section->sh_offset], section->sh_size);
+                if (section->sh_type == SHT_NOBITS) {
+                    memset(dst_memory, 0, section->sh_size);
+                } else {
+                    memcpy(dst_memory, &elf_file[section->sh_offset], section->sh_size);
+                }
                 pages_used += (section->sh_size + (PAGE_SIZE - 1)) / PAGE_SIZE;
             }
         }

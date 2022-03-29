@@ -1,7 +1,6 @@
 #include <stdint.h>
 #include <stddef.h>
-
-//#include "font.h"
+#include "font.h"
 
 typedef struct {
     uintptr_t base, pages;
@@ -27,28 +26,28 @@ typedef struct {
     } fb;
 } BootInfo;
 
-/*static uint16_t cursor;
+static BootInfo* boot_info;
+static uint16_t  cursor;
 
 static void put_char(int ch) {
-        int columns = fb_width / 8;
-        int rows = fb_height / 8;
+    int columns = (boot_info->fb.width - 16) / 16;
+    int rows    = (boot_info->fb.height - 16) / 16;
 
-        int x = (cursor % columns) * 8;
-        int y = (cursor / columns) * 8;
-        const uint8_t* bitmap = FONT[(int)ch];
+    int            x      = (cursor % columns) * 16;
+    int            y      = (cursor / columns) * 16;
+    const uint8_t* bitmap = FONT[(int)ch];
 
-        for (size_t yy = 0; yy < 8; yy++) {
-                for (size_t xx = 0; xx < 8; xx++) {
-                        if (bitmap[yy] & (1 << xx)) {
-                                fb_pixels[(x+xx) + ((y+yy) * fb_width)] = 0xFFFFFFFF;
-                        }
-                }
+    for (size_t yy = 0; yy < 16; yy++) {
+        for (size_t xx = 0; xx < 16; xx++) {
+            if (bitmap[yy / 2] & (1 << (xx / 2))) {
+                boot_info->fb.pixels[(8 + x + xx) + ((8 + y + yy) * boot_info->fb.stride)] =
+                    0xFFFFFFFF;
+            }
         }
+    }
 
-        cursor = (cursor + 1) % (columns * rows);
-}*/
-
-static BootInfo* boot_info;
+    cursor = (cursor + 1) % (columns * rows);
+}
 
 void foobar() {
     for (size_t i = 500; i < 1000; i++) {
@@ -59,9 +58,27 @@ void foobar() {
 void kmain(BootInfo* info) {
     boot_info = info;
 
-    for (size_t i = 1000; i < 2000; i++) {
-        boot_info->fb.pixels[i] = 0xFF00FF00;
+    // Draw fancy background
+    uint64_t gradient_x = (boot_info->fb.width + 255) / 256;
+    uint64_t gradient_y = (boot_info->fb.height + 255) / 256;
+
+    for (size_t j = 0; j < boot_info->fb.height; j++) {
+        uint32_t g = ((j / gradient_y) / 2) + 0x7F;
+
+        for (size_t i = 0; i < boot_info->fb.width; i++) {
+            uint32_t b = ((i / gradient_x) / 2) + 0x7F;
+
+            boot_info->fb.pixels[i + (j * boot_info->fb.stride)] =
+                0xFF000000 | (g << 16) | (b << 8);
+        }
     }
 
-    foobar();
+    put_char('A');
+    put_char('A');
+    put_char('A');
+    put_char('A');
+    put_char('A');
+    put_char('A');
+    put_char('A');
+    put_char('A');
 }
