@@ -2,9 +2,17 @@ BasedOnStyle: WebKit
 IndentWidth: 4
 ColumnLimit: 120
 PointerAlignment: Left
-ReflowComments: false
+AlignTrailingComments: true
 AlignOperands: true
 AlignConsecutiveAssignments: true
+AlignConsecutiveMacros: true
+AlignConsecutiveDeclarations: true
+AlignEscapedNewlinesLeft: true
 
 BreakBeforeBraces: Attach
 BreakBeforeBinaryOperators: None
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortIfStatementsOnASingleLine: Always
+AllowShortEnumsOnASingleLine: false
+
+SortIncludes: false
