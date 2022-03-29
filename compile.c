@@ -31,22 +31,22 @@ int main() {
 	setvbuf(stdout, NULL, _IONBF, 0);
 	printf("Compiling with Clang %d.%d.%d...\n", __clang_major__, __clang_minor__, __clang_patchlevel__);
 	
-	create_dir_if_not_exists("build/");
+	create_dir_if_not_exists("bin/");
 	
 	// Compile EFI STUB
-	cmd_append("clang -I efi -c src/efi_stub.c -o build/uefi.obj ");
+	cmd_append("clang -c src/efi_stub.c -o bin/uefi.obj ");
 	cmd_append(EFI_CFLAGS);
 	if (cmd_dump(cmd_run())) return 1;
 	
 	// Compile Kernel
-	cmd_append("clang -o build/kernel.o -c src/kernel.c ");
+	cmd_append("clang -o bin/kernel.o -c src/kernel.c ");
 	cmd_append(KERNEL_CFLAGS);
 	if (cmd_dump(cmd_run())) return 1;
 	
-	cmd_append("nasm -f bin -o build/loader.bin src/loader.s");
+	cmd_append("nasm -f bin -o bin/loader.bin src/loader.s");
 	if (cmd_dump(cmd_run())) return 1;
 	
-	cmd_append("lld-link build/uefi.obj -out:build/boot.efi ");
+	cmd_append("lld-link bin/uefi.obj -out:bin/boot.efi ");
 	cmd_append(LLD_FLAGS);
 	if (cmd_dump(cmd_run())) return 1;
 	
