@@ -1,6 +1,6 @@
 BasedOnStyle: WebKit
 IndentWidth: 4
-ColumnLimit: 120
+ColumnLimit: 100
 PointerAlignment: Left
 AlignTrailingComments: true
 AlignOperands: true
