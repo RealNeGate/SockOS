@@ -29,7 +29,8 @@
 int main() {
     // don't wanna buffer stdout
     setvbuf(stdout, NULL, _IONBF, 0);
-    printf("Compiling with Clang %d.%d.%d...\n", __clang_major__, __clang_minor__, __clang_patchlevel__);
+    printf("Compiling with Clang %d.%d.%d...\n", __clang_major__, __clang_minor__,
+        __clang_patchlevel__);
 
     create_dir_if_not_exists("bin/");
 

@@ -100,8 +100,8 @@ inline static void create_dir_if_not_exists(const char* path) { mkdir(path, 0666
 inline static LPSTR GetLastErrorAsString(void) {
     LPSTR buf = NULL;
 
-    int result = FormatMessage(
-        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM, 0, GetLastError(), 0, (LPSTR)&buf, 0, 0);
+    int result = FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM, 0,
+        GetLastError(), 0, (LPSTR)&buf, 0, 0);
 
     return buf;
 }
@@ -149,7 +149,9 @@ typedef struct FileIter {
     DIR* dir;
 } FileIter;
 
-inline static FileIter file_iter_open(const char* directory) { return (FileIter) { opendir(directory) }; }
+inline static FileIter file_iter_open(const char* directory) {
+    return (FileIter) { opendir(directory) };
+}
 
 inline static char* file_iter_next(FileIter* iter) {
     struct dirent* dp = readdir(iter->dir);
