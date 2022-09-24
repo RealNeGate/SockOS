@@ -1,3 +1,4 @@
+-- https://github.com/RealNeGate/Truct
 -- build efi stub
 local efi_cflags = "-target x86_64-pc-win32-coff -fno-stack-protector -nostdlib -fshort-wchar -mno-red-zone"
 local efi = build.chain(
