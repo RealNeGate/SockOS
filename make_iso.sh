@@ -8,7 +8,7 @@ mmd -i $BUILDDIR/efi.img ::/EFI
 mmd -i $BUILDDIR/efi.img ::/EFI/BOOT
 mcopy -i $BUILDDIR/efi.img $BUILDDIR/boot.efi ::/EFI/BOOT
 mcopy -i $BUILDDIR/efi.img startup.nsh ::/
-mcopy -i $BUILDDIR/efi.img $BUILDDIR/kernel.o ::/
+mcopy -i $BUILDDIR/efi.img $BUILDDIR/kernel.so ::/
 mcopy -i $BUILDDIR/efi.img $BUILDDIR/loader.bin ::/
 
 rm -rf $BUILDDIR/iso $BUILDDIR/cdimage.iso

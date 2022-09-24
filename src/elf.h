@@ -50,6 +50,23 @@
 #define SHF_MASKOS           0x0ff00000 /* OS-specific semantics. */
 #define SHF_MASKPROC         0xf0000000 /* Processor-specific semantics. */
 
+/* Values for p_flags. */
+#define	PF_X		0x1        /* Executable. */
+#define	PF_W		0x2        /* Writable. */
+#define	PF_R		0x4        /* Readable. */
+#define	PF_MASKOS   0x0ff00000 /* Operating system-specific. */
+#define	PF_MASKPROC 0xf0000000 /* Processor-specific. */
+
+/* Values for p_type. */
+#define	PT_NULL      0	/* Unused entry. */
+#define	PT_LOAD      1	/* Loadable segment. */
+#define	PT_DYNAMIC   2	/* Dynamic linking information segment. */
+#define	PT_INTERP    3	/* Pathname of interpreter. */
+#define	PT_NOTE      4	/* Auxiliary information. */
+#define	PT_SHLIB     5	/* Reserved (not used). */
+#define	PT_PHDR      6	/* Location of program header itself. */
+#define	PT_TLS       7	/* Thread local storage segment */
+
 /* Values for relocation */
 #define R_X86_64_NONE  0
 #define R_X86_64_64    1

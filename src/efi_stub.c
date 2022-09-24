@@ -9,9 +9,9 @@
 int itoa(uint32_t i, uint8_t base, uint16_t* buf) {
     static const char bchars[] = "0123456789ABCDEF";
 
-    int      pos   = 0;
-    int      o_pos = 0;
-    int      top   = 0;
+    int pos   = 0;
+    int o_pos = 0;
+    int top   = 0;
     uint16_t tbuf[32];
 
     if (i == 0 || base > 16) {
@@ -48,17 +48,17 @@ void println(EFI_SYSTEM_TABLE* st, uint16_t* str) {
     st->ConOut->OutputString(st->ConOut, (int16_t*)L"\n\r");
 }
 
-#define panic(x, y)        \
-    do {                   \
-        println((x), (y)); \
-        return 1;          \
-    } while (false);
+#define panic(x, y)    \
+do {                   \
+    println((x), (y)); \
+    return 1;          \
+} while (false);
 
 #define PAGE_4K(x) (((x) + 0xFFF) / 0x1000)
 #define PAGE_2M(x) (((x) + 0x1FFFFF) / 0x200000)
 #define PAGE_1G(x) (((x) + 0x3FFFFFFF) / 0x40000000)
 
-#define LOADER_BUFFER_SIZE (1 * 1024 * 1024)
+#define LOADER_BUFFER_SIZE (4 * 1024)
 #define KERNEL_BUFFER_SIZE (1 * 1024 * 1024)
 
 #define MEM_MAP_BUFFER_SIZE (16 * 1024)
@@ -79,15 +79,15 @@ typedef struct {
 
 // This is all the crap we throw into the loader
 typedef struct {
-    void*      entrypoint;
+    void* entrypoint;
     PageTable* kernel_pml4;
 
-    size_t     mem_region_count;
+    size_t mem_region_count;
     MemRegion* mem_regions;
 
     struct {
-        uint32_t  width, height;
-        uint32_t  stride; // in pixels
+        uint32_t width, height;
+        uint32_t stride; // in pixels
         uint32_t* pixels;
         // TODO(NeGate): pixel format :p
     } fb;
@@ -144,6 +144,10 @@ static alignas(4096) BootInfo boot_info;
 #define KERNEL_STACK_SIZE 0x200000
 static alignas(4096) uint8_t kernel_stack[KERNEL_STACK_SIZE];
 
+inline static size_t align_up(size_t a, size_t b) {
+    return a + (b - (a % b)) % b;
+}
+
 static void print_memory_map(EFI_SYSTEM_TABLE* st, PageTable* table, int depth) {
     wchar_t buffer[64];
     for (int i = 0; i < depth; i++) {
@@ -153,24 +157,23 @@ static void print_memory_map(EFI_SYSTEM_TABLE* st, PageTable* table, int depth) 
 
     buffer[depth * 2 + 0] = '0';
     buffer[depth * 2 + 1] = 'x';
-    int pos               = (depth * 2 + 2) + itoa((uint64_t)table, 16, &buffer[depth * 2 + 2]);
+    int pos = (depth * 2 + 2) + itoa((uint64_t)table, 16, &buffer[depth * 2 + 2]);
 
     buffer[pos + 0] = '\r';
     buffer[pos + 1] = '\n';
     st->ConOut->OutputString(st->ConOut, (int16_t*)buffer);
 
-    if (depth >= 3) { return; }
-
-    for (int i = 0; i < 512; i++) {
-        if (table->entries[i]) {
-            PageTable* p = (PageTable*)(table->entries[i] & 0xFFFFFFFFFFFFF000);
-            print_memory_map(st, p, depth + 1);
+    if (depth < 3) {
+        for (int i = 0; i < 512; i++) {
+            if (table->entries[i]) {
+                PageTable* p = (PageTable*)(table->entries[i] & 0xFFFFFFFFFFFFF000);
+                print_memory_map(st, p, depth + 1);
+            }
         }
     }
 }
 
-static EFI_STATUS identity_map_some_pages(
-    EFI_SYSTEM_TABLE* st, PageTableContext* ctx, uint64_t da_address, uint64_t page_count) {
+static EFI_STATUS identity_map_some_pages(EFI_SYSTEM_TABLE* st, PageTableContext* ctx, uint64_t da_address, uint64_t page_count) {
     PageTable* address_space = &ctx->tables[0];
     if (da_address & 0x1FFull) {
         printhex(st, da_address);
@@ -269,7 +272,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         }
         kernel_loader_region = (char*)addr;
 
-        EFI_GUID                   loaded_img_proto_guid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
+        EFI_GUID loaded_img_proto_guid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
         EFI_LOADED_IMAGE_PROTOCOL* loaded_img_proto;
         status = st->BootServices->OpenProtocol(img_handle, &loaded_img_proto_guid,
             (void**)&loaded_img_proto, img_handle, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL);
@@ -278,8 +281,8 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
             panic(st, L"Failed to load img protocol!");
         }
 
-        EFI_GUID   simple_fs_proto_guid = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
-        EFI_HANDLE dev_handle           = loaded_img_proto->DeviceHandle;
+        EFI_GUID simple_fs_proto_guid = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
+        EFI_HANDLE dev_handle = loaded_img_proto->DeviceHandle;
         EFI_SIMPLE_FILE_SYSTEM_PROTOCOL* simple_fs_proto;
         status = st->BootServices->OpenProtocol(dev_handle, &simple_fs_proto_guid,
             (void**)&simple_fs_proto, img_handle, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL);
@@ -296,18 +299,19 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         }
 
         EFI_FILE* kernel_file;
-        status = fs_root->Open(fs_root, &kernel_file, (int16_t*)L"kernel.o", EFI_FILE_MODE_READ, 0);
+        status = fs_root->Open(fs_root, &kernel_file, (int16_t*)L"kernel.so", EFI_FILE_MODE_READ, 0);
         if (status != 0) {
             printhex(st, status);
-            panic(st, L"Failed to open kernel.o!");
+            panic(st, L"Failed to open kernel.so!");
         }
 
         // Kernel buffer is right after the loader region
-        size_t size          = KERNEL_BUFFER_SIZE;
+        size_t size = KERNEL_BUFFER_SIZE;
         char*  kernel_buffer = &kernel_loader_region[LOADER_BUFFER_SIZE];
         kernel_file->Read(kernel_file, &size, kernel_buffer);
-
-        if (size >= KERNEL_BUFFER_SIZE) { panic(st, L"Kernel too large to fit into buffer!"); }
+        if (size >= KERNEL_BUFFER_SIZE) {
+            panic(st, L"Kernel too large to fit into buffer!");
+        }
 
         // Verify ELF magic number
         if (memcmp(kernel_buffer, (uint8_t[]) { 0x7F, 'E', 'L', 'F' }, 4) != 0) {
@@ -315,18 +319,19 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         }
 
         EFI_FILE* loader_file;
-        status =
-            fs_root->Open(fs_root, &loader_file, (int16_t*)L"loader.bin", EFI_FILE_MODE_READ, 0);
+        status = fs_root->Open(fs_root, &loader_file, (int16_t*)L"loader.bin", EFI_FILE_MODE_READ, 0);
         if (status != 0) {
             printhex(st, status);
             panic(st, L"Failed to open loader.bin!");
         }
 
-        size                = LOADER_BUFFER_SIZE;
+        size = LOADER_BUFFER_SIZE;
         char* loader_buffer = &kernel_loader_region[0];
         loader_file->Read(loader_file, &size, loader_buffer);
 
-        if (size >= LOADER_BUFFER_SIZE) { panic(st, L"Loader too large to fit into buffer!"); }
+        if (size >= LOADER_BUFFER_SIZE) {
+            panic(st, L"Loader too large to fit into buffer!");
+        }
 
         println(st, L"Loaded the kernel and loader!");
         printhex(st, (uint32_t)((uintptr_t)loader_buffer));
@@ -337,9 +342,10 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         EFI_GRAPHICS_OUTPUT_PROTOCOL* graphics_output_protocol;
         EFI_GUID graphics_output_protocol_guid = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
 
-        status = st->BootServices->LocateProtocol(
-            &graphics_output_protocol_guid, NULL, (void**)&graphics_output_protocol);
-        if (status != 0) { panic(st, L"Error: Could not open protocol 3.\n"); }
+        status = st->BootServices->LocateProtocol(&graphics_output_protocol_guid, NULL, (void**)&graphics_output_protocol);
+        if (status != 0) {
+            panic(st, L"Error: Could not open protocol 3.\n");
+        }
 
         boot_info.fb.width  = graphics_output_protocol->Mode->Info->HorizontalResolution;
         boot_info.fb.height = graphics_output_protocol->Mode->Info->VerticalResolution;
@@ -356,151 +362,93 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     //   we don't wanna keep everything from the UEFI memory map, only the relevant
     //   details so the memory map, framebuffer, the page tables themselves
     {
-        char*       elf_file   = &kernel_loader_region[LOADER_BUFFER_SIZE];
+        char* elf_file = &kernel_loader_region[LOADER_BUFFER_SIZE];
         Elf64_Ehdr* elf_header = (Elf64_Ehdr*)elf_file;
 
-        Elf64_Shdr* string_table =
-            (Elf64_Shdr*)&elf_file[elf_header->e_shoff +
-                                   (elf_header->e_shstrndx * elf_header->e_shentsize)];
-        if (string_table->sh_type != SHT_STRTAB) {
-            panic(st, L"No string table found in kernel.o");
-        }
+        // Identify how much memory we need to allocate while
+        // validating the input
+        size_t segment_file_pos = elf_header->e_phoff;
+        size_t segment_count = elf_header->e_phnum;
 
-        // Figure out how much space we actually need
-        size_t pages_necessary = 0;
-        size_t section_count   = elf_header->e_shnum;
-        for (size_t i = 0; i < section_count; i++) {
-            Elf64_Shdr* section =
-                (Elf64_Shdr*)&elf_file[elf_header->e_shoff + (i * elf_header->e_shentsize)];
+        size_t program_memory_size = 0;
+        for (size_t i = 0; i < segment_count; i++) {
+            Elf64_Phdr* segment = (Elf64_Phdr*) &elf_file[segment_file_pos + (i * elf_header->e_phentsize)];
+            if (segment->p_type != PT_LOAD) continue;
 
-            char* name = &elf_file[string_table->sh_offset + section->sh_name];
-            if (section->sh_flags & SHF_ALLOC) {
-                pages_necessary += (section->sh_size + (PAGE_SIZE - 1)) / PAGE_SIZE;
+            // write xor execute, can't have both
+            if ((segment->p_flags & (PF_X | PF_W)) == (PF_X | PF_W)) {
+                panic(st, L"Write-execute pages are banned in this loader");
+                return 1;
             }
+
+            if (segment->p_filesz > segment->p_memsz) {
+                panic(st, L"No enough space in this section for the file data");
+            }
+
+            if ((segment->p_align & (segment->p_align - 1)) != 0) {
+                panic(st, L"alignment must be a power-of-two");
+                return 1;
+            }
+
+            // size must be big enough to fit all the vaddr regions
+            size_t top = segment->p_vaddr + align_up(segment->p_memsz, segment->p_align);
+            if (program_memory_size < top) program_memory_size = top;
         }
 
         // Allocate said space plus enough space for page tables
         // Framebuffer is also kept so we wanna make some pages for it
         size_t page_tables_necessary =
-            estimate_page_table_count(pages_necessary) +
+            estimate_page_table_count(program_memory_size) +
             estimate_page_table_count(boot_info.fb.width * boot_info.fb.height * 4) +
             estimate_page_table_count(MEM_MAP_BUFFER_SIZE) +
             estimate_page_table_count(LOADER_BUFFER_SIZE) + estimate_page_table_count(4096) +
             estimate_page_table_count(KERNEL_STACK_SIZE) + 1;
 
         EFI_PHYSICAL_ADDRESS addr;
-        status = st->BootServices->AllocatePages(
-            AllocateAnyPages, EfiLoaderData, pages_necessary, &addr);
+        status = st->BootServices->AllocatePages(AllocateAnyPages, EfiLoaderData, PAGE_4K(program_memory_size), &addr);
         if (status != 0) {
             printhex(st, status);
             panic(st, L"Failed to allocate space for kernel!");
         }
-        uint8_t* section_memory = (uint8_t*)addr;
+        uint8_t* program_memory = (uint8_t*)addr;
 
         // 512 entries per page
-        status = st->BootServices->AllocatePages(
-            AllocateAnyPages, EfiLoaderData, page_tables_necessary, &addr);
+        status = st->BootServices->AllocatePages(AllocateAnyPages, EfiLoaderData, page_tables_necessary, &addr);
         if (status != 0) {
             printhex(st, status);
             panic(st, L"Failed to allocate space for kernel!");
         }
         PageTable* page_tables = (PageTable*)addr;
 
-        // Load stuff into those newly minted pages
-        size_t pages_used        = 0;
-        size_t text_reloc_offset = 0;
-        size_t symbol_offset     = 0;
-        size_t reloc_size        = 0;
-        size_t symbols_size      = 0;
+        // same layout stuff as program_memory_size from before
+        size_t pages_used = 0;
+        for (size_t i = 0; i < segment_count; i++) {
+            Elf64_Phdr* segment = (Elf64_Phdr*) &elf_file[segment_file_pos + (i * elf_header->e_phentsize)];
+            if (segment->p_type != PT_LOAD) continue;
 
-        int      text_section      = 0;
-        uint8_t* section_table[16] = { 0 };
-        for (size_t i = 0; i < section_count; i++) {
-            Elf64_Shdr* section =
-                (Elf64_Shdr*)&elf_file[elf_header->e_shoff + (i * elf_header->e_shentsize)];
+            uint8_t* loaded_segment_mem = &program_memory[segment->p_vaddr];
 
-            char*    name       = &elf_file[string_table->sh_offset + section->sh_name];
-            uint8_t* dst_memory = &section_memory[pages_used * PAGE_SIZE];
-            if (memcmp(name, ".text", 5) == 0) {
-                text_section = i;
-            } else if (memcmp(name, ".rela.text", 10) == 0) {
-                text_reloc_offset = section->sh_offset;
-                reloc_size        = section->sh_size;
-            } else if (memcmp(name, ".symtab", 7) == 0) {
-                symbol_offset = section->sh_offset;
-                symbols_size  = section->sh_size;
+            // load elf contents in, any leftover space is filled with zeroes
+            memcpy(loaded_segment_mem, &elf_file[segment->p_offset], segment->p_filesz);
+            // We don't need to fill it since virtual pages are already zero
+            // memset(loaded_segment_mem + segment->p_filesz, 0, segment->p_memsz - segment->p_filesz);
+
+            // TODO(NeGate): set new memory protection rules
+            #if 0
+            DWORD new_protect = 0;
+            if (segment->p_flags == PF_R) new_protect = PAGE_READONLY;
+            else if (segment->p_flags == (PF_R|PF_W)) new_protect = PAGE_READWRITE;
+            else if (segment->p_flags == (PF_R|PF_X)) new_protect = PAGE_EXECUTE_READ;
+
+            if (new_protect == 0) {
+                panic(st, L"error: could not resolve memory protection rules on segment\n");
+                return 1;
             }
-
-            // Load ELF stuff into memory
-            if (section->sh_flags & SHF_ALLOC) {
-                section_table[i] = dst_memory;
-
-                if (section->sh_type == SHT_NOBITS) {
-                    memset(dst_memory, 0, section->sh_size);
-                } else {
-                    memcpy(dst_memory, &elf_file[section->sh_offset], section->sh_size);
-                }
-                pages_used += (section->sh_size + (PAGE_SIZE - 1)) / PAGE_SIZE;
-            }
-        }
-
-        if (!text_section) { panic(st, L"No text section in kernel.o"); }
-
-        // TODO(NeGate): handle any relocations
-        uint8_t* text_section_ptr = section_table[text_section];
-        if (text_reloc_offset) {
-            for (size_t i = 0; i < reloc_size; i += sizeof(Elf64_Rela)) {
-                Elf64_Rela* rela = (Elf64_Rela*)&elf_file[text_reloc_offset + i];
-                uint8_t     type = ELF64_R_TYPE(rela->r_info);
-
-                if (type == R_X86_64_PLT32) {
-                    // Get the symbol we're using for patch reference
-                    uint64_t   sym_idx = ELF64_R_SYM(rela->r_info);
-                    Elf64_Sym* sym =
-                        (Elf64_Sym*)((elf_file + symbol_offset) + (sizeof(Elf64_Sym) * sym_idx));
-
-                    // Compute the new address to patch, based on symbol location and addend
-                    uint64_t patch_address  = (uint64_t)(text_section_ptr + rela->r_offset);
-                    uint64_t symbol_address = (uint64_t)(text_section_ptr + sym->st_value);
-                    uint64_t new_address    = (symbol_address + rela->r_addend) - patch_address;
-
-                    // Apply patch to CALL address
-                    *(uint32_t*)(text_section_ptr + rela->r_offset) = (uint32_t)new_address;
-                } else if (type == R_X86_64_PC32) {
-                    // Get the symbol we're using for patch reference
-                    uint64_t   sym_idx = ELF64_R_SYM(rela->r_info);
-                    Elf64_Sym* sym =
-                        (Elf64_Sym*)((elf_file + symbol_offset) + (sizeof(Elf64_Sym) * sym_idx));
-
-                    // Compute the new address to patch, based on symbol location and addend
-                    uint64_t patch_address = (uint64_t)(text_section_ptr + rela->r_offset);
-                    uint64_t symbol_address =
-                        (uint64_t)&section_table[sym->st_shndx][sym->st_value];
-                    uint64_t new_address = (symbol_address + rela->r_addend) - patch_address;
-
-                    // Apply patch for RIP relative address
-                    *(uint32_t*)(text_section_ptr + rela->r_offset) = (uint32_t)new_address;
-                } else {
-                    panic(st, L"Unable to handle unknown relocation type!\n");
-                }
-            }
+            #endif
         }
 
         // Find kernel main
-        boot_info.entrypoint = 0;
-        for (size_t i = 0; i < symbols_size; i += sizeof(Elf64_Sym)) {
-            Elf64_Sym* sym = (Elf64_Sym*)&elf_file[symbol_offset + i];
-
-            char* name = &elf_file[string_table->sh_offset + sym->st_name];
-            if (memcmp(name, "kmain", 5) == 0) {
-                boot_info.entrypoint = (void*)(text_section_ptr + sym->st_value);
-                break;
-            }
-        }
-        if (!boot_info.entrypoint) { panic(st, L"Failed to find kmain entrypoint!\n"); }
-
-        println(st, L"Found kmain!");
-        printhex(st, (uint32_t)(uint64_t)boot_info.entrypoint);
+        boot_info.entrypoint = (void*) (program_memory + elf_header->e_entry);
 
         // setup root PML4 thingy
         boot_info.kernel_pml4 = &page_tables[0];
@@ -511,7 +459,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         };
 
         // Identity map all the stuff we wanna keep
-        if (identity_map_some_pages(st, &ctx, (uint64_t)section_memory, pages_necessary)) {
+        if (identity_map_some_pages(st, &ctx, (uint64_t) program_memory, PAGE_4K(program_memory_size))) {
             return 1;
         }
 
@@ -520,51 +468,51 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
             return 1;
         }
 
-        if (identity_map_some_pages(
-                st, &ctx, (uint64_t)&mem_map_buffer[0], PAGE_4K(MEM_MAP_BUFFER_SIZE))) {
+        if (identity_map_some_pages(st, &ctx, (uint64_t)&mem_map_buffer[0], PAGE_4K(MEM_MAP_BUFFER_SIZE))) {
             return 1;
         }
 
-        if (identity_map_some_pages(
-                st, &ctx, (uint64_t)&kernel_loader_region[0], PAGE_4K(LOADER_BUFFER_SIZE))) {
+        if (identity_map_some_pages(st, &ctx, (uint64_t)&kernel_loader_region[0], PAGE_4K(LOADER_BUFFER_SIZE))) {
             return 1;
         }
 
-        if (identity_map_some_pages(
-                st, &ctx, (uint64_t)&kernel_stack[0], PAGE_4K(KERNEL_STACK_SIZE))) {
+        if (identity_map_some_pages(st, &ctx, (uint64_t)&kernel_stack[0], PAGE_4K(KERNEL_STACK_SIZE))) {
             return 1;
         }
 
-        if (identity_map_some_pages(st, &ctx, (uint64_t)&boot_info, 1)) { return 1; }
+        if (identity_map_some_pages(st, &ctx, (uint64_t)&boot_info, 1)) {
+            return 1;
+        }
 
         print_memory_map(st, &page_tables[0], 0);
         println(st, L"Generated page tables!");
         // Free ELF file... maybe?
     }
 
+    printhex(st, (uint32_t)(uint64_t)boot_info.entrypoint);
+
     // Load latest memory map
     size_t map_key;
     {
-        size_t   desc_size;
+        size_t desc_size;
         uint32_t desc_version;
-        size_t   size = MEM_MAP_BUFFER_SIZE;
+        size_t size = MEM_MAP_BUFFER_SIZE;
 
         // you can't make any more UEFI calls after this GetMemoryMap because it'll
         // *apparently* cause some issues and change the map_key which is used to
         // actually exit the UEFI crap
-        status = st->BootServices->GetMemoryMap(
-            &size, (EFI_MEMORY_DESCRIPTOR*)mem_map_buffer, &map_key, &desc_size, &desc_version);
+        status = st->BootServices->GetMemoryMap(&size, (EFI_MEMORY_DESCRIPTOR*)mem_map_buffer, &map_key, &desc_size, &desc_version);
 
         if (status != 0) {
             printhex(st, status);
             panic(st, L"Failed to get memory map!");
         }
 
-        size_t desc_count       = size / desc_size;
+        size_t desc_count = size / desc_size;
         size_t mem_region_count = 0;
         for (int i = 0; i < desc_count && mem_region_count < MAX_MEM_REGIONS; i++) {
             EFI_MEMORY_DESCRIPTOR* desc =
-                (EFI_MEMORY_DESCRIPTOR*)(mem_map_buffer + (i * desc_size));
+            (EFI_MEMORY_DESCRIPTOR*)(mem_map_buffer + (i * desc_size));
 
             if (desc->Type == EfiConventionalMemory && desc->PhysicalStart >= 0x300000) {
                 /*println(st, L"Range:");
