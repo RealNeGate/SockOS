@@ -3,6 +3,10 @@
 #define PIC2_COMMAND 0xA0
 #define PIC2_DATA 0xA1
 
+enum {
+    IA32_APIC_BASE = 0x1B,
+};
+
 typedef struct CPUState {
     uint8_t  fxsave[512 + 16];
     uint64_t r15, r14, r13, r12, r11, r10, r9, r8;
@@ -45,36 +49,27 @@ extern void io_out16(uint16_t port, uint16_t value);
 extern void io_out32(uint16_t port, uint32_t value);
 extern void io_wait(void);
 
-static void irq_remap_pic() {
-    io_out8(PIC1_COMMAND, 0x11);
-    io_wait();
-    io_out8(PIC2_COMMAND, 0x11);
-    io_wait();
-
-    io_out8(PIC1_DATA, 0x20);
-    io_wait();
-    io_out8(PIC2_DATA, 0x28);
-    io_wait();
-    io_out8(PIC1_DATA, 0x04);
-    io_wait();
-    io_out8(PIC2_DATA, 0x02);
-    io_wait();
-    io_out8(PIC1_DATA, 0x01);
-    io_wait();
-    io_out8(PIC2_DATA, 0x01);
-    io_wait();
-    io_out8(PIC1_DATA, 0x00);
-    io_wait();
-    io_out8(PIC2_DATA, 0x00);
-    io_wait();
+static uint64_t __readmsr(unsigned long r) {
+    uint32_t edx, eax;
+    __asm__ ("rdmsr" : "=d"(edx), "=a"(eax) : "c"(r));
+    return (((uint64_t) edx) << 32) | (uint64_t) eax;
 }
 
-static void irq_set_pit(int hz) {
-    // http://www.osdever.net/bkerndev/Docs/pit.htm
-    int divisor = 1193180 / hz; // Calculate our divisor
-    io_out8(0x43, 0b00110100);
-    io_out8(0x40, divisor & 0xFF);
-    io_out8(0x40, (divisor & 0xFF00) >> 8);
+static void irq_remap_pic() {
+    io_out8(PIC1_COMMAND, 0x11);
+    io_out8(PIC2_COMMAND, 0x11);
+
+    io_out8(PIC1_DATA, 0x20);
+    io_out8(PIC2_DATA, 0x28);
+    io_out8(PIC1_DATA, 0x04);
+    io_out8(PIC2_DATA, 0x02);
+    io_out8(PIC1_DATA, 0x01);
+    io_out8(PIC2_DATA, 0x01);
+
+    // PIC mask
+    io_out8(PIC1_DATA, 0xFF);
+    io_out8(PIC2_DATA, 0xFF);
+    io_wait();
 }
 
 #define SET_INTERRUPT(num) do {                         \
@@ -93,7 +88,7 @@ static void irq_set_pit(int hz) {
 
 void irq_startup(void) {
     FOREACH_N(i, 0, 256) _idt[i] = (IDTEntry){ 0 };
-    SET_INTERRUPT(3);
+    /*SET_INTERRUPT(9);
     SET_INTERRUPT(8);
     SET_INTERRUPT(13);
     SET_INTERRUPT(14);
@@ -113,13 +108,25 @@ void irq_startup(void) {
     SET_INTERRUPT(44);
     SET_INTERRUPT(45);
     SET_INTERRUPT(46);
-    SET_INTERRUPT(47);
+    SET_INTERRUPT(47);*/
 
-    irq_remap_pic();
-    irq_set_pit(64);
+    // irq_remap_pic();
+    // irq_set_pit(64);
 
-    IDT idt = { .limit = sizeof(_idt) - 1, .base = (uintptr_t) _idt };
-    irq_enable(&idt);
+    // IDT idt = { .limit = sizeof(_idt) - 1, .base = (uintptr_t) _idt };
+    // irq_enable(&idt);
+
+    // Enable APIC
+    {
+        uint64_t x = __readmsr(IA32_APIC_BASE);
+        /*x |= (1u << 11u); // enable APIC
+        __writemsr(IA32_APIC_BASE, x);*/
+
+        // get the address (it's above the 63-12 bits)
+        uintptr_t local_apic_addr = (x & ~0xFFF);
+        put_number((uint32_t) local_apic_addr);
+        // memmap__identity(boot_info->kernel_pml4, local_apic_addr, 1);
+    }
 }
 
 CPUState* irq_int_handler(CPUState* state) {

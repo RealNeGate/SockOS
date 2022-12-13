@@ -15,7 +15,7 @@ extern irq_int_handler
 section .text
 irq_enable:
     lidt [rcx]
-    ; sti
+    sti
     ret
 irq_disable:
     cli
@@ -72,6 +72,7 @@ isr%1:
 
 DEFINE_INT 3
 DEFINE_ERR 8
+DEFINE_INT 9
 DEFINE_ERR 13
 DEFINE_ERR 14
 DEFINE_INT 32

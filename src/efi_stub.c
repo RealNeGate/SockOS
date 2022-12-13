@@ -59,7 +59,7 @@ do {                   \
 #define PAGE_1G(x) (((x) + 0x3FFFFFFF) / 0x40000000)
 
 #define LOADER_BUFFER_SIZE (4 * 1024)
-#define KERNEL_BUFFER_SIZE (1 * 1024 * 1024)
+#define KERNEL_BUFFER_SIZE (16 * 1024 * 1024)
 
 #define MEM_MAP_BUFFER_SIZE (16 * 1024)
 static alignas(4096) char mem_map_buffer[MEM_MAP_BUFFER_SIZE];
@@ -265,7 +265,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     char* kernel_loader_region;
     {
         EFI_PHYSICAL_ADDRESS addr;
-        status = st->BootServices->AllocatePages(AllocateAnyPages, EfiLoaderData, 0x200, &addr);
+        status = st->BootServices->AllocatePages(AllocateAnyPages, EfiLoaderData, (KERNEL_BUFFER_SIZE + LOADER_BUFFER_SIZE) / PAGE_SIZE, &addr);
         if (status != 0) {
             printhex(st, status);
             panic(st, L"Failed to allocate space for loader + kernel!");
@@ -489,7 +489,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         // Free ELF file... maybe?
     }
 
-    printhex(st, (uint32_t)(uint64_t)boot_info.entrypoint);
+    // printhex(st, (uint32_t)(uint64_t)boot_info.entrypoint);
 
     // Load latest memory map
     size_t map_key;

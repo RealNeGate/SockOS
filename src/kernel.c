@@ -29,9 +29,57 @@ typedef struct {
 static BootInfo* boot_info;
 static uint16_t  cursor;
 
+static void put_char(int ch);
+static void put_number(uint32_t x);
+
 // core components
 #include "kernel/common.h"
+#include "kernel/str.c"
+
+#include "arch/x64/mem.c"
 #include "arch/x64/irq.c"
+
+static int itoa(uint32_t i, uint8_t base, uint16_t* buf) {
+    static const char bchars[] = "0123456789ABCDEF";
+
+    int pos   = 0;
+    int o_pos = 0;
+    int top   = 0;
+    uint16_t tbuf[32];
+
+    if (i == 0 || base > 16) {
+        buf[0] = '0';
+        buf[1] = '\0';
+        return 0;
+    }
+
+    while (i != 0) {
+        tbuf[pos] = bchars[i % base];
+        pos++;
+        i /= base;
+    }
+    top = pos--;
+
+    for (o_pos = 0; o_pos < top; pos--, o_pos++) {
+        buf[o_pos] = tbuf[pos];
+    }
+    buf[o_pos] = 0;
+    return o_pos;
+}
+
+static void put_number(uint32_t number) {
+    uint16_t buffer[32];
+    itoa(number, 16, buffer);
+    buffer[31] = 0;
+
+    // serial port writing
+    for (int i = 0; buffer[i]; i++) {
+        while ((io_in8(0x3f8+5) & 0x20) == 0) {}
+
+        io_out8(0x3f8, buffer[i]);
+        // put_char(buffer[i]);
+    }
+}
 
 static void put_char(int ch) {
     int columns = (boot_info->fb.width - 16) / 16;
@@ -75,14 +123,7 @@ void kmain(BootInfo* info) {
         }
     }
 
-    put_char('A');
-    put_char('A');
-    put_char('A');
-    put_char('A');
-    put_char('A');
-    put_char('A');
-    put_char('A');
-    put_char('A');
+    // put_char('A');
 
     // interrupts
     irq_startup();
