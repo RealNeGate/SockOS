@@ -29,6 +29,10 @@ typedef struct {
 static BootInfo* boot_info;
 static uint16_t  cursor;
 
+// core components
+#include "kernel/common.h"
+#include "arch/x64/irq.c"
+
 static void put_char(int ch) {
     int columns = (boot_info->fb.width - 16) / 16;
     int rows = (boot_info->fb.height - 16) / 16;
@@ -79,4 +83,8 @@ void kmain(BootInfo* info) {
     put_char('A');
     put_char('A');
     put_char('A');
+
+    // interrupts
+    irq_startup();
+    while (1) {}
 }

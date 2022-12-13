@@ -1,26 +1,30 @@
 -- https://github.com/RealNeGate/Truct
+build.mkdir("bin/EFI")
+build.mkdir("bin/EFI/BOOT")
+
+local efi_cc = "clang -target x86_64-pc-win32-coff"
+local kernel_cc = "clang -target x86_64-pc-linux-gnu -fpic "
+
 -- build efi stub
-local efi_cflags = "-target x86_64-pc-win32-coff -fno-stack-protector -nostdlib -fshort-wchar -mno-red-zone"
+local efi_cflags = " -fno-stack-protector -nostdlib -fshort-wchar -mno-red-zone"
 local efi = build.chain(
     build.foreach_chain(
-        "src/efi_stub.c", "clang %f "..efi_cflags.." -c -o %o", "bin/%F.o"
+        "src/efi_stub.c", efi_cc.." %f "..efi_cflags.." -c -o %o", "bin/%F.o"
     ),
     "lld-link -subsystem:efi_application -nodefaultlib -dll -entry:efi_main %i -out:%o",
-    "bin/boot.efi"
+    "bin/EFI/BOOT/bootx64.efi"
 )
 
 -- build kernel
 local loader = build.chain("src/loader.s", "nasm -f bin -o %o %i", "bin/loader.bin")
 
-local kernel_cflags = "-target x86_64-pc-linux-gnu -fpic -fno-stack-protector -nodefaultlibs -mno-red-zone -nostdlib -ffreestanding"
-local kernel = build.chain(
-    build.foreach_chain(
-        { "src/kernel.c" }, "clang %f "..kernel_cflags.." -c -o %o", "bin/%F.o"
-    ), "ld.lld %i --nostdlib -e kmain -o %o", "bin/kernel.so"
-)
+-- x64 specific
+local x64 = build.chain("src/arch/x64/irq.asm", "nasm -f elf64 -o %o %i", "bin/irq.o")
 
-if build.has_file_changed(kernel, nil) or build.has_file_changed(loader, nil) or build.has_file_changed(efi, nil) then
-os.execute("wsl ./make_iso.sh")
-end
+local kernel_cflags = "--nocrt"
+local kernel_cflags = "-fno-stack-protector -nodefaultlibs -mno-red-zone -nostdlib -ffreestanding"
+local objs = build.foreach_chain({ "src/kernel.c" }, kernel_cc.." %f "..kernel_cflags.." -c -o %o", "bin/%F.o")
+table.insert(objs, x64)
 
+build.chain(objs, "ld.lld %i --nostdlib -e kmain -o %o", "bin/kernel.so")
 build.done()

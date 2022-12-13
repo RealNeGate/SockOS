@@ -1,0 +1,1 @@
+* we current load all pages as executable... this is very bad

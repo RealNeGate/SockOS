@@ -511,8 +511,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         size_t desc_count = size / desc_size;
         size_t mem_region_count = 0;
         for (int i = 0; i < desc_count && mem_region_count < MAX_MEM_REGIONS; i++) {
-            EFI_MEMORY_DESCRIPTOR* desc =
-            (EFI_MEMORY_DESCRIPTOR*)(mem_map_buffer + (i * desc_size));
+            EFI_MEMORY_DESCRIPTOR* desc = (EFI_MEMORY_DESCRIPTOR*)(mem_map_buffer + (i * desc_size));
 
             if (desc->Type == EfiConventionalMemory && desc->PhysicalStart >= 0x300000) {
                 /*println(st, L"Range:");

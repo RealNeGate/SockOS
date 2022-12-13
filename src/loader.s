@@ -7,7 +7,6 @@ start:
 	; switch to new kernel stack
 	mov rsp, rdx
 
-
 	; setup GDT descriptor
 	lea rax, [gdt64]
 	mov [gdt64.pointer + 2], rax
@@ -16,38 +15,22 @@ start:
 	mov rax, [rcx + 8]
 	mov cr3, rax
 
-
-	mov rdi, rcx
-	call [rcx]
-	hlt
-
-
 	lgdt [gdt64.pointer]
 
-reload_segments:
-	mov rax, 0x8
-	push rax
-
+	push 0x08
 	lea rax, [.reload_cs]
 	push rax
-	retf
+	retq
 .reload_cs:
 	mov ax, 0x10
 	mov ds, ax
 	mov es, ax
+	mov ss, ax
 	mov fs, ax
 	mov gs, ax
-	mov ss, ax
 
-doodle:
-
-	; Put some pixels
-	mov rax, [rcx + 48]
-	mov rdx, 40000
-.loop2:
-	mov dword [rax + rdx * 4], 0xFFFF00FF
-	sub rdx, 1
-	jnz .loop2
+	mov rdi, rcx
+	call [rcx]
 	hlt
 
 gdt64:
