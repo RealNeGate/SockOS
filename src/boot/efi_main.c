@@ -489,8 +489,6 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         // Free ELF file... maybe?
     }
 
-    // printhex(st, (uint32_t)(uint64_t)boot_info.entrypoint);
-
     // Load latest memory map
     size_t map_key;
     {
