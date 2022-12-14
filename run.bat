@@ -1,1 +1,1 @@
-W:\Qemu\qemu-system-x86_64.exe -d int -D beans.log -serial stdio -bios OVMF.fd -drive format=raw,file=fat:rw:bin
+qemu-system-x86_64 -serial stdio -bios OVMF.fd -drive format=raw,file=fat:rw:bin/os

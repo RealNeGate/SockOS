@@ -1,6 +1,6 @@
-import glob
 import os
 import platform
+import shutil
 import subprocess
 
 optimize = False
@@ -47,3 +47,9 @@ ninja_cmd("bin/kernel.o bin/asm.o", f"ld.lld.exe bin/kernel.o bin/asm.o -o bin/k
 ninja.close()
 
 subprocess.call(['ninja'])
+
+# move into proper directory structure for boot
+os.makedirs("bin/os/EFI/BOOT", exist_ok = True)
+shutil.copy("bin/loader.bin", "bin/os")
+shutil.copy("bin/kernel.so", "bin/os")
+shutil.copyfile("bin/boot.efi", "bin/os/EFI/BOOT/bootx64.efi")

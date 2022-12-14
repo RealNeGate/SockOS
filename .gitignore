@@ -2,6 +2,7 @@ bin/
 .vs/
 .vscode/
 
+*.log
 *.o
 *.out
 *.obj
