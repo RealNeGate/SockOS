@@ -1,5 +1,4 @@
-#include <stdint.h>
-#include <stddef.h>
+#include <common.h>
 #include "font.h"
 
 typedef struct {
@@ -33,7 +32,6 @@ static void put_char(int ch);
 static void put_number(uint32_t x);
 
 // core components
-#include "kernel/common.h"
 #include "kernel/str.c"
 
 #include "arch/x64/mem.c"

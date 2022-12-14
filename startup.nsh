@@ -1,1 +1,1 @@
-\EFI\BOOT\bootx64.efi
+\EFI\BOOT\boot.efi
