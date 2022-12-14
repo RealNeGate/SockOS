@@ -1,12 +1,13 @@
-build/
 bin/
-OVMF_dir/
+.vs/
+.vscode/
 
 *.o
 *.out
 *.obj
 *.exe
 
+.ninja_log
 run4coder.bat
 project.4coder
 push.cmd
