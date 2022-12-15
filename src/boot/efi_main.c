@@ -1,7 +1,9 @@
 #include <stddef.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdalign.h>
+#include <boot_info.h>
 
 #include "efi.h"
 #include "elf.h"
@@ -64,34 +66,8 @@ do {                   \
 #define MEM_MAP_BUFFER_SIZE (16 * 1024)
 static alignas(4096) char mem_map_buffer[MEM_MAP_BUFFER_SIZE];
 
-#define PAGE_SIZE 4096
-
-typedef struct {
-    uintptr_t base, pages;
-} MemRegion;
-
 #define MAX_MEM_REGIONS (1024)
-static MemRegion mem_regions[MAX_MEM_REGIONS];
-
-typedef struct {
-    uint64_t entries[512];
-} PageTable;
-
-// This is all the crap we throw into the loader
-typedef struct {
-    void* entrypoint;
-    PageTable* kernel_pml4;
-
-    size_t mem_region_count;
-    MemRegion* mem_regions;
-
-    struct {
-        uint32_t width, height;
-        uint32_t stride; // in pixels
-        uint32_t* pixels;
-        // TODO(NeGate): pixel format :p
-    } fb;
-} BootInfo;
+static alignas(4096) MemRegion mem_regions[MAX_MEM_REGIONS];
 
 typedef void (*LoaderFunction)(BootInfo* info, uint8_t* stack);
 
@@ -148,34 +124,9 @@ inline static size_t align_up(size_t a, size_t b) {
     return a + (b - (a % b)) % b;
 }
 
-static void print_memory_map(EFI_SYSTEM_TABLE* st, PageTable* table, int depth) {
-    wchar_t buffer[64];
-    for (int i = 0; i < depth; i++) {
-        buffer[i * 2 + 0] = ' ';
-        buffer[i * 2 + 1] = ' ';
-    }
-
-    buffer[depth * 2 + 0] = '0';
-    buffer[depth * 2 + 1] = 'x';
-    int pos = (depth * 2 + 2) + itoa((uint64_t)table, 16, &buffer[depth * 2 + 2]);
-
-    buffer[pos + 0] = '\r';
-    buffer[pos + 1] = '\n';
-    st->ConOut->OutputString(st->ConOut, (int16_t*)buffer);
-
-    if (depth < 3) {
-        for (int i = 0; i < 512; i++) {
-            if (table->entries[i]) {
-                PageTable* p = (PageTable*)(table->entries[i] & 0xFFFFFFFFFFFFF000);
-                print_memory_map(st, p, depth + 1);
-            }
-        }
-    }
-}
-
 static EFI_STATUS identity_map_some_pages(EFI_SYSTEM_TABLE* st, PageTableContext* ctx, uint64_t da_address, uint64_t page_count) {
     PageTable* address_space = &ctx->tables[0];
-    if (da_address & 0x1FFull) {
+    if (da_address & 0xFFFull) {
         printhex(st, da_address);
         panic(st, L"Unaligned identity mapping");
     }
@@ -400,9 +351,12 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         size_t page_tables_necessary =
             estimate_page_table_count(program_memory_size) +
             estimate_page_table_count(boot_info.fb.width * boot_info.fb.height * 4) +
-            estimate_page_table_count(MEM_MAP_BUFFER_SIZE) +
-            estimate_page_table_count(LOADER_BUFFER_SIZE) + estimate_page_table_count(4096) +
+            estimate_page_table_count(LOADER_BUFFER_SIZE) +
+            estimate_page_table_count(MAX_MEM_REGIONS * sizeof(MemRegion)) +
+            estimate_page_table_count(sizeof(BootInfo)) +
             estimate_page_table_count(KERNEL_STACK_SIZE) + 1;
+
+        page_tables_necessary += estimate_page_table_count(page_tables_necessary);
 
         EFI_PHYSICAL_ADDRESS addr;
         status = st->BootServices->AllocatePages(AllocateAnyPages, EfiLoaderData, PAGE_4K(program_memory_size), &addr);
@@ -449,6 +403,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 
         // Find kernel main
         boot_info.entrypoint = (void*) (program_memory + elf_header->e_entry);
+        boot_info.kernel_virtual_used = 0xC0000000;
 
         // setup root PML4 thingy
         boot_info.kernel_pml4 = &page_tables[0];
@@ -464,11 +419,11 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         }
 
         uint64_t fb_page_count = PAGE_4K(boot_info.fb.width * boot_info.fb.height * 4);
-        if (identity_map_some_pages(st, &ctx, (uint64_t)boot_info.fb.pixels, fb_page_count)) {
+        if (identity_map_some_pages(st, &ctx, (uint64_t) boot_info.fb.pixels, fb_page_count)) {
             return 1;
         }
 
-        if (identity_map_some_pages(st, &ctx, (uint64_t)&mem_map_buffer[0], PAGE_4K(MEM_MAP_BUFFER_SIZE))) {
+        if (identity_map_some_pages(st, &ctx, (uint64_t) page_tables, PAGE_4K(page_tables_necessary * 8))) {
             return 1;
         }
 
@@ -476,15 +431,18 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
             return 1;
         }
 
-        if (identity_map_some_pages(st, &ctx, (uint64_t)&kernel_stack[0], PAGE_4K(KERNEL_STACK_SIZE))) {
+        if (identity_map_some_pages(st, &ctx, (uint64_t) &mem_regions[0], PAGE_4K(MAX_MEM_REGIONS * sizeof(MemRegion)))) {
             return 1;
         }
 
-        if (identity_map_some_pages(st, &ctx, (uint64_t)&boot_info, 1)) {
+        if (identity_map_some_pages(st, &ctx, (uint64_t) &kernel_stack[0], PAGE_4K(KERNEL_STACK_SIZE))) {
             return 1;
         }
 
-        print_memory_map(st, &page_tables[0], 0);
+        if (identity_map_some_pages(st, &ctx, (uint64_t) &boot_info, 1)) {
+            return 1;
+        }
+
         println(st, L"Generated page tables!");
         // Free ELF file... maybe?
     }
@@ -523,6 +481,9 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
             }
         }
         mem_regions[mem_region_count].base = 0;
+
+        boot_info.mem_regions = mem_regions;
+        boot_info.mem_region_count = mem_region_count;
     }
 
     status = st->BootServices->ExitBootServices(img_handle, map_key);

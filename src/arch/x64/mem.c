@@ -1,7 +1,3 @@
-enum {
-    PAGE_SIZE = 4096
-};
-
 typedef enum Result {
     RESULT_SUCCESS,
 
@@ -16,16 +12,21 @@ struct {
     PageTable tables[512];
 } muh_pages = { .capacity = 512 };
 
-static Result memmap__identity(PageTable* address_space, uintptr_t da_address, size_t page_count) {
-    if (da_address & 0x1FFull) {
+// View will map a physical memory region into virtual memory.
+static Result memmap__view(PageTable* address_space, uintptr_t src, size_t size, void** dst) {
+    size_t page_count = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+    if (src & 0xFFFull) {
         return RESULT_ALLOCATION_UNALIGNED;
     }
 
+    uintptr_t virt = boot_info->kernel_virtual_used;
+    boot_info->kernel_virtual_used += page_count*PAGE_SIZE;
+
     // Generate the page table mapping
-    uint64_t pml4_index  = (da_address >> 39) & 0x1FF; // 512GB
-    uint64_t pdpte_index = (da_address >> 30) & 0x1FF; // 1GB
-    uint64_t pde_index   = (da_address >> 21) & 0x1FF; // 2MB
-    uint64_t pte_index   = (da_address >> 12) & 0x1FF; // 4KB
+    uint64_t pml4_index  = (virt >> 39) & 0x1FF; // 512GB
+    uint64_t pdpte_index = (virt >> 30) & 0x1FF; // 1GB
+    uint64_t pde_index   = (virt >> 21) & 0x1FF; // 2MB
+    uint64_t pte_index   = (virt >> 12) & 0x1FF; // 4KB
 
     for (size_t i = 0; i < page_count; i++) {
         // 512GB
@@ -75,8 +76,9 @@ static Result memmap__identity(PageTable* address_space, uintptr_t da_address, s
 
         // 4KB
         // | 3 is because we make the pages both PRESENT and WRITABLE
-        table_l1->entries[pte_index] = (da_address & 0xFFFFFFFFFFFFF000) | 3;
-        da_address += PAGE_SIZE;
+        table_l1->entries[pte_index] = (src & 0xFFFFFFFFFFFFF000) | 3;
+        virt += PAGE_SIZE;
+        src += PAGE_SIZE;
 
         pte_index++;
         if (pte_index >= 512) {

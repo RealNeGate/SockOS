@@ -5,6 +5,7 @@ global io_out8
 global io_out16
 global io_out32
 global io_wait
+global __writemsr
 
 global irq_enable
 global irq_disable
@@ -13,6 +14,14 @@ global IDT_Descriptor
 extern irq_int_handler
 
 section .text
+__writemsr:
+	mov rax, rsi
+	and eax, -1
+	mov rdx, rsi
+	shr edx, 32
+	mov rcx, rdi
+	wrmsr
+	ret
 irq_enable:
     lidt [rcx]
     sti
@@ -91,6 +100,7 @@ DEFINE_INT 44
 DEFINE_INT 45
 DEFINE_INT 46
 DEFINE_INT 47
+DEFINE_INT 112
 asm_int_handler:
     cld
     push rax

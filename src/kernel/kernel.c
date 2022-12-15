@@ -1,34 +1,12 @@
 #include <common.h>
+#include <boot_info.h>
 #include "font.h"
 
-typedef struct {
-    uintptr_t base, pages;
-} MemRegion;
-
-typedef struct {
-    uint64_t entries[512];
-} PageTable;
-
-// This is all the crap we throw into the loader
-typedef struct {
-    void*      entrypoint;
-    PageTable* kernel_pml4;
-
-    size_t     mem_region_count;
-    MemRegion* mem_regions;
-
-    struct {
-        uint32_t  width, height;
-        uint32_t  stride; // in pixels
-        uint32_t* pixels;
-        // TODO(NeGate): pixel format :p
-    } fb;
-} BootInfo;
-
 static BootInfo* boot_info;
-static uint16_t  cursor;
+// static uint16_t  cursor;
 
 static void put_char(int ch);
+static void put_string(const char* str);
 static void put_number(uint32_t x);
 
 // core components
@@ -75,12 +53,16 @@ static void put_number(uint32_t number) {
         while ((io_in8(0x3f8+5) & 0x20) == 0) {}
 
         io_out8(0x3f8, buffer[i]);
-        // put_char(buffer[i]);
     }
 }
 
+static void put_string(const char* str) {
+    for (; *str; str++) io_out8(0x3f8, *str);
+}
+
 static void put_char(int ch) {
-    int columns = (boot_info->fb.width - 16) / 16;
+    io_out8(0x3f8, ch);
+    /*int columns = (boot_info->fb.width - 16) / 16;
     int rows = (boot_info->fb.height - 16) / 16;
 
     int x = (cursor % columns) * 16;
@@ -95,7 +77,7 @@ static void put_char(int ch) {
         }
     }
 
-    cursor = (cursor + 1) % (columns * rows);
+    cursor = (cursor + 1) % (columns * rows);*/
 }
 
 void foobar(void) {
@@ -121,7 +103,12 @@ void kmain(BootInfo* info) {
         }
     }
 
-    // put_char('A');
+    size_t largest_mem_region = 0;
+    FOREACH_N(i, 1, info->mem_region_count) {
+        if (info->mem_regions[i].pages > info->mem_regions[largest_mem_region].pages) {
+            largest_mem_region = i;
+        }
+    }
 
     // interrupts
     irq_startup();

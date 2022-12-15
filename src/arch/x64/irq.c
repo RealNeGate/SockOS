@@ -5,6 +5,13 @@
 
 enum {
     IA32_APIC_BASE = 0x1B,
+    IA32_APIC_BASE_MSR_BSP = 0x100, // Processor is a BSP
+
+    // LAPIC interrupts
+    INTR_LAPIC_TIMER      = 0xF0,
+    INTR_LAPIC_SPURIOUS   = 0xF1,
+    INTR_LAPIC_IPI        = 0xF2,
+    INTR_LAPIC_RESCHEDULE = 0xF3
 };
 
 typedef struct CPUState {
@@ -48,28 +55,50 @@ extern void io_out8(uint16_t port, uint8_t value);
 extern void io_out16(uint16_t port, uint16_t value);
 extern void io_out32(uint16_t port, uint32_t value);
 extern void io_wait(void);
+extern void __writemsr(uint32_t r, uint32_t v);
 
-static uint64_t __readmsr(unsigned long r) {
+static uint64_t __readmsr(uint32_t r) {
     uint32_t edx, eax;
-    __asm__ ("rdmsr" : "=d"(edx), "=a"(eax) : "c"(r));
+    asm volatile ("rdmsr" : "=d"(edx), "=a"(eax) : "c"(r));
     return (((uint64_t) edx) << 32) | (uint64_t) eax;
 }
 
-static void irq_remap_pic() {
+static void irq_disable_pic(void) {
+    // set ICW1
     io_out8(PIC1_COMMAND, 0x11);
     io_out8(PIC2_COMMAND, 0x11);
 
+    // set ICW2 (IRQ base offsets)
     io_out8(PIC1_DATA, 0x20);
     io_out8(PIC2_DATA, 0x28);
+
+    // set ICW3
     io_out8(PIC1_DATA, 0x04);
     io_out8(PIC2_DATA, 0x02);
+
+    // set ICW4
     io_out8(PIC1_DATA, 0x01);
     io_out8(PIC2_DATA, 0x01);
 
-    // PIC mask
+    // set OCW1 (interrupt masks) */
     io_out8(PIC1_DATA, 0xFF);
     io_out8(PIC2_DATA, 0xFF);
+
+    // PIC mask
     io_wait();
+}
+
+static void irq_set_pit(int hz) {
+    // http://www.osdever.net/bkerndev/Docs/pit.htm
+    int divisor = 1193180 / hz; // Calculate our divisor
+    io_out8(0x43, 0b00110100);
+    io_out8(0x40, divisor & 0xFF);
+    io_out8(0x40, (divisor & 0xFF00) >> 8);
+}
+
+// access MMIO registers
+static volatile void* mmio_reg(volatile void* base, ptrdiff_t offset) {
+    return ((volatile char*)base) + offset;
 }
 
 #define SET_INTERRUPT(num) do {                         \
@@ -110,29 +139,40 @@ void irq_startup(void) {
     SET_INTERRUPT(46);
     SET_INTERRUPT(47);*/
 
-    // irq_remap_pic();
-    // irq_set_pit(64);
-
-    // IDT idt = { .limit = sizeof(_idt) - 1, .base = (uintptr_t) _idt };
-    // irq_enable(&idt);
+    irq_disable_pic();
+    irq_set_pit(64);
 
     // Enable APIC
-    {
+    if (0) {
         uint64_t x = __readmsr(IA32_APIC_BASE);
-        /*x |= (1u << 11u); // enable APIC
-        __writemsr(IA32_APIC_BASE, x);*/
+        x |= (1u << 11u); // enable APIC
+        __writemsr(IA32_APIC_BASE, x);
+        if (x & IA32_APIC_BASE_MSR_BSP) {
+            put_string("We're the main core\n");
+        }
 
         // get the address (it's above the 63-12 bits)
-        uintptr_t local_apic_addr = (x & ~0xFFF);
-        put_number((uint32_t) local_apic_addr);
-        // memmap__identity(boot_info->kernel_pml4, local_apic_addr, 1);
+        volatile uint32_t* apic;
+        memmap__view(boot_info->kernel_pml4, x & ~0xFFF, PAGE_SIZE, (void**) &apic);
+
+        put_number((uintptr_t) apic);
+        put_char('\n');
+
+        // 0xF0 - Spurious Interrupt Vector Register
+        apic[0xF0 / 4] |= 0x1FF;
     }
+
+    IDT idt = { .limit = sizeof(_idt) - 1, .base = (uintptr_t) _idt };
+    irq_enable(&idt);
 }
 
 CPUState* irq_int_handler(CPUState* state) {
     switch (state->interrupt_num) {
         // Timer interrupt
-        case 32: break;
+        case 32: {
+            put_char('A');
+            break;
+        }
         default: break;
     }
 
