@@ -117,7 +117,7 @@ static volatile void* mmio_reg(volatile void* base, ptrdiff_t offset) {
 
 void irq_startup(void) {
     FOREACH_N(i, 0, 256) _idt[i] = (IDTEntry){ 0 };
-    /*SET_INTERRUPT(9);
+    SET_INTERRUPT(9);
     SET_INTERRUPT(8);
     SET_INTERRUPT(13);
     SET_INTERRUPT(14);
@@ -137,10 +137,10 @@ void irq_startup(void) {
     SET_INTERRUPT(44);
     SET_INTERRUPT(45);
     SET_INTERRUPT(46);
-    SET_INTERRUPT(47);*/
+    SET_INTERRUPT(47);
 
     irq_disable_pic();
-    irq_set_pit(64);
+    // irq_set_pit(64);
 
     // Enable APIC
     if (0) {
@@ -153,7 +153,10 @@ void irq_startup(void) {
 
         // get the address (it's above the 63-12 bits)
         volatile uint32_t* apic;
-        memmap__view(boot_info->kernel_pml4, x & ~0xFFF, PAGE_SIZE, (void**) &apic);
+        if (memmap__view(boot_info->kernel_pml4, x & ~0xFFF, PAGE_SIZE, (void**) &apic)) {
+            put_string("Could not map view of local ACPI!!!");
+            return;
+        }
 
         put_number((uintptr_t) apic);
         put_char('\n');
@@ -162,8 +165,8 @@ void irq_startup(void) {
         apic[0xF0 / 4] |= 0x1FF;
     }
 
-    IDT idt = { .limit = sizeof(_idt) - 1, .base = (uintptr_t) _idt };
-    irq_enable(&idt);
+    // IDT idt = { .limit = sizeof(_idt) - 1, .base = (uintptr_t) _idt };
+    // irq_enable(&idt);
 }
 
 CPUState* irq_int_handler(CPUState* state) {

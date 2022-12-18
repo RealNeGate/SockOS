@@ -19,8 +19,8 @@ Documentation
   Engine:
     These are different components of the GPU capable of different jobs, these are called:
       * 3D      - normal 3D pipeline with all it's nice shaders and fixed-function elements.
-      * Media   - 
-      * Blitter - 
+      * Media   -
+      * Blitter -
 
   Instruction Ring buffers:
     These act as the queue in the Vulkan sense and serve to submit GPU commands.
@@ -38,3 +38,8 @@ Documentation
   Instruction Batch buffer:
     stream of instructions starting with `MI_BATCH_BUFFER_START`. They are 8-byte
     aligned in both address and length.
+
+  Important GPU commands:
+    We'll be looking over these soon enough :P
+      * 3DPRIMITIVE  - this is a draw call
+      * GPGPU_WALKER - this is a compute dispatch call

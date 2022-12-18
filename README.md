@@ -5,3 +5,7 @@
 then I robbed @colrdavidson eheh
 
 it's now a WIP OS thingy
+
+Build:
+
+  py build.py
