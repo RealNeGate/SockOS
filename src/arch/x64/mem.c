@@ -19,20 +19,17 @@ static Result memmap__view(PageTable* address_space, uintptr_t phys_addr, size_t
         return RESULT_ALLOCATION_UNALIGNED;
     }
 
-    put_number(phys_addr);
-    put_char('\n');
-
     uintptr_t virt = boot_info->kernel_virtual_used;
     boot_info->kernel_virtual_used += page_count*PAGE_SIZE;
 
     // Generate the page table mapping
-    uint64_t pml4_index  = (virt >> 39) & 0x1FF; // 512GB
-    uint64_t pdpte_index = (virt >> 30) & 0x1FF; // 1GB
-    uint64_t pde_index   = (virt >> 21) & 0x1FF; // 2MB
-    uint64_t pte_index   = (virt >> 12) & 0x1FF; // 4KB
-
     void* v = (void*) virt;
     for (size_t i = 0; i < page_count; i++) {
+        uint64_t pml4_index  = (virt >> 39) & 0x1FF; // 512GB
+        uint64_t pdpte_index = (virt >> 30) & 0x1FF; // 1GB
+        uint64_t pde_index   = (virt >> 21) & 0x1FF; // 2MB
+        uint64_t pte_index   = (virt >> 12) & 0x1FF; // 4KB
+
         // 512GB
         PageTable* table_l3;
         if (address_space->entries[pml4_index] == 0) {
@@ -81,22 +78,7 @@ static Result memmap__view(PageTable* address_space, uintptr_t phys_addr, size_t
         // 4KB
         // | 3 is because we make the pages both PRESENT and WRITABLE
         table_l1->entries[pte_index] = (phys_addr & 0xFFFFFFFFFFFFF000) | 3;
-        virt += PAGE_SIZE;
-        phys_addr += PAGE_SIZE;
-
-        pte_index++;
-        if (pte_index >= 512) {
-            pte_index = 0;
-            pde_index++;
-            if (pde_index >= 512) {
-                pde_index = 0;
-                pdpte_index++;
-                if (pdpte_index >= 512) {
-                    pdpte_index = 0;
-                    pml4_index++;
-                }
-            }
-        }
+        virt += PAGE_SIZE, phys_addr += PAGE_SIZE;
     }
 
     *dst = v;

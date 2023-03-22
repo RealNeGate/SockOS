@@ -41,13 +41,13 @@ void printhex(EFI_SYSTEM_TABLE* st, uint32_t number) {
     itoa(number, 16, buffer);
     buffer[31] = 0;
 
-    st->ConOut->OutputString(st->ConOut, (int16_t*)buffer);
-    st->ConOut->OutputString(st->ConOut, (int16_t*)L"\n\r");
+    st->ConOut->OutputString(st->ConOut, (int16_t*) buffer);
+    st->ConOut->OutputString(st->ConOut, (int16_t*) L"\n\r");
 }
 
 void println(EFI_SYSTEM_TABLE* st, uint16_t* str) {
-    st->ConOut->OutputString(st->ConOut, (int16_t*)str);
-    st->ConOut->OutputString(st->ConOut, (int16_t*)L"\n\r");
+    st->ConOut->OutputString(st->ConOut, (int16_t*) str);
+    st->ConOut->OutputString(st->ConOut, (int16_t*) L"\n\r");
 }
 
 #define panic(x, y)    \
@@ -443,6 +443,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
             return 1;
         }
 
+        printhex(st, (uintptr_t) program_memory);
         println(st, L"Generated page tables!");
         // Free ELF file... maybe?
     }

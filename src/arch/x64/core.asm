@@ -23,7 +23,7 @@ __writemsr:
 	wrmsr
 	ret
 irq_enable:
-    lidt [rcx]
+    lidt [rdi]
     sti
     ret
 irq_disable:

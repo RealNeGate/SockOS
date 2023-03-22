@@ -28,11 +28,8 @@ rule cc
   depfile = $out.d
 """)
 
-def ninja_cmd(inputs, str, out):
-	ninja.write(f"build {out}: run {inputs}\n  cmd = {str}\n")
-
-def ninja_cc(inputs, str, out):
-	ninja.write(f"build {out}: cc {inputs}\n  cmd = {str}\n")
+def ninja_cmd(inputs, str, out): ninja.write(f"build {out}: run {inputs}\n  cmd = {str}\n")
+def ninja_cc(inputs, str, out):  ninja.write(f"build {out}: cc {inputs}\n  cmd = {str}\n")
 
 # compile EFI stub
 ninja_cc("src/boot/efi_main.c", f"clang src/boot/efi_main.c -c -o bin/efi.o {efi_cflags}", "bin/efi.o")

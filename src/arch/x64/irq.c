@@ -143,7 +143,7 @@ void irq_startup(void) {
     // irq_set_pit(64);
 
     // Enable APIC
-    if (0) {
+    if (1) {
         uint64_t x = __readmsr(IA32_APIC_BASE);
         x |= (1u << 11u); // enable APIC
         __writemsr(IA32_APIC_BASE, x);
@@ -158,6 +158,7 @@ void irq_startup(void) {
             return;
         }
 
+        put_char('A');
         put_number((uintptr_t) apic);
         put_char('\n');
 
@@ -165,8 +166,12 @@ void irq_startup(void) {
         apic[0xF0 / 4] |= 0x1FF;
     }
 
-    // IDT idt = { .limit = sizeof(_idt) - 1, .base = (uintptr_t) _idt };
-    // irq_enable(&idt);
+    // asm volatile ("1: jmp 1b");
+
+    IDT idt = { .limit = sizeof(_idt) - 1, .base = (uintptr_t) _idt };
+    irq_enable(&idt);
+
+    put_char('D');
 }
 
 CPUState* irq_int_handler(CPUState* state) {
