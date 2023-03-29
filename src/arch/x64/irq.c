@@ -1,3 +1,6 @@
+
+#include "x64.c"
+
 #define PIC1_COMMAND 0x20
 #define PIC1_DATA    0x21
 #define PIC2_COMMAND 0xA0
@@ -51,21 +54,7 @@ extern void irq_enable(IDT* idt);
 extern void irq_disable(void);
 extern void isr3(void);
 
-// IO Ports on x86
-extern uint8_t io_in8(uint16_t port);
-extern uint16_t io_in16(uint16_t port);
-extern uint32_t io_in32(uint16_t port);
-extern void io_out8(uint16_t port, uint8_t value);
-extern void io_out16(uint16_t port, uint16_t value);
-extern void io_out32(uint16_t port, uint32_t value);
-extern void io_wait(void);
-extern void __writemsr(uint32_t r, uint32_t v);
-
-static uint64_t __readmsr(uint32_t r) {
-    uint32_t edx, eax;
-    asm volatile ("rdmsr" : "=d"(edx), "=a"(eax) : "c"(r));
-    return (((uint64_t) edx) << 32) | (uint64_t) eax;
-}
+volatile IDTEntry _idt[256];
 
 static void irq_disable_pic(void) {
     // set ICW1

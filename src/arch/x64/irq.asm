@@ -1,11 +1,5 @@
-global io_in8
-global io_in16
-global io_in32
-global io_out8
-global io_out16
-global io_out32
-global io_wait
-global __writemsr
+
+bits 64
 
 global irq_enable
 global irq_disable
@@ -14,55 +8,16 @@ global IDT_Descriptor
 extern irq_int_handler
 
 section .text
-__writemsr:
-	mov rax, rsi
-	and eax, -1
-	mov rdx, rsi
-	shr edx, 32
-	mov rcx, rdi
-	wrmsr
-	ret
+
 irq_enable:
     lidt [rdi]
     sti
+    int 3
     ret
+
 irq_disable:
     cli
     ret
-io_in8:
-    mov rdx, rdi
-    xor rax, rax
-    in al, dx
-    ret
-io_in16:
-    mov rdx, rdi
-    xor rax, rax
-    in ax, dx
-    ret
-io_in32:
-    mov rdx, rdi
-    xor rax, rax
-    in eax, dx
-    ret
-io_out8:
-    mov rax, rsi
-    mov rdx, rdi
-    out dx, al
-    ret
-io_out16:
-    mov rax, rsi
-    mov rdx, rdi
-    out dx, ax
-    ret
-io_out32:
-    mov rax, rsi
-    mov rdx, rdi
-    out dx, eax
-    ret
-io_wait:
-    jmp .a
-.a: jmp .b
-.b: ret
 
 %macro DEFINE_INT 1
 global isr%1
@@ -120,20 +75,23 @@ asm_int_handler:
     push r15
 
     ; fxsave needs to be aligned to 16bytes
-    ; mov	rbx,rsp
-    ; and	rsp,~0xF
-    ; fxsave	[rsp - 512]
-    ; mov	rsp,rbx
-    ; sub	rsp,512 + 16
+    ; mov rbx,rsp
+    ; and rsp,~0xF
+    ; fxsave  [rsp - 512]
+    ; mov rsp,rbx
+    ; sub rsp,512 + 16
+
 
     mov rdi, rsp
     call irq_int_handler
+    mov rsp, rax
 
     ; fxrstor also needs to be aligned to 16bytes
-    ; add	rsp, 512 + 16
-    ; mov	rbx,rsp
-    ; and	rbx,~0xF
-    ; fxrstor	[rbx - 512]
+    ; add rsp, 512 + 16
+    ; mov rbx,rsp
+    ; and rbx,~0xF
+    ; fxrstor [rbx - 512]
+
     cli
 
     pop r15
