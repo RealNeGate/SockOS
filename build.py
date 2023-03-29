@@ -13,7 +13,7 @@ optimize = False
 target = "x64"
 clang_arch = "x86_64"
 
-ldflags = "--nostdlib -e kmain"
+ldflags = "-pie --nostdlib -e kmain"
 cflags = f"-g -I src -target {clang_arch}-pc-linux-gnu -fpic -Wall -Werror -Wno-unused-function -fno-stack-protector -nodefaultlibs -mno-red-zone -nostdlib -ffreestanding"
 
 efi_cflags = f"-I src -target {clang_arch}-pc-win32-coff -fno-stack-protector -nostdlib -fshort-wchar -mno-red-zone"
@@ -46,7 +46,7 @@ ninja_cmd(f"src/boot/loader_{target}.asm", f"nasm -f bin -o bin/loader.bin src/b
 
 ninja_cmd(f"src/arch/{target}/core.asm", f"nasm -f elf64 -o bin/asm.o src/arch/{target}/core.asm", "bin/asm.o")
 ninja_cc("src/kernel/kernel.c", f"clang src/kernel/kernel.c -c -o bin/kernel.o {cflags}\n", "bin/kernel.o")
-ninja_cmd("bin/kernel.o bin/asm.o", f"clang bin/kernel.o bin/asm.o -o bin/kernel.so {cflags} -e kmain", "bin/kernel.so")
+ninja_cmd("bin/kernel.o bin/asm.o", f"{ld} bin/kernel.o bin/asm.o -o bin/kernel.so {ldflags}", "bin/kernel.so")
 ninja.close()
 
 subprocess.call(['ninja'])
