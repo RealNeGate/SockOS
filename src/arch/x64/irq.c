@@ -148,19 +148,17 @@ void irq_startup(void) {
         x |= (1u << 11u); // enable APIC
         __writemsr(IA32_APIC_BASE, x);
         if (x & IA32_APIC_BASE_MSR_BSP) {
-            put_string("We're the main core\n");
+            kprintf("We're the main core\n");
         }
 
         // get the address (it's above the 63-12 bits)
         volatile uint32_t* apic;
         if (memmap__view(boot_info->kernel_pml4, x & ~0xFFF, PAGE_SIZE, (void**) &apic)) {
-            put_string("Could not map view of local ACPI!!!");
+            kprintf("Could not map view of local ACPI!!!\n");
             return;
         }
 
-        put_char('A');
-        put_number((uintptr_t) apic);
-        put_char('\n');
+        kprintf("A %x\n", apic);
 
         // 0xF0 - Spurious Interrupt Vector Register
         apic[0xF0 / 4] |= 0x1FF;

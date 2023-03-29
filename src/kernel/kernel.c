@@ -7,7 +7,8 @@ static BootInfo* boot_info;
 
 static void put_char(int ch);
 static void put_string(const char* str);
-static void put_number(uint32_t x);
+static void put_number(uint64_t x, uint8_t base);
+static void kprintf(char *fmt, ...);
 
 // core components
 #include "kernel/str.c"
@@ -15,18 +16,18 @@ static void put_number(uint32_t x);
 #include "arch/x64/mem.c"
 #include "arch/x64/irq.c"
 
-static int itoa(uint32_t i, uint8_t base, uint16_t* buf) {
+static int itoa(uint64_t i, uint8_t base, uint8_t *buf) {
     static const char bchars[] = "0123456789ABCDEF";
 
-    int pos   = 0;
-    int o_pos = 0;
-    int top   = 0;
-    uint16_t tbuf[32];
+    int      pos   = 0;
+    int      o_pos = 0;
+    int      top   = 0;
+    uint8_t tbuf[64];
 
     if (i == 0 || base > 16) {
         buf[0] = '0';
         buf[1] = '\0';
-        return 0;
+        return 2;
     }
 
     while (i != 0) {
@@ -39,14 +40,15 @@ static int itoa(uint32_t i, uint8_t base, uint16_t* buf) {
     for (o_pos = 0; o_pos < top; pos--, o_pos++) {
         buf[o_pos] = tbuf[pos];
     }
+
     buf[o_pos] = 0;
-    return o_pos;
+    return o_pos + 1;
 }
 
-static void put_number(uint32_t number) {
-    uint16_t buffer[32];
-    itoa(number, 16, buffer);
-    buffer[31] = 0;
+static void put_number(uint64_t number, uint8_t base) {
+    uint8_t buffer[65];
+    itoa(number, base, buffer);
+    buffer[64] = 0;
 
     // serial port writing
     for (int i = 0; buffer[i]; i++) {
@@ -58,6 +60,10 @@ static void put_number(uint32_t number) {
 
 static void put_string(const char* str) {
     for (; *str; str++) io_out8(0x3f8, *str);
+}
+
+static void put_buffer(const uint8_t* buf, int size) {
+    for (int i = 0; i < size; i++) io_out8(0x3f8, buf[i]);
 }
 
 static void put_char(int ch) {
@@ -78,6 +84,95 @@ static void put_char(int ch) {
     }
 
     cursor = (cursor + 1) % (columns * rows);*/
+}
+
+#define _PRINT_BUFFER_LEN 128
+static void kprintf(char *fmt, ...) {
+    __builtin_va_list args;
+    __builtin_va_start(args, fmt);
+
+    uint8_t obuf[_PRINT_BUFFER_LEN];
+    uint32_t min_len = 0;
+    for (char *c = fmt; *c != 0; c++) {
+        if (*c != '%') {
+            int i = 0;
+            for (; *c != 0 && *c != '%'; i++) {
+                if (i > _PRINT_BUFFER_LEN) {
+                    put_buffer(obuf, i);
+                    i = 0;
+                }
+
+                obuf[i] = *c;
+                c++;
+            }
+
+            if (i > 0) {
+                put_buffer(obuf, i);
+            }
+            c--;
+            continue;
+        }
+
+        int64_t precision = -1;
+consume_moar:
+        c++;
+        switch (*c) {
+        case '.': {
+            c++;
+            if (*c != '*') {
+                continue;
+            }
+
+            precision = __builtin_va_arg(args, int64_t);
+            goto consume_moar;
+        } break;
+        case '0': {
+            c++;
+            min_len = *c - '0';
+            goto consume_moar;
+        } break;
+        case 's': {
+            uint8_t *s = __builtin_va_arg(args, uint8_t *);
+            put_buffer(s, precision);
+        } break;
+        case 'd': {
+            int64_t i = __builtin_va_arg(args, int64_t);
+            put_number(i, 10);
+        } break;
+        case 'x': {
+            uint64_t i = __builtin_va_arg(args, uint64_t);
+
+            uint8_t tbuf[64];
+            int sz = itoa(i, 16, tbuf);
+
+            int pad_sz = min_len - (sz - 1);
+            while (pad_sz > 0) {
+                put_char('0');
+                pad_sz--;
+            }
+
+            put_buffer(tbuf, sz - 1);
+            min_len = 0;
+        } break;
+        case 'b': {
+            uint64_t i = __builtin_va_arg(args, uint64_t);
+
+            uint8_t tbuf[64];
+            int sz = itoa(i, 2, tbuf);
+
+            int pad_sz = min_len - (sz - 1);
+            while (pad_sz > 0) {
+                put_char('0');
+                pad_sz--;
+            }
+
+            put_buffer(tbuf, sz - 1);
+            min_len = 0;
+        } break;
+        }
+    }
+
+    __builtin_va_end(args);
 }
 
 void foobar(void) {
