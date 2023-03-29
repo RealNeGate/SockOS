@@ -1,7 +1,7 @@
 #define PIC1_COMMAND 0x20
-#define PIC1_DATA 0x21
+#define PIC1_DATA    0x21
 #define PIC2_COMMAND 0xA0
-#define PIC2_DATA 0xA1
+#define PIC2_DATA    0xA1
 
 enum {
     IA32_APIC_BASE = 0x1B,
@@ -25,7 +25,7 @@ typedef struct CPUState {
 typedef struct __attribute__((packed)) IDTEntry {
     uint16_t offset_1;  // offset bits 0..15
     uint16_t selector;  // a code segment selector in GDT or LDT
-    int8_t   ist;       // bits 0..2 holds Interrupt Stack Table offset, rest of bits zero.
+    uint8_t  ist;       // bits 0..2 holds Interrupt Stack Table offset, rest of bits zero.
     uint8_t  type_attr; // type and attributes
     uint16_t offset_2;  // offset bits 16..31
     uint32_t offset_3;  // offset bits 32..63
@@ -46,6 +46,7 @@ extern void isr_handler(void);
 
 extern void irq_enable(IDT* idt);
 extern void irq_disable(void);
+extern void isr3(void);
 
 // IO Ports on x86
 extern uint8_t io_in8(uint16_t port);
@@ -115,12 +116,27 @@ static volatile void* mmio_reg(volatile void* base, ptrdiff_t offset) {
     };                                                  \
 } while (0)
 
+#define SET_EXCEPTION(num) do {                         \
+    extern void isr ## num();                           \
+    uintptr_t callback_addr = (uintptr_t) &isr ## num;  \
+    _idt[num] = (IDTEntry){                             \
+        .offset_1 = callback_addr & 0xFFFF,             \
+        .selector = 0x08,                               \
+        .ist = 0,                                       \
+        .type_attr = 0x8F,                              \
+        .offset_2 = (callback_addr >> 16) & 0xFFFF,     \
+        .offset_3 = (callback_addr >> 32) & 0xFFFFFFFF, \
+        .reserved = 0,                                  \
+    };                                                  \
+} while (0)
+
 void irq_startup(void) {
     FOREACH_N(i, 0, 256) _idt[i] = (IDTEntry){ 0 };
+    SET_INTERRUPT(3);
+    SET_EXCEPTION(8);
     SET_INTERRUPT(9);
-    SET_INTERRUPT(8);
-    SET_INTERRUPT(13);
-    SET_INTERRUPT(14);
+    SET_EXCEPTION(13);
+    SET_EXCEPTION(14);
 
     SET_INTERRUPT(32);
     SET_INTERRUPT(33);
@@ -167,7 +183,9 @@ void irq_startup(void) {
 
     // asm volatile ("1: jmp 1b");
 
-    IDT idt = { .limit = sizeof(_idt) - 1, .base = (uintptr_t) _idt };
+    //uint64_t based = (uintptr_t)_idt;
+    IDT idt = { .limit = sizeof(_idt) - 1, .base = (uintptr_t)_idt };
+    kprintf("%x, %x\n", (uint64_t)idt.base, (uint64_t)_idt);
     irq_enable(&idt);
 
     put_char('D');
