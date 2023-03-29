@@ -183,9 +183,7 @@ void irq_startup(void) {
 
     // asm volatile ("1: jmp 1b");
 
-    //uint64_t based = (uintptr_t)_idt;
     IDT idt = { .limit = sizeof(_idt) - 1, .base = (uintptr_t)_idt };
-    kprintf("%x, %x\n", (uint64_t)idt.base, (uint64_t)_idt);
     irq_enable(&idt);
 
     put_char('D');

@@ -34,7 +34,9 @@
 #define SHT_PROGBITS 1 /* program defined information */
 #define SHT_SYMTAB   2 /* symbol table section */
 #define SHT_STRTAB   3 /* string table section */
+#define SHT_RELA     4 /* relocations w/addends */
 #define SHT_NOBITS   8 /* no space section */
+#define SHT_REL      9 /* relocations wo/addends */
 
 /* Flags for sh_flags. */
 #define SHF_WRITE            0x1        /* Section contains writable data. */
@@ -71,11 +73,12 @@
 #define PT_GNU_RELRO (PT_LOOS + 0x474e552)
 
 /* Values for relocation */
-#define R_X86_64_NONE  0
-#define R_X86_64_64    1
-#define R_X86_64_PC32  2
-#define R_X86_64_GOT32 3
-#define R_X86_64_PLT32 4
+#define R_X86_64_NONE     0
+#define R_X86_64_64       1
+#define R_X86_64_PC32     2
+#define R_X86_64_GOT32    3
+#define R_X86_64_PLT32    4
+#define R_X86_64_RELATIVE 8
 
 typedef uint64_t Elf64_Addr;
 typedef uint16_t Elf64_Half;

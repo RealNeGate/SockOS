@@ -49,6 +49,13 @@ void println(EFI_SYSTEM_TABLE* st, uint16_t* str) {
     st->ConOut->OutputString(st->ConOut, (int16_t*) str);
     st->ConOut->OutputString(st->ConOut, (int16_t*) L"\n\r");
 }
+void println_utf8(EFI_SYSTEM_TABLE* st, char* str) {
+    for (char *tmp = str; *tmp != '\0'; tmp++) {
+        int16_t c[2] = {*tmp, 0};
+        st->ConOut->OutputString(st->ConOut, c);
+    }
+    st->ConOut->OutputString(st->ConOut, (int16_t*) L"\n\r");
+}
 
 #define panic(x, y)    \
 do {                   \
@@ -316,6 +323,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         char* elf_file = &kernel_loader_region[LOADER_BUFFER_SIZE];
         Elf64_Ehdr* elf_header = (Elf64_Ehdr*)elf_file;
 
+
         // Identify how much memory we need to allocate while
         // validating the input
         size_t segment_file_pos = elf_header->e_phoff;
@@ -374,6 +382,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         }
         PageTable* page_tables = (PageTable*)addr;
 
+
         // same layout stuff as program_memory_size from before
         size_t pages_used = 0;
         for (size_t i = 0; i < segment_count; i++) {
@@ -399,6 +408,29 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
                 return 1;
             }
             #endif
+        }
+
+        size_t section_count = elf_header->e_shnum;
+        for (size_t i = 0; i < section_count; i++) {
+            Elf64_Shdr* section = (Elf64_Shdr*) &elf_file[elf_header->e_shoff + (i * elf_header->e_shentsize)];
+            if (section->sh_type != SHT_RELA) {
+                continue;
+            }
+
+            uint64_t offset = section->sh_offset;
+            uint64_t size   = section->sh_size;
+            for (size_t j = 0; j < size; j += sizeof(Elf64_Rela)) {
+                Elf64_Rela* rela = (Elf64_Rela*) &elf_file[offset + j];
+				uint8_t type = ELF64_R_TYPE(rela->r_info);
+
+                if (type == R_X86_64_RELATIVE) {
+                    uint64_t patch_address = (uint64_t)(program_memory + rela->r_offset);
+                    uint64_t resolved_address = (uint64_t)(program_memory + rela->r_addend);
+                    *(uint64_t*)patch_address = resolved_address;
+                } else {
+                    panic(st, L"Unable to handle unknown relocation type!\n");
+                }
+            }
         }
 
         // Find kernel main
