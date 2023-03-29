@@ -513,7 +513,7 @@ typedef EFI_STATUS(EFIAPI* EFI_FILE_GET_POSITION)(
 typedef EFI_STATUS(EFIAPI* EFI_FILE_SET_POSITION)(
     IN struct _EFI_FILE_HANDLE* File, IN uint64_t* Position);
 typedef EFI_STATUS(EFIAPI* EFI_FILE_GET_INFO)(IN struct _EFI_FILE_HANDLE* File,
-    IN EFI_GUID* InformationType, IN size_t BufferSize, IN void* Buffer);
+    IN EFI_GUID* InformationType, IN OUT size_t* BufferSize, IN void* Buffer);
 typedef EFI_STATUS(EFIAPI* EFI_FILE_SET_INFO)(IN struct _EFI_FILE_HANDLE* File,
     IN EFI_GUID* InformationType, IN size_t BufferSize, IN void* Buffer);
 typedef EFI_STATUS(EFIAPI* EFI_FILE_FLUSH)(IN struct _EFI_FILE_HANDLE* File);
