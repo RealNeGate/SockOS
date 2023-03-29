@@ -1,5 +1,11 @@
 #define KERNEL_VIRTUAL_BASE 0xC0000000
 
+typedef struct {
+    uint32_t  width, height;
+    uint32_t  stride; // in pixels
+    uint32_t* pixels;
+} Framebuffer;
+
 enum {
     PAGE_SIZE = 4096
 };
@@ -24,11 +30,5 @@ typedef struct {
     // the kernel virtual memory is allocated
     // with a simple bump allocator
     size_t kernel_virtual_used;
-
-    struct {
-        uint32_t  width, height;
-        uint32_t  stride; // in pixels
-        uint32_t* pixels;
-        // TODO(NeGate): pixel format :p
-    } fb;
+    Framebuffer fb;
 } BootInfo;

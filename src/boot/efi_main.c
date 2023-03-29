@@ -8,6 +8,10 @@
 #include "efi.h"
 #include "elf.h"
 
+#include "com.c"
+#include "term.c"
+#include "printf.c"
+
 int itoa(uint32_t i, uint8_t base, uint16_t* buf) {
     static const char bchars[] = "0123456789ABCDEF";
 
@@ -217,7 +221,33 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     EFI_STATUS status;
 
     status = st->ConOut->ClearScreen(st->ConOut);
-    println(st, L"Beginning EFI Boot...");
+
+    if(!com_init(COM_DEFAULT_BAUD)) {
+        println(st, L"Failed to initialize COM1 port output");
+    }
+    com_writes("COM1 port output success!\n");
+
+    // Get linear framebuffer
+    Framebuffer fb;
+    {
+        EFI_GRAPHICS_OUTPUT_PROTOCOL* graphics_output_protocol;
+        EFI_GUID graphics_output_protocol_guid = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
+
+        status = st->BootServices->LocateProtocol(&graphics_output_protocol_guid, NULL, (void**)&graphics_output_protocol);
+        if (status != 0) {
+            panic(st, L"Error: Could not open protocol 3.\n");
+        }
+
+        fb.width  = graphics_output_protocol->Mode->Info->HorizontalResolution;
+        fb.height = graphics_output_protocol->Mode->Info->VerticalResolution;
+        fb.stride = graphics_output_protocol->Mode->Info->PixelsPerScanline;
+        fb.pixels = (uint32_t*)graphics_output_protocol->Mode->FrameBufferBase;
+    }
+    boot_info.fb = fb;
+    term_set_framebuffer(fb);
+    term_set_wrap(true);
+    printf("Framebuffer at %X\n", (uint64_t) fb.pixels);
+    printf("\x01");
 
     // Load the kernel and loader from disk
     char* kernel_loader_region;
@@ -294,23 +324,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         println(st, L"Loaded the kernel and loader!");
         printhex(st, (uint32_t)((uintptr_t)loader_buffer));
     }
-
-    // Get linear framebuffer
-    {
-        EFI_GRAPHICS_OUTPUT_PROTOCOL* graphics_output_protocol;
-        EFI_GUID graphics_output_protocol_guid = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
-
-        status = st->BootServices->LocateProtocol(&graphics_output_protocol_guid, NULL, (void**)&graphics_output_protocol);
-        if (status != 0) {
-            panic(st, L"Error: Could not open protocol 3.\n");
-        }
-
-        boot_info.fb.width  = graphics_output_protocol->Mode->Info->HorizontalResolution;
-        boot_info.fb.height = graphics_output_protocol->Mode->Info->VerticalResolution;
-        boot_info.fb.stride = graphics_output_protocol->Mode->Info->PixelsPerScanline;
-        boot_info.fb.pixels = (uint32_t*)graphics_output_protocol->Mode->FrameBufferBase;
-    }
-    println(st, L"Got the framebuffer!");
+    for(;;);
 
     // Generate the kernel page tables
     //   they don't get used quite yet but it's
