@@ -1,4 +1,4 @@
-set -x -o pipefail
+set -eux -o pipefail
 
 BUILDDIR=bin
 

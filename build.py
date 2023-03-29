@@ -3,6 +3,12 @@ import platform
 import shutil
 import subprocess
 
+system = platform.system()
+if system == "Windows":
+    ld = "ld.lld.exe"
+else:
+    ld = "ld.lld"
+
 optimize = False
 target = "x64"
 clang_arch = "x86_64"
@@ -40,7 +46,7 @@ ninja_cmd(f"src/boot/loader_{target}.asm", f"nasm -f bin -o bin/loader.bin src/b
 
 ninja_cmd(f"src/arch/{target}/core.asm", f"nasm -f elf64 -o bin/asm.o src/arch/{target}/core.asm", "bin/asm.o")
 ninja_cc("src/kernel/kernel.c", f"clang src/kernel/kernel.c -c -o bin/kernel.o {cflags}\n", "bin/kernel.o")
-ninja_cmd("bin/kernel.o bin/asm.o", f"ld.lld.exe bin/kernel.o bin/asm.o -o bin/kernel.so {ldflags}", "bin/kernel.so")
+ninja_cmd("bin/kernel.o bin/asm.o", f"{ld} bin/kernel.o bin/asm.o -o bin/kernel.so {ldflags}", "bin/kernel.so")
 ninja.close()
 
 subprocess.call(['ninja'])
