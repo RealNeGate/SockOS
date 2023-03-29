@@ -10,6 +10,8 @@ static void put_string(const char* str);
 static void put_number(uint64_t x, uint8_t base);
 static void kprintf(char *fmt, ...);
 
+#define kassert(cond) ((cond) ? 0 : (kprintf("%s:%d: assertion failed!\n  %s\n", __FILE__, __LINE__, #cond), __builtin_trap()))
+
 // core components
 #include "kernel/str.c"
 
@@ -63,7 +65,11 @@ static void put_string(const char* str) {
 }
 
 static void put_buffer(const uint8_t* buf, int size) {
-    for (int i = 0; i < size; i++) io_out8(0x3f8, buf[i]);
+    if (size >= 0) {
+        for (int i = 0; i < size; i++) io_out8(0x3f8, buf[i]);
+    } else {
+        for (int i = 0; buf[i]; i++) io_out8(0x3f8, buf[i]);
+    }
 }
 
 static void put_char(int ch) {
@@ -114,61 +120,61 @@ static void kprintf(char *fmt, ...) {
         }
 
         int64_t precision = -1;
-consume_moar:
+        consume_moar:
         c++;
         switch (*c) {
-        case '.': {
-            c++;
-            if (*c != '*') {
-                continue;
-            }
+            case '.': {
+                c++;
+                if (*c != '*') {
+                    continue;
+                }
 
-            precision = __builtin_va_arg(args, int64_t);
-            goto consume_moar;
-        } break;
-        case '0': {
-            c++;
-            min_len = *c - '0';
-            goto consume_moar;
-        } break;
-        case 's': {
-            uint8_t *s = __builtin_va_arg(args, uint8_t *);
-            put_buffer(s, precision);
-        } break;
-        case 'd': {
-            int64_t i = __builtin_va_arg(args, int64_t);
-            put_number(i, 10);
-        } break;
-        case 'x': {
-            uint64_t i = __builtin_va_arg(args, uint64_t);
+                precision = __builtin_va_arg(args, int64_t);
+                goto consume_moar;
+            } break;
+            case '0': {
+                c++;
+                min_len = *c - '0';
+                goto consume_moar;
+            } break;
+            case 's': {
+                uint8_t *s = __builtin_va_arg(args, uint8_t *);
+                put_buffer(s, precision);
+            } break;
+            case 'd': {
+                int64_t i = __builtin_va_arg(args, int64_t);
+                put_number(i, 10);
+            } break;
+            case 'x': {
+                uint64_t i = __builtin_va_arg(args, uint64_t);
 
-            uint8_t tbuf[64];
-            int sz = itoa(i, 16, tbuf);
+                uint8_t tbuf[64];
+                int sz = itoa(i, 16, tbuf);
 
-            int pad_sz = min_len - (sz - 1);
-            while (pad_sz > 0) {
-                put_char('0');
-                pad_sz--;
-            }
+                int pad_sz = min_len - (sz - 1);
+                while (pad_sz > 0) {
+                    put_char('0');
+                    pad_sz--;
+                }
 
-            put_buffer(tbuf, sz - 1);
-            min_len = 0;
-        } break;
-        case 'b': {
-            uint64_t i = __builtin_va_arg(args, uint64_t);
+                put_buffer(tbuf, sz - 1);
+                min_len = 0;
+            } break;
+            case 'b': {
+                uint64_t i = __builtin_va_arg(args, uint64_t);
 
-            uint8_t tbuf[64];
-            int sz = itoa(i, 2, tbuf);
+                uint8_t tbuf[64];
+                int sz = itoa(i, 2, tbuf);
 
-            int pad_sz = min_len - (sz - 1);
-            while (pad_sz > 0) {
-                put_char('0');
-                pad_sz--;
-            }
+                int pad_sz = min_len - (sz - 1);
+                while (pad_sz > 0) {
+                    put_char('0');
+                    pad_sz--;
+                }
 
-            put_buffer(tbuf, sz - 1);
-            min_len = 0;
-        } break;
+                put_buffer(tbuf, sz - 1);
+                min_len = 0;
+            } break;
         }
     }
 

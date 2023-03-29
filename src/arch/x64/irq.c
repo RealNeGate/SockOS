@@ -161,7 +161,10 @@ void irq_startup(void) {
         kprintf("A %x\n", apic);
 
         // 0xF0 - Spurious Interrupt Vector Register
+        uint64_t y = memmap__probe(boot_info->kernel_pml4, (uintptr_t) apic);
         apic[0xF0 / 4] |= 0x1FF;
+
+        kprintf("B: %x\n", y);
     }
 
     // asm volatile ("1: jmp 1b");
