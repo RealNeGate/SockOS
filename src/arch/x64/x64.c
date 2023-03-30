@@ -43,7 +43,11 @@ static inline void io_out32(uint16_t port, uint32_t value) {
 }
 
 static inline void io_wait(void) {
-    asm volatile("jmp 1f;1:jmp 1f;1:");
+    asm volatile(
+        "jmp 1f;"
+        "1:jmp 1f;"
+        "1:"
+    );
 }
 
 
@@ -59,3 +63,21 @@ static inline void __writemsr(uint32_t r, uint64_t v) {
     asm volatile ("wrmsr" : : "c" (r), "a" (eax), "d" (edx));
 }
 
+static inline void x86_cli() {
+    asm volatile ("cli");
+}
+
+static inline void x86_sti() {
+    asm volatile ("sti");
+}
+
+static inline void x86_hlt() {
+    asm volatile ("hlt");
+}
+
+static inline void halt() {
+    x86_cli();
+    for(;;) {
+        x86_hlt();
+    }
+}

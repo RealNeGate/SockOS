@@ -40,7 +40,7 @@ int itoa(uint32_t i, uint8_t base, uint16_t* buf) {
     return o_pos;
 }
 
-void printhex(EFI_SYSTEM_TABLE* st, uint32_t number) {
+void efi_print_hex(EFI_SYSTEM_TABLE* st, uint32_t number) {
     uint16_t buffer[32];
     itoa(number, 16, buffer);
     buffer[31] = 0;
@@ -49,11 +49,11 @@ void printhex(EFI_SYSTEM_TABLE* st, uint32_t number) {
     st->ConOut->OutputString(st->ConOut, (int16_t*) L"\n\r");
 }
 
-void println(EFI_SYSTEM_TABLE* st, uint16_t* str) {
+void efi_println(EFI_SYSTEM_TABLE* st, uint16_t* str) {
     st->ConOut->OutputString(st->ConOut, (int16_t*) str);
     st->ConOut->OutputString(st->ConOut, (int16_t*) L"\n\r");
 }
-void println_utf8(EFI_SYSTEM_TABLE* st, char* str) {
+void efi_println_ansi(EFI_SYSTEM_TABLE* st, char* str) {
     for (char *tmp = str; *tmp != '\0'; tmp++) {
         int16_t c[2] = {*tmp, 0};
         st->ConOut->OutputString(st->ConOut, c);
@@ -61,10 +61,10 @@ void println_utf8(EFI_SYSTEM_TABLE* st, char* str) {
     st->ConOut->OutputString(st->ConOut, (int16_t*) L"\n\r");
 }
 
-#define panic(x, y)    \
-do {                   \
-    println((x), (y)); \
-    return 1;          \
+#define panic(fmt, ...)       \
+do {                          \
+    printf(fmt, __VA_ARGS__); \
+    halt();                   \
 } while (false);
 
 #define PAGE_4K(x) (((x) + 0xFFF) / 0x1000)
@@ -138,8 +138,7 @@ inline static size_t align_up(size_t a, size_t b) {
 static EFI_STATUS identity_map_some_pages(EFI_SYSTEM_TABLE* st, PageTableContext* ctx, uint64_t da_address, uint64_t page_count) {
     PageTable* address_space = &ctx->tables[0];
     if (da_address & 0xFFFull) {
-        printhex(st, da_address);
-        panic(st, L"Unaligned identity mapping");
+        panic("Unaligned identity mapping when mapping %X\n", da_address);
     }
 
     // Generate the page table mapping
@@ -153,7 +152,7 @@ static EFI_STATUS identity_map_some_pages(EFI_SYSTEM_TABLE* st, PageTableContext
         PageTable* table_l3;
         if (address_space->entries[pml4_index] == 0) {
             // Allocate new L4 entry
-            if (ctx->used + 1 >= ctx->capacity) panic(st, L"Fuck L4!");
+            if (ctx->used + 1 >= ctx->capacity) panic("Fuck L4!\n");
 
             table_l3 = &ctx->tables[ctx->used++];
             memset(table_l3, 0, sizeof(PageTable));
@@ -168,7 +167,7 @@ static EFI_STATUS identity_map_some_pages(EFI_SYSTEM_TABLE* st, PageTableContext
         PageTable* table_l2;
         if (table_l3->entries[pdpte_index] == 0) {
             // Allocate new L3 entry
-            if (ctx->used + 1 >= ctx->capacity) panic(st, L"Fuck L3!");
+            if (ctx->used + 1 >= ctx->capacity) panic("Fuck L3!\n");
 
             table_l2 = &ctx->tables[ctx->used++];
             memset(table_l2, 0, sizeof(PageTable));
@@ -183,7 +182,7 @@ static EFI_STATUS identity_map_some_pages(EFI_SYSTEM_TABLE* st, PageTableContext
         PageTable* table_l1;
         if (table_l2->entries[pde_index] == 0) {
             // Allocate new L2 entry
-            if (ctx->used + 1 >= ctx->capacity) panic(st, L"Fuck L2!");
+            if (ctx->used + 1 >= ctx->capacity) panic("Fuck L2!\n");
 
             table_l1 = &ctx->tables[ctx->used++];
             memset(table_l1, 0, sizeof(PageTable));
@@ -223,7 +222,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     status = st->ConOut->ClearScreen(st->ConOut);
 
     if(!com_init(COM_DEFAULT_BAUD)) {
-        println(st, L"Failed to initialize COM1 port output");
+        efi_println(st, L"Failed to initialize COM1 port output");
     }
     com_writes("COM1 port output success!\n");
 
@@ -235,7 +234,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 
         status = st->BootServices->LocateProtocol(&graphics_output_protocol_guid, NULL, (void**)&graphics_output_protocol);
         if (status != 0) {
-            panic(st, L"Error: Could not open protocol 3.\n");
+            panic("Error: Could not open protocol 3.\n\n");
         }
 
         fb.width  = graphics_output_protocol->Mode->Info->HorizontalResolution;
@@ -255,8 +254,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         EFI_PHYSICAL_ADDRESS addr;
         status = st->BootServices->AllocatePages(AllocateAnyPages, EfiLoaderData, (KERNEL_BUFFER_SIZE + LOADER_BUFFER_SIZE) / PAGE_SIZE, &addr);
         if (status != 0) {
-            printhex(st, status);
-            panic(st, L"Failed to allocate space for loader + kernel!");
+            panic("Failed to allocate space for loader + kernel!\nStatus: %x\n", status);
         }
         kernel_loader_region = (char*)addr;
 
@@ -265,8 +263,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         status = st->BootServices->OpenProtocol(img_handle, &loaded_img_proto_guid,
             (void**)&loaded_img_proto, img_handle, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL);
         if (status != 0) {
-            printhex(st, status);
-            panic(st, L"Failed to load img protocol!");
+            panic("Failed to load img protocol!\nStatus: %x\n", status);
         }
 
         EFI_GUID simple_fs_proto_guid = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
@@ -275,22 +272,19 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         status = st->BootServices->OpenProtocol(dev_handle, &simple_fs_proto_guid,
             (void**)&simple_fs_proto, img_handle, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL);
         if (status != 0) {
-            printhex(st, status);
-            panic(st, L"Failed to load fs protocol!");
+            panic("Failed to load fs protocol!\nStatus: %x\n", status);
         }
 
         EFI_FILE* fs_root;
         status = simple_fs_proto->OpenVolume(simple_fs_proto, &fs_root);
         if (status != 0) {
-            printhex(st, status);
-            panic(st, L"Failed to open fs root!");
+            panic("Failed to open fs root!\nStatus: %x\n", status);
         }
 
         EFI_FILE* kernel_file;
         status = fs_root->Open(fs_root, &kernel_file, (int16_t*)L"kernel.so", EFI_FILE_MODE_READ, 0);
         if (status != 0) {
-            printhex(st, status);
-            panic(st, L"Failed to open kernel.so!");
+            panic("Failed to open kernel.so!\nStatus: %x\n", status);
         }
 
         // Kernel buffer is right after the loader region
@@ -298,19 +292,18 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         char*  kernel_buffer = &kernel_loader_region[LOADER_BUFFER_SIZE];
         kernel_file->Read(kernel_file, &size, kernel_buffer);
         if (size >= KERNEL_BUFFER_SIZE) {
-            panic(st, L"Kernel too large to fit into buffer!");
+            panic("Kernel too large to fit into buffer!\n");
         }
 
         // Verify ELF magic number
         if (memcmp(kernel_buffer, (uint8_t[]) { 0x7F, 'E', 'L', 'F' }, 4) != 0) {
-            panic(st, L"kernel.o is not a valid ELF file!");
+            panic("kernel.o is not a valid ELF file!\n");
         }
 
         EFI_FILE* loader_file;
         status = fs_root->Open(fs_root, &loader_file, (int16_t*)L"loader.bin", EFI_FILE_MODE_READ, 0);
         if (status != 0) {
-            printhex(st, status);
-            panic(st, L"Failed to open loader.bin!");
+            panic("Failed to open loader.bin!\nStatus: %x\n", status);
         }
 
         size = LOADER_BUFFER_SIZE;
@@ -318,13 +311,11 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         loader_file->Read(loader_file, &size, loader_buffer);
 
         if (size >= LOADER_BUFFER_SIZE) {
-            panic(st, L"Loader too large to fit into buffer!");
+            panic("Loader too large to fit into buffer!\n");
         }
 
-        println(st, L"Loaded the kernel and loader!");
-        printhex(st, (uint32_t)((uintptr_t)loader_buffer));
+        printf("Loaded the kernel and loader at: %X\n", kernel_loader_region);
     }
-    for(;;);
 
     // Generate the kernel page tables
     //   they don't get used quite yet but it's
@@ -350,16 +341,16 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 
             // write xor execute, can't have both
             if ((segment->p_flags & (PF_X | PF_W)) == (PF_X | PF_W)) {
-                panic(st, L"Write-execute pages are banned in this loader");
+                panic("Write-execute pages are banned in this loader\n");
                 return 1;
             }
 
             if (segment->p_filesz > segment->p_memsz) {
-                panic(st, L"No enough space in this section for the file data");
+                panic("No enough space in this section for the file data\n");
             }
 
             if ((segment->p_align & (segment->p_align - 1)) != 0) {
-                panic(st, L"alignment must be a power-of-two");
+                panic("alignment must be a power-of-two\n");
                 return 1;
             }
 
@@ -383,16 +374,14 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         EFI_PHYSICAL_ADDRESS addr;
         status = st->BootServices->AllocatePages(AllocateAnyPages, EfiLoaderData, PAGE_4K(program_memory_size), &addr);
         if (status != 0) {
-            printhex(st, status);
-            panic(st, L"Failed to allocate space for kernel!");
+            panic("Failed to allocate space for kernel!\nStatus: %x\n", status);
         }
         uint8_t* program_memory = (uint8_t*)addr;
 
         // 512 entries per page
         status = st->BootServices->AllocatePages(AllocateAnyPages, EfiLoaderData, page_tables_necessary, &addr);
         if (status != 0) {
-            printhex(st, status);
-            panic(st, L"Failed to allocate space for kernel!");
+            panic("Failed to allocate space for kernel!\nStatus: %x\n", status);
         }
         PageTable* page_tables = (PageTable*)addr;
 
@@ -418,7 +407,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
             else if (segment->p_flags == (PF_R|PF_X)) new_protect = PAGE_EXECUTE_READ;
 
             if (new_protect == 0) {
-                panic(st, L"error: could not resolve memory protection rules on segment\n");
+                panic("error: could not resolve memory protection rules on segment\n\n");
                 return 1;
             }
             #endif
@@ -442,7 +431,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
                     uint64_t resolved_address = (uint64_t)(program_memory + rela->r_addend);
                     *(uint64_t*)patch_address = resolved_address;
                 } else {
-                    panic(st, L"Unable to handle unknown relocation type!\n");
+                    panic("Unable to handle unknown relocation type!\n\n");
                 }
             }
         }
@@ -489,8 +478,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
             return 1;
         }
 
-        printhex(st, (uintptr_t) program_memory);
-        println(st, L"Generated page tables!");
+        printf("Loaded the kernel at: %X\n", program_memory);
         // Free ELF file... maybe?
     }
 
@@ -507,8 +495,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         status = st->BootServices->GetMemoryMap(&size, (EFI_MEMORY_DESCRIPTOR*)mem_map_buffer, &map_key, &desc_size, &desc_version);
 
         if (status != 0) {
-            printhex(st, status);
-            panic(st, L"Failed to get memory map!");
+            panic("Failed to get memory map!\nStatus: %x", status);
         }
 
         size_t desc_count = size / desc_size;
@@ -535,8 +522,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 
     status = st->BootServices->ExitBootServices(img_handle, map_key);
     if (status != 0) {
-        printhex(st, status);
-        panic(st, L"Failed to exit EFI");
+        panic("Failed to exit EFI\nStatus: %x", status);
     }
 
     // memset(framebuffer, 0, framebuffer_stride * framebuffer_height * sizeof(uint32_t));
