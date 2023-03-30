@@ -121,24 +121,21 @@ asm_int_handler:
     push r15
 
     ; fxsave needs to be aligned to 16bytes
-	mov	rbx,rsp
-	and	rsp,~0xF
-	fxsave	[rsp - 512]
-	mov	rsp,rbx
-	sub	rsp,512 + 16
-
+    ; mov	rbx,rsp
+    ; and	rsp,~0xF
+    ; fxsave	[rsp - 512]
+    ; mov	rsp,rbx
+    ; sub	rsp,512 + 16
 
     mov rdi, rsp
     call irq_int_handler
-    mov rsp, rax
 
     ; fxrstor also needs to be aligned to 16bytes
-	add	rsp, 512 + 16
-	mov	rbx,rsp
-	and	rbx,~0xF
-	fxrstor	[rbx - 512]
-
-	cli
+    ; add	rsp, 512 + 16
+    ; mov	rbx,rsp
+    ; and	rbx,~0xF
+    ; fxrstor	[rbx - 512]
+    cli
 
     pop r15
     pop r14
@@ -156,5 +153,5 @@ asm_int_handler:
     pop rcx
     pop rax
 
-    add rsp, 16
+    add rsp, 16 ; pop interrupt_num and error code
     iretq

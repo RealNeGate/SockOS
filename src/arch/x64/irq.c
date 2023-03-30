@@ -15,7 +15,7 @@ enum {
 };
 
 typedef struct CPUState {
-    uint8_t  fxsave[512 + 16];
+    // uint8_t  fxsave[512 + 16];
     uint64_t r15, r14, r13, r12, r11, r10, r9, r8;
     uint64_t rdi, rsi, rbp, rbx, rdx, rcx, rax;
     uint64_t interrupt_num, error;
@@ -186,18 +186,19 @@ void irq_startup(void) {
     IDT idt = { .limit = sizeof(_idt) - 1, .base = (uintptr_t)_idt };
     irq_enable(&idt);
 
+    kprintf("int3 cs=%d\n", _idt[3].selector);
     put_char('D');
 }
 
-CPUState* irq_int_handler(CPUState* state) {
-    switch (state->interrupt_num) {
-        // Timer interrupt
-        case 32: {
-            put_char('A');
-            break;
-        }
-        default: break;
-    }
+void irq_int_handler(CPUState* state) {
+    kprintf("int %d: %x\n", state->interrupt_num, state->error);
+    kprintf("  rip=%x:%x rsp=%x:%x\n  ", state->cs, state->rip, state->ss, state->rsp);
 
-    return state;
+    uint8_t* mem = (uint8_t*) state->rip;
+    for (int i = -2; i <= 2; i++) {
+        kprintf("%x ", mem[i]);
+    }
+    kprintf("\n");
+
+    state->cs = 0x08;
 }
