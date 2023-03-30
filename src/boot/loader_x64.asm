@@ -17,10 +17,10 @@ start:
 
 	lgdt [gdt64.pointer]
 
-	push 0x08
 	lea rax, [.reload_cs]
-	push rax
-	retq
+    mov [far_jumper], rax
+
+	jmp far [far_jumper]
 .reload_cs:
 	mov ax, 0x10
 	mov ds, ax
@@ -32,6 +32,10 @@ start:
 	mov rdi, rcx
 	call [rcx]
 	hlt
+
+far_jumper:
+	dq 0 ; filled in at runtime
+	dw 0x08
 
 gdt64:
 	dq 0 ; zero entry

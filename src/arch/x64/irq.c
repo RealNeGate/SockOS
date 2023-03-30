@@ -109,7 +109,7 @@ static volatile void* mmio_reg(volatile void* base, ptrdiff_t offset) {
         .offset_1 = callback_addr & 0xFFFF,             \
         .selector = 0x08,                               \
         .ist = 0,                                       \
-        .type_attr = 0x8e,                              \
+        .type_attr = 0x8E,                              \
         .offset_2 = (callback_addr >> 16) & 0xFFFF,     \
         .offset_3 = (callback_addr >> 32) & 0xFFFFFFFF, \
         .reserved = 0,                                  \
@@ -182,11 +182,9 @@ void irq_startup(void) {
     }
 
     // asm volatile ("1: jmp 1b");
-
     IDT idt = { .limit = sizeof(_idt) - 1, .base = (uintptr_t)_idt };
     irq_enable(&idt);
 
-    kprintf("int3 cs=%d\n", _idt[3].selector);
     put_char('D');
 }
 
@@ -194,11 +192,11 @@ void irq_int_handler(CPUState* state) {
     kprintf("int %d: %x\n", state->interrupt_num, state->error);
     kprintf("  rip=%x:%x rsp=%x:%x\n  ", state->cs, state->rip, state->ss, state->rsp);
 
+    #if 0
     uint8_t* mem = (uint8_t*) state->rip;
     for (int i = -2; i <= 2; i++) {
         kprintf("%x ", mem[i]);
     }
     kprintf("\n");
-
-    state->cs = 0x08;
+    #endif
 }
