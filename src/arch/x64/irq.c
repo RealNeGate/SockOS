@@ -41,6 +41,9 @@ _Static_assert(sizeof(IDT) == 10, "expected sizeof(IDT) to be 10 bytes");
 
 volatile IDTEntry _idt[256];
 
+volatile uint32_t* apic;
+#define APIC(reg_num) apic[(reg_num) >> 2]
+
 // this is where all interrupts get pointed to, from there it's redirected to irq_int_handler
 extern void isr_handler(void);
 
@@ -156,7 +159,6 @@ void irq_startup(void) {
     SET_INTERRUPT(47);
 
     irq_disable_pic();
-    // irq_set_pit(64);
 
     // Enable APIC
     if (1) {
@@ -168,35 +170,47 @@ void irq_startup(void) {
         }
 
         // get the address (it's above the 63-12 bits)
-        volatile uint32_t* apic;
         if (memmap__view(boot_info->kernel_pml4, x & ~0xFFF, PAGE_SIZE, (void**) &apic)) {
             kprintf("Could not map view of local ACPI!!!\n");
             return;
         }
 
-        kprintf("A %x\n", apic);
+        kprintf("Found the APIC: 0x%x\n", apic);
 
         // 0xF0 - Spurious Interrupt Vector Register
         // Punting spurious interrupts (see PIC/CPU race condition, this is a fake interrupt)
-        apic[0xF0 / 4] |= 0x1FF;
+        APIC(0xF0) |= 0x1FF;
+
+        // 320h - LVT timer register
+        //   we just want a simple periodic timer on IRQ32
+        APIC(0x320) = 0x20000 | 32;
+        //   timer divide reg
+        APIC(0x3E0) = 0b1011;
+        //   initial timer count
+        APIC(0x380) = 10000;
     }
 
     // asm volatile ("1: jmp 1b");
     IDT idt = { .limit = sizeof(_idt) - 1, .base = (uintptr_t)_idt };
     irq_enable(&idt);
-
-    put_char('D');
 }
 
 void irq_int_handler(CPUState* state) {
     kprintf("int %d: %x\n", state->interrupt_num, state->error);
-    kprintf("  rip=%x:%x rsp=%x:%x\n  ", state->cs, state->rip, state->ss, state->rsp);
-
     #if 0
+    kprintf("  rip=%x:%x rsp=%x:%x\n  ", state->cs, state->rip, state->ss, state->rsp, state->flags);
+
     uint8_t* mem = (uint8_t*) state->rip;
     for (int i = -2; i <= 2; i++) {
         kprintf("%x ", mem[i]);
     }
     kprintf("\n");
     #endif
+
+    // APIC interrupts require an EOI signal to be sent before
+    // another one can come in, it's a little write only register
+    // in the LAPIC.
+    if (state->interrupt_num == 32) {
+        apic[0xB0 / 4] = 0;
+    }
 }

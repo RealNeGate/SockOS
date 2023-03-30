@@ -213,5 +213,5 @@ void kmain(BootInfo* info) {
 
     // interrupts
     irq_startup();
-    while (1) {}
+    for(;;) {}
 }

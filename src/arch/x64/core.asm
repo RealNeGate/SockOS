@@ -25,7 +25,6 @@ __writemsr:
 irq_enable:
     lidt [rdi]
     sti
-    int 3
     ret
 irq_disable:
     cli
