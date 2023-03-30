@@ -7,59 +7,11 @@
 
 #include "efi.h"
 #include "elf.h"
+#include "efi_util.c"
 
 #include "com.c"
 #include "term.c"
 #include "printf.c"
-
-int itoa(uint32_t i, uint8_t base, uint16_t* buf) {
-    static const char bchars[] = "0123456789ABCDEF";
-
-    int pos   = 0;
-    int o_pos = 0;
-    int top   = 0;
-    uint16_t tbuf[32];
-
-    if (i == 0 || base > 16) {
-        buf[0] = '0';
-        buf[1] = '\0';
-        return 0;
-    }
-
-    while (i != 0) {
-        tbuf[pos] = bchars[i % base];
-        pos++;
-        i /= base;
-    }
-    top = pos--;
-
-    for (o_pos = 0; o_pos < top; pos--, o_pos++) {
-        buf[o_pos] = tbuf[pos];
-    }
-    buf[o_pos] = 0;
-    return o_pos;
-}
-
-void efi_print_hex(EFI_SYSTEM_TABLE* st, uint32_t number) {
-    uint16_t buffer[32];
-    itoa(number, 16, buffer);
-    buffer[31] = 0;
-
-    st->ConOut->OutputString(st->ConOut, (int16_t*) buffer);
-    st->ConOut->OutputString(st->ConOut, (int16_t*) L"\n\r");
-}
-
-void efi_println(EFI_SYSTEM_TABLE* st, uint16_t* str) {
-    st->ConOut->OutputString(st->ConOut, (int16_t*) str);
-    st->ConOut->OutputString(st->ConOut, (int16_t*) L"\n\r");
-}
-void efi_println_ansi(EFI_SYSTEM_TABLE* st, char* str) {
-    for (char *tmp = str; *tmp != '\0'; tmp++) {
-        int16_t c[2] = {*tmp, 0};
-        st->ConOut->OutputString(st->ConOut, c);
-    }
-    st->ConOut->OutputString(st->ConOut, (int16_t*) L"\n\r");
-}
 
 #define panic(fmt, ...)       \
 do {                          \
@@ -251,12 +203,10 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     // Load the kernel and loader from disk
     char* kernel_loader_region;
     {
-        EFI_PHYSICAL_ADDRESS addr;
-        status = st->BootServices->AllocatePages(AllocateAnyPages, EfiLoaderData, (KERNEL_BUFFER_SIZE + LOADER_BUFFER_SIZE) / PAGE_SIZE, &addr);
-        if (status != 0) {
+        kernel_loader_region = efi_alloc(st, KERNEL_BUFFER_SIZE + LOADER_BUFFER_SIZE);
+        if (kernel_loader_region == NULL) {
             panic("Failed to allocate space for loader + kernel!\nStatus: %x\n", status);
         }
-        kernel_loader_region = (char*)addr;
 
         EFI_GUID loaded_img_proto_guid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
         EFI_LOADED_IMAGE_PROTOCOL* loaded_img_proto;
@@ -371,19 +321,16 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 
         page_tables_necessary += estimate_page_table_count(page_tables_necessary);
 
-        EFI_PHYSICAL_ADDRESS addr;
-        status = st->BootServices->AllocatePages(AllocateAnyPages, EfiLoaderData, PAGE_4K(program_memory_size), &addr);
-        if (status != 0) {
+        uint8_t* program_memory = efi_alloc(st, program_memory_size);
+        if (program_memory == NULL) {
             panic("Failed to allocate space for kernel!\nStatus: %x\n", status);
         }
-        uint8_t* program_memory = (uint8_t*)addr;
 
         // 512 entries per page
-        status = st->BootServices->AllocatePages(AllocateAnyPages, EfiLoaderData, page_tables_necessary, &addr);
-        if (status != 0) {
+        PageTable* page_tables = efi_alloc_pages(st, page_tables_necessary);
+        if (page_tables == NULL) {
             panic("Failed to allocate space for kernel!\nStatus: %x\n", status);
         }
-        PageTable* page_tables = (PageTable*)addr;
 
 
         // same layout stuff as program_memory_size from before
