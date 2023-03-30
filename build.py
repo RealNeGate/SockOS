@@ -47,7 +47,7 @@ ninja_cmd(f"src/arch/{target}/irq.asm", f"nasm -f elf64 -o bin/asm_irq.o src/arc
 ninja_cmd(f"src/boot/loader_{target}.asm", f"nasm -f bin -o bin/loader.bin src/boot/loader_{target}.asm", "bin/loader.bin")
 
 ninja_cc("src/kernel/kernel.c", f"clang src/kernel/kernel.c -c -o bin/kernel.o {cflags}\n", "bin/kernel.o")
-ninja_cmd("bin/kernel.o bin/asm_irq.o", f"{ld} bin/kernel.o bin/asm_irq.o -o bin/kernel.elf {ldflags}", "bin/kernel.elf")
+ninja_cmd("bin/kernel.o bin/asm_irq.o src/kernel/link", f"{ld} bin/kernel.o bin/asm_irq.o -o bin/kernel.elf {ldflags}", "bin/kernel.elf")
 ninja.close()
 
 subprocess.call(['ninja', '-v'])

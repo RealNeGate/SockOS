@@ -62,24 +62,26 @@ inline static size_t align_up(size_t a, size_t b) {
     return a + (b - (a % b)) % b;
 }
 
-static EFI_STATUS identity_map_some_pages(EFI_SYSTEM_TABLE* st, PageTableContext* ctx, uint64_t da_address, uint64_t page_count) {
+static void map_pages(PageTableContext* ctx, uint64_t virt_addr, uint64_t phys_addr, uint64_t page_count) {
     PageTable* address_space = &ctx->tables[0];
-    if (da_address & 0xFFFull) {
-        panic("Unaligned identity mapping when mapping %X\n", da_address);
+    if ((phys_addr | virt_addr) & 0xFFFull) {
+        panic("Bad addresses for mapping %X -> %X\n", virt_addr, phys_addr);
     }
 
     // Generate the page table mapping
-    uint64_t pml4_index  = (da_address >> 39) & 0x1FF; // 512GB
-    uint64_t pdpte_index = (da_address >> 30) & 0x1FF; // 1GB
-    uint64_t pde_index   = (da_address >> 21) & 0x1FF; // 2MB
-    uint64_t pte_index   = (da_address >> 12) & 0x1FF; // 4KB
+    uint64_t pml4_index  = (virt_addr >> 39) & 0x1FF; // 512GB
+    uint64_t pdpte_index = (virt_addr >> 30) & 0x1FF; // 1GB
+    uint64_t pde_index   = (virt_addr >> 21) & 0x1FF; // 2MB
+    uint64_t pte_index   = (virt_addr >> 12) & 0x1FF; // 4KB
 
     for (size_t i = 0; i < page_count; i++) {
         // 512GB
         PageTable* table_l3;
         if (address_space->entries[pml4_index] == 0) {
             // Allocate new L4 entry
-            if (ctx->used + 1 >= ctx->capacity) panic("Fuck L4!\n");
+            if (ctx->used + 1 >= ctx->capacity) {
+                panic("Fuck L4!\n");
+            }
 
             table_l3 = &ctx->tables[ctx->used++];
             memset(table_l3, 0, sizeof(PageTable));
@@ -94,7 +96,9 @@ static EFI_STATUS identity_map_some_pages(EFI_SYSTEM_TABLE* st, PageTableContext
         PageTable* table_l2;
         if (table_l3->entries[pdpte_index] == 0) {
             // Allocate new L3 entry
-            if (ctx->used + 1 >= ctx->capacity) panic("Fuck L3!\n");
+            if (ctx->used + 1 >= ctx->capacity) {
+                panic("Fuck L3!\n");
+            }
 
             table_l2 = &ctx->tables[ctx->used++];
             memset(table_l2, 0, sizeof(PageTable));
@@ -109,7 +113,9 @@ static EFI_STATUS identity_map_some_pages(EFI_SYSTEM_TABLE* st, PageTableContext
         PageTable* table_l1;
         if (table_l2->entries[pde_index] == 0) {
             // Allocate new L2 entry
-            if (ctx->used + 1 >= ctx->capacity) panic("Fuck L2!\n");
+            if (ctx->used + 1 >= ctx->capacity) {
+                panic("Fuck L2!\n");
+            }
 
             table_l1 = &ctx->tables[ctx->used++];
             memset(table_l1, 0, sizeof(PageTable));
@@ -122,8 +128,9 @@ static EFI_STATUS identity_map_some_pages(EFI_SYSTEM_TABLE* st, PageTableContext
 
         // 4KB
         // | 3 is because we make the pages both PRESENT and WRITABLE
-        table_l1->entries[pte_index] = (da_address & 0xFFFFFFFFFFFFF000) | 3;
-        da_address += PAGE_SIZE;
+        table_l1->entries[pte_index] = (phys_addr & 0xFFFFFFFFFFFFF000) | 3;
+        phys_addr += PAGE_SIZE;
+        virt_addr += PAGE_SIZE;
 
         pte_index++;
         if (pte_index >= 512) {
@@ -139,8 +146,10 @@ static EFI_STATUS identity_map_some_pages(EFI_SYSTEM_TABLE* st, PageTableContext
             }
         }
     }
+}
 
-    return 0;
+static void map_pages_id(PageTableContext* ctx, uint64_t addr, uint64_t page_count) {
+    map_pages(ctx, addr, addr, page_count);
 }
 
 EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
@@ -250,7 +259,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 
     // Find kernel main
     boot_info.entrypoint = (void*) kernel_module.entry_addr;
-    boot_info.kernel_virtual_used = kernel_module.phys_base;
+    boot_info.kernel_virtual_used = kernel_module.virt_base;
 
     // Generate the kernel page tables
     //   they don't get used quite yet but it's
@@ -287,34 +296,14 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         };
 
         // Identity map all the stuff we wanna keep
-        if (identity_map_some_pages(st, &ctx, kernel_module.phys_base, PAGE_4K(kernel_module.size))) {
-            return 1;
-        }
-
+        map_pages(&ctx, kernel_module.virt_base, kernel_module.phys_base, PAGE_4K(kernel_module.size));
         uint64_t fb_page_count = PAGE_4K(boot_info.fb.width * boot_info.fb.height * 4);
-        if (identity_map_some_pages(st, &ctx, (uint64_t) boot_info.fb.pixels, fb_page_count)) {
-            return 1;
-        }
-
-        if (identity_map_some_pages(st, &ctx, (uint64_t) page_tables, PAGE_4K(page_tables_necessary * 8))) {
-            return 1;
-        }
-
-        if (identity_map_some_pages(st, &ctx, (uint64_t)&kernel_loader_region[0], PAGE_4K(LOADER_BUFFER_SIZE))) {
-            return 1;
-        }
-
-        if (identity_map_some_pages(st, &ctx, (uint64_t) &mem_regions[0], PAGE_4K(MAX_MEM_REGIONS * sizeof(MemRegion)))) {
-            return 1;
-        }
-
-        if (identity_map_some_pages(st, &ctx, (uint64_t) &kernel_stack[0], PAGE_4K(KERNEL_STACK_SIZE))) {
-            return 1;
-        }
-
-        if (identity_map_some_pages(st, &ctx, (uint64_t) &boot_info, 1)) {
-            return 1;
-        }
+        map_pages_id(&ctx, (uint64_t) boot_info.fb.pixels, fb_page_count);
+        map_pages_id(&ctx, (uint64_t) page_tables, PAGE_4K(page_tables_necessary * 8));
+        map_pages_id(&ctx, (uint64_t) &kernel_loader_region[0], PAGE_4K(LOADER_BUFFER_SIZE));
+        map_pages_id(&ctx, (uint64_t) &mem_regions[0], PAGE_4K(MAX_MEM_REGIONS * sizeof(MemRegion)));
+        map_pages_id(&ctx, (uint64_t) &kernel_stack[0], PAGE_4K(KERNEL_STACK_SIZE));
+        map_pages_id(&ctx, (uint64_t) &boot_info, 1);
         boot_info.kernel_pml4 = &page_tables[0];
         // Free ELF file... maybe?
     }

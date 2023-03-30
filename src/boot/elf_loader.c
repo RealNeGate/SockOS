@@ -45,9 +45,10 @@ static bool elf_load(EFI_SYSTEM_TABLE* st, void* elf_base, ELF_Module *module) {
     if (phys_base == NULL) {
         panic("Failed to allocate space for kernel phys_base!\n");
     }
+    printf("Phys addr: %X..%X\n", phys_base, phys_base + image_size);
     // Copy the segments into memory at the respective addresses in physical memory
     uint64_t virt_base = min_vaddr;
-    printf("Virtual addr: %X\n", virt_base);
+    printf("Virt addr: %X\n", virt_base);
     size_t pages_used = 0;
     for (size_t i = 0; i < segment_count; i++) {
         Elf64_Phdr* segment = (Elf64_Phdr*) (segments + i*segment_size);
@@ -73,7 +74,6 @@ static bool elf_load(EFI_SYSTEM_TABLE* st, void* elf_base, ELF_Module *module) {
         #endif
     }
     // Find the RELA section and resolve the relocations
-    // TODO(flysand): put virtual addresses into relocations
     uint8_t* sections = elf + elf_header->e_shoff;
     size_t section_count = elf_header->e_shnum;
     printf("Resolving relocations\n");
@@ -90,20 +90,18 @@ static bool elf_load(EFI_SYSTEM_TABLE* st, void* elf_base, ELF_Module *module) {
             if (type == R_X86_64_RELATIVE) {
                 size_t reloc_offset = rela->r_offset - virt_base;
                 size_t reloc_addend = rela->r_addend - virt_base;
-                printf("  Reloc: at %X -> %X\n", rela->r_offset, rela->r_addend);
                 uint64_t patch_address = (uint64_t)(phys_base + reloc_offset);
-                uint64_t resolved_address = (uint64_t)(phys_base + reloc_addend);
+                uint64_t resolved_address = (uint64_t)(virt_base + reloc_addend);
+                printf("  Reloc: [%X] = %X\n", patch_address, resolved_address);
                 *(uint64_t*)patch_address = resolved_address;
             } else {
                 panic("Unable to handle unknown relocation type!\n\n");
             }
         }
     }
-    // TODO(flysand): entry point should be a virtual address
-    module->entry_addr = phys_base + (elf_header->e_entry - virt_base);
+    module->entry_addr = (void*) elf_header->e_entry;
     module->virt_base = virt_base;
     module->phys_base = (uint64_t) phys_base;
     module->size = image_size;
-    printf("Bytes at entry: %x\n", *(uint32_t*)module->entry_addr);
     return true;
 }
