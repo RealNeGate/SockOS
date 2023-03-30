@@ -232,9 +232,9 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         }
 
         EFI_FILE* kernel_file;
-        status = fs_root->Open(fs_root, &kernel_file, (int16_t*)L"kernel.so", EFI_FILE_MODE_READ, 0);
+        status = fs_root->Open(fs_root, &kernel_file, (int16_t*)L"kernel.elf", EFI_FILE_MODE_READ, 0);
         if (status != 0) {
-            panic("Failed to open kernel.so!\nStatus: %x\n", status);
+            panic("Failed to open kernel.elf!\nStatus: %x\n", status);
         }
 
         // Kernel buffer is right after the loader region
