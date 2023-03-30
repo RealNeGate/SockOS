@@ -28,7 +28,6 @@ start:
 	mov ss, ax
 	mov fs, ax
 	mov gs, ax
-
 	mov rdi, rcx
 	call [rcx]
 	hlt

@@ -46,7 +46,6 @@ static Result memmap__view(PageTable* address_space, uintptr_t phys_addr, size_t
     if (phys_addr & 0xFFFull) {
         return RESULT_ALLOCATION_UNALIGNED;
     }
-
     uintptr_t virt = boot_info->kernel_virtual_used;
     boot_info->kernel_virtual_used += page_count*PAGE_SIZE;
 
@@ -59,6 +58,8 @@ static Result memmap__view(PageTable* address_space, uintptr_t phys_addr, size_t
         size_t pte_index = (virt >> 12) & 0x1FF; // 4KiB
 
         // | 3 is because we make the pages both PRESENT and WRITABLE
+        kprintf("%x\n", phys_addr);
+        for(;;){}
         table_l1->entries[pte_index] = (phys_addr & 0xFFFFFFFFFFFFF000) | 3;
         __native_flush_tlb_single(virt);
 

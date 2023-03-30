@@ -13,7 +13,7 @@ optimize = False
 target = "x64"
 clang_arch = "x86_64"
 
-ldflags = "-pie --nostdlib -e kmain"
+ldflags = "-pie --nostdlib -T src/kernel/link"
 cflags = f"-g -I src -target {clang_arch}-pc-linux-gnu -fpic -Wall -Werror -Wno-unused-function -fno-stack-protector -nodefaultlibs -mno-red-zone -nostdlib -ffreestanding"
 
 efi_cflags = f"-I src -target {clang_arch}-pc-win32-coff -fno-stack-protector -nostdlib -fshort-wchar -mno-red-zone"
