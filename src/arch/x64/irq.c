@@ -17,14 +17,6 @@ enum {
     INTR_LAPIC_RESCHEDULE = 0xF3
 };
 
-typedef struct CPUState {
-    // uint8_t  fxsave[512 + 16];
-    uint64_t r15, r14, r13, r12, r11, r10, r9, r8;
-    uint64_t rdi, rsi, rbp, rbx, rdx, rcx, rax;
-    uint64_t interrupt_num, error;
-    uint64_t rip, cs, flags, rsp, ss;
-} CPUState;
-
 typedef struct __attribute__((packed)) IDTEntry {
     uint16_t offset_1;  // offset bits 0..15
     uint16_t selector;  // a code segment selector in GDT or LDT

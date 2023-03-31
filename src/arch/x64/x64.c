@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 typedef struct CPUState {
-    uint8_t  fxsave[512 + 16];
+    // uint8_t  fxsave[512 + 16];
     uint64_t r15, r14, r13, r12, r11, r10, r9, r8;
     uint64_t rdi, rsi, rbp, rbx, rdx, rcx, rax;
     uint64_t interrupt_num, error;
