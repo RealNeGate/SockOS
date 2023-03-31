@@ -16,8 +16,8 @@ typedef struct {
 // This is all the crap we throw into the loader
 typedef struct {
     void*      entrypoint;
-    void*      rdsp;
     PageTable* kernel_pml4; // identity mapped
+    void*      rdsp;
 
     size_t     mem_region_count;
     MemRegion* mem_regions;
@@ -33,3 +33,7 @@ typedef struct {
         // TODO(NeGate): pixel format :p
     } fb;
 } BootInfo;
+
+// loader.asm needs these to be here
+_Static_assert(offsetof(BootInfo, entrypoint) == 0, "the loader is sad");
+_Static_assert(offsetof(BootInfo, kernel_pml4) == 8, "the loader is sad 2");

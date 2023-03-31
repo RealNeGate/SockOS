@@ -256,6 +256,20 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
             panic(st, L"Failed to open fs root!");
         }
 
+        EFI_FILE* loader_file;
+        status = fs_root->Open(fs_root, &loader_file, (int16_t*)L"loader.bin", EFI_FILE_MODE_READ, 0);
+        if (status != 0) {
+            printhex(st, status);
+            panic(st, L"Failed to open loader.bin!");
+        }
+
+        size_t size = LOADER_BUFFER_SIZE;
+        char* loader_buffer = &kernel_loader_region[0];
+        loader_file->Read(loader_file, &size, loader_buffer);
+        if (size >= LOADER_BUFFER_SIZE) {
+            panic(st, L"Loader too large to fit into buffer!");
+        }
+
         EFI_FILE* kernel_file;
         status = fs_root->Open(fs_root, &kernel_file, (int16_t*)L"kernel.so", EFI_FILE_MODE_READ, 0);
         if (status != 0) {
@@ -264,7 +278,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         }
 
         // Kernel buffer is right after the loader region
-        size_t size = KERNEL_BUFFER_SIZE;
+        size = KERNEL_BUFFER_SIZE;
         char*  kernel_buffer = &kernel_loader_region[LOADER_BUFFER_SIZE];
         kernel_file->Read(kernel_file, &size, kernel_buffer);
         if (size >= KERNEL_BUFFER_SIZE) {
@@ -274,21 +288,6 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         // Verify ELF magic number
         if (memcmp(kernel_buffer, (uint8_t[]) { 0x7F, 'E', 'L', 'F' }, 4) != 0) {
             panic(st, L"kernel.o is not a valid ELF file!");
-        }
-
-        EFI_FILE* loader_file;
-        status = fs_root->Open(fs_root, &loader_file, (int16_t*)L"loader.bin", EFI_FILE_MODE_READ, 0);
-        if (status != 0) {
-            printhex(st, status);
-            panic(st, L"Failed to open loader.bin!");
-        }
-
-        size = LOADER_BUFFER_SIZE;
-        char* loader_buffer = &kernel_loader_region[0];
-        loader_file->Read(loader_file, &size, loader_buffer);
-
-        if (size >= LOADER_BUFFER_SIZE) {
-            panic(st, L"Loader too large to fit into buffer!");
         }
 
         println(st, L"Loaded the kernel and loader!");
@@ -490,14 +489,11 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
             break;
         }
     }
-    println(st, L"Entrypoint:");
-    printhex(st, (uint32_t)(uint64_t)boot_info.entrypoint);
+    if (rdsp == 0) {
+        panic(st, L"Failed to get RDSP!");
+    }
 
-    println(st, L"RDSP:");
-    printhex(st, (uint32_t)rdsp);
-
-    println(st, L"Boot Info Size:");
-    printhex(st, (uint32_t)sizeof(BootInfo));
+    boot_info.rdsp = (void *)rdsp;
 
     // Load latest memory map
     size_t map_key;
