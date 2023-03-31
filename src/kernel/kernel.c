@@ -212,7 +212,9 @@ void kmain(BootInfo* info) {
         }
     }
 
-    parse_acpi(boot_info->rdsp);
+    ACPI_RSDP_Desc_V2 *rsdp_header = (ACPI_RSDP_Desc_V2 *)boot_info->rsdp;
+    memmap__probe(boot_info->kernel_pml4, (uint64_t)rsdp_header);
+    //parse_acpi(boot_info->rsdp);
 
     // interrupts
     irq_startup();

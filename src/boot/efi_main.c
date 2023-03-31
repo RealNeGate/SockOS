@@ -323,7 +323,6 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         char* elf_file = &kernel_loader_region[LOADER_BUFFER_SIZE];
         Elf64_Ehdr* elf_header = (Elf64_Ehdr*)elf_file;
 
-
         // Identify how much memory we need to allocate while
         // validating the input
         size_t segment_file_pos = elf_header->e_phoff;
@@ -481,22 +480,22 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     }
 
     // Grab the ACPI table info
-    uint64_t rdsp = 0;
+    uint64_t rsdp = 0;
     EFI_CONFIGURATION_TABLE *tables = st->ConfigurationTables;
     EFI_GUID acpi_guid = EFI_ACPI_20_TABLE_GUID;
     for (int i = 0; i < st->NumberOfTableEntries; i++) {
         if (!memcmp(&acpi_guid, &tables[i].VendorGuid, sizeof(EFI_GUID))) {
-            rdsp = (uint64_t)tables[i].VendorTable;
+            rsdp = (uint64_t)tables[i].VendorTable;
             break;
         }
     }
-    if (rdsp == 0) {
+    if (rsdp == 0) {
         panic(st, L"Failed to get RDSP!");
     }
 
-    boot_info.rdsp = (void *)rdsp;
-    println(st, L"RDSP:");
-    printhex(st, rdsp);
+    boot_info.rsdp = (void *)rsdp;
+    println(st, L"RSDP:");
+    printhex(st, rsdp);
 
     // Load latest memory map
     size_t map_key;

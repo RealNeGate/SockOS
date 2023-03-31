@@ -1,4 +1,5 @@
 import os
+import sys
 import platform
 import shutil
 import subprocess
@@ -14,7 +15,7 @@ target = "x64"
 clang_arch = "x86_64"
 
 ldflags = "-pie --nostdlib -e kmain"
-cflags = f"-g -I src -target {clang_arch}-pc-linux-gnu -fpic -Wall -Werror -Wno-unused-function -fno-stack-protector -nodefaultlibs -mno-red-zone -nostdlib -ffreestanding"
+cflags = f"-g -I src -target {clang_arch}-pc-linux-gnu -fpic -Wall -Werror -Wno-unused-function -fno-stack-protector -nodefaultlibs -fno-finite-loops -mno-red-zone -nostdlib -ffreestanding"
 
 efi_cflags = f"-I src -target {clang_arch}-pc-win32-coff -fno-stack-protector -nostdlib -fshort-wchar -mno-red-zone"
 efi_ldflags = "-subsystem:efi_application -nodefaultlib -dll -entry:efi_main"
@@ -49,7 +50,9 @@ ninja_cc("src/kernel/kernel.c", f"clang src/kernel/kernel.c -c -o bin/kernel.o {
 ninja_cmd("bin/kernel.o bin/asm.o", f"{ld} bin/kernel.o bin/asm.o -o bin/kernel.so {ldflags}", "bin/kernel.so")
 ninja.close()
 
-subprocess.call(['ninja'])
+ret = subprocess.call(['ninja'])
+if ret != 0:
+    sys.exit(ret)
 
 # move into proper directory structure for boot
 os.makedirs("bin/os/EFI/BOOT", exist_ok = True)

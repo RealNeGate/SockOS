@@ -31,8 +31,9 @@ typedef struct __attribute__((packed)) {
     uint64_t other_headers[];
 } XSDT;
 
-void parse_acpi(void *rdsp) {
-    ACPI_RSDP_Desc_V2 *header = (ACPI_RSDP_Desc_V2 *)rdsp;
+void parse_acpi(void *rsdp) {
+    ACPI_RSDP_Desc_V2 *header = (ACPI_RSDP_Desc_V2 *)rsdp;
     kprintf("header: %x\n", (uint64_t)header);
-    kprintf("signature: %d\n", header->rsdp_head.signature[0]);
+    char val = header->rsdp_head.signature[0];
+    kprintf("signature: %d\n", val);
 }
