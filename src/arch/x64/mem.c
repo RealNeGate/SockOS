@@ -75,7 +75,7 @@ static void memdump(uint64_t *buffer, size_t size) {
     int width = boot_info->fb.width;
 
     for (int i = 0; i < size; i++) {
-        uint32_t color = 0xFF000000 | buffer[i];
+        uint32_t color = 0xFF000000 | ((buffer[i] > 0) ? buffer[i] : 0xFF050505);
 
         for (int y = 0; y < scale; y++) {
             for (int x = 0; x < scale; x++) {
