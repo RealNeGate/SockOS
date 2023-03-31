@@ -473,9 +473,6 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         if (identity_map_some_pages(st, &ctx, (uint64_t)&boot_info, 1)) {
             return 1;
         }
-
-        println(st, L"Generated page tables! Started at:");
-        printhex(st, (uintptr_t)program_memory);
         // Free ELF file... maybe?
     }
 
@@ -497,6 +494,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     println(st, L"RSDP:");
     printhex(st, rsdp);
 
+    println(st, L"Beginning EFI handoff...");
     // Load latest memory map
     size_t map_key;
     {
@@ -553,6 +551,8 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
             boot_info.fb.pixels[i + (j * boot_info.fb.stride)] = 0xFFFF7F1F;
         }
     }
+    boot_info.pt_used = ctx.used;
+    boot_info.pt_capacity = ctx.capacity;
 
     // Boot the loader
     ((LoaderFunction)kernel_loader_region)(&boot_info, kernel_stack + KERNEL_STACK_SIZE);

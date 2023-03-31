@@ -190,6 +190,7 @@ void foobar(void) {
 
 void kmain(BootInfo* info) {
     boot_info = info;
+    kprintf("Beginning kernel boot...\n");
 
     // Draw fancy background
     uint64_t gradient_x = (boot_info->fb.width + 255) / 256;
@@ -212,8 +213,8 @@ void kmain(BootInfo* info) {
         }
     }
 
-    ACPI_RSDP_Desc_V2 *rsdp_header = (ACPI_RSDP_Desc_V2 *)boot_info->rsdp;
-    memmap__probe(boot_info->kernel_pml4, (uint64_t)rsdp_header);
+    //ACPI_RSDP_Desc_V2 *rsdp_header = (ACPI_RSDP_Desc_V2 *)boot_info->rsdp;
+    memdump(boot_info->kernel_pml4->entries, boot_info->pt_capacity);
     //parse_acpi(boot_info->rsdp);
 
     // interrupts

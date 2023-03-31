@@ -17,6 +17,8 @@ typedef struct {
 typedef struct {
     void*      entrypoint;
     PageTable* kernel_pml4; // identity mapped
+    size_t     pt_used;
+    size_t     pt_capacity;
     void*      rsdp;
 
     size_t     mem_region_count;

@@ -69,6 +69,28 @@ static Result memmap__view(PageTable* address_space, uintptr_t phys_addr, size_t
     return RESULT_SUCCESS;
 }
 
+static void memdump(uint64_t *buffer, size_t size) {
+    int scale = 16;
+    int max_pixel = boot_info->fb.width * boot_info->fb.height;
+    int width = boot_info->fb.width;
+
+    for (int i = 0; i < size; i++) {
+        uint32_t color = 0xFF000000 | buffer[i];
+
+        for (int y = 0; y < scale; y++) {
+            for (int x = 0; x < scale; x++) {
+                
+                int sx = ((i * scale) % width) + x;
+                int sy = (((i * scale) / width) * scale) + y;
+                int idx = (sy * width) + sx;
+                if (idx >= max_pixel) return;
+
+                boot_info->fb.pixels[idx] = color;
+            }
+        }
+    }
+}
+
 static uint64_t memmap__probe(PageTable* address_space, uintptr_t virt) {
     size_t l[4] = {
         (virt >> 39) & 0x1FF,
@@ -76,6 +98,11 @@ static uint64_t memmap__probe(PageTable* address_space, uintptr_t virt) {
         (virt >> 21) & 0x1FF,
         (virt >> 12) & 0x1FF,
     };
+
+    kprintf("pagetable size: %x, capacity: %x\n", boot_info->pt_used, boot_info->pt_capacity);
+    for (int i = 0; i < 4; i++) {
+        kprintf("checking L%d: %x\n", i, l[i]);
+    }
 
     PageTable* curr = address_space;
     for (size_t i = 0; i < 3; i++) {
@@ -86,7 +113,7 @@ static uint64_t memmap__probe(PageTable* address_space, uintptr_t virt) {
             return 0;
         }
 
-        curr = (PageTable*) (curr->entries[l[i]] & 0xFFFFFFFFFFFFF000);
+        curr = (PageTable*)(curr->entries[l[i]] & 0xFFFFFFFFFFFFF000);
     }
 
     return curr->entries[l[3]];
