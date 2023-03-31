@@ -7,6 +7,8 @@ start:
 	; switch to new kernel stack
 	mov rsp, rdx
 
+	cli
+
 	; setup GDT descriptor
 	lea rax, [gdt64]
 	mov [gdt64.pointer + 2], rax
@@ -19,7 +21,6 @@ start:
 
 	lea rax, [.reload_cs]
     mov [far_jumper], rax
-
 	jmp far [far_jumper]
 .reload_cs:
 	mov ax, 0x10

@@ -265,6 +265,27 @@ static void mem_map_merge_contiguous_ranges(MemMap* mem_map) {
     mem_map->nregions = write_idx;
 }
 
+static bool mem_map_verify(MemMap* mem_map) {
+    for(int i = 0; i != mem_map->nregions; ++i) {
+        MemRegion* region = &mem_map->regions[i];
+        uint64_t region_start = region->base;
+        uint64_t region_end = region->base + region->pages * 0x1000;
+        // Check region for overlapping ranges
+        for(int j = 0; j != mem_map->nregions; ++j) {
+            if(i == j) {
+                continue;
+            }
+            MemRegion* cmp_region = &mem_map->regions[j];
+            uint64_t cmp_region_start = cmp_region->base;
+            uint64_t cmp_region_end = cmp_region->base + cmp_region->pages * 0x1000;
+            if(cmp_region_start <= region_start && region_start < cmp_region_end) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     EFI_STATUS status;
 
@@ -291,7 +312,6 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         fb.stride = graphics_output_protocol->Mode->Info->PixelsPerScanline;
         fb.pixels = (uint32_t*)graphics_output_protocol->Mode->FrameBufferBase;
     }
-    boot_info.fb = fb;
     term_set_framebuffer(fb);
     term_set_wrap(true);
     printf("Framebuffer at %X\n", (uint64_t) fb.pixels);
@@ -370,10 +390,6 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     printf("Loaded the kernel at: %X\n", kernel_module.phys_base);
     printf("Kernel entry: %X\n", kernel_module.entry_addr);
 
-    // Find kernel main
-    boot_info.entrypoint = (void*) kernel_module.entry_addr;
-    boot_info.kernel_virtual_used = kernel_module.virt_base;
-
     // Allocate space for our page tables before we exit UEFI
     size_t page_tables_count = 4ull * 1024 * 1024 / 4096;
     printf("Allocating %X bytes for page tables\n", page_tables_count * 4096);
@@ -393,7 +409,9 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     mem_map_mark(&mem_map, kernel_module.phys_base, PAGE_4K(kernel_module.size), MEM_REGION_KERNEL);
     mem_map_mark(&mem_map, (uint64_t) fb.pixels, fb_size_pages, MEM_REGION_FRAMEBUFFER);
     mem_map_merge_contiguous_ranges(&mem_map);
-    boot_info.mem_map = mem_map;
+    if(!mem_map_verify(&mem_map)) {
+        panic("MemMap contains overlapping ranges");
+    }
 
     status = st->BootServices->ExitBootServices(img_handle, map_key);
     if (status != 0) {
@@ -415,22 +433,33 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     for(int i = 0; i != mem_map.nregions; ++i) {
         MemRegion region = mem_map.regions[i];
         if(region.type == MEM_REGION_KERNEL) {
+            printf("Making a map %X -> %X (%X pages)\n", kernel_module.virt_base, region.base, region.pages);
             map_pages(&ctx, kernel_module.virt_base, region.base, region.pages);
         }
-        else if(region.type != MEM_REGION_USABLE) {
-            map_pages_id(&ctx, region.base, region.pages);
+        else {
+            if(region.type != MEM_REGION_USABLE) {
+                printf("Making a map %X -> %X (%X pages)\n", region.base, region.base, region.pages);
+                map_pages_id(&ctx, region.base, region.pages);
+            }
         }
     }
-    boot_info.kernel_pml4 = &page_tables[0];
 
     // memset(framebuffer, 0, framebuffer_stride * framebuffer_height * sizeof(uint32_t));
     for (size_t j = 0; j < 50; j++) {
         for (size_t i = 0; i < 50; i++) {
-            boot_info.fb.pixels[i + (j * boot_info.fb.stride)] = 0xFFFF7F1F;
+            fb.pixels[i + (j * fb.stride)] = 0xFFFF7F1F;
         }
     }
 
-    printf("Jumping to the kernel...\n");
-    ((LoaderFunction)kernel_loader_region)(&boot_info, kernel_stack + KERNEL_STACK_SIZE);
+    void* kstack = kernel_stack + KERNEL_STACK_SIZE;
+    printf("Kernel stack: %X\n", kstack);
+
+    printf("Jumping to the kernel: %X\n", kernel_module.entry_addr);
+    boot_info.entrypoint = (void*) kernel_module.entry_addr;
+    boot_info.kernel_virtual_used = kernel_module.virt_base;
+    boot_info.fb = fb;
+    boot_info.mem_map = mem_map;
+    boot_info.kernel_pml4 = &page_tables[0];
+    ((LoaderFunction)kernel_loader_region)(&boot_info, kstack);
     return 0;
 }
