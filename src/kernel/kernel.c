@@ -17,6 +17,7 @@ static void kprintf(char *fmt, ...);
 
 #include "arch/x64/mem.c"
 #include "arch/x64/irq.c"
+#include "arch/x64/acpi.c"
 
 static int itoa(uint64_t i, uint8_t base, uint8_t *buf) {
     static const char bchars[] = "0123456789ABCDEF";
@@ -213,5 +214,6 @@ void kmain(BootInfo* info) {
 
     // interrupts
     irq_startup();
+    //parse_acpi(boot_info->rdsp);
     for(;;) {}
 }

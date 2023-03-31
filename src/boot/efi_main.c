@@ -451,11 +451,11 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         }
 
         uint64_t fb_page_count = PAGE_4K(boot_info.fb.width * boot_info.fb.height * 4);
-        if (identity_map_some_pages(st, &ctx, (uint64_t) boot_info.fb.pixels, fb_page_count)) {
+        if (identity_map_some_pages(st, &ctx, (uint64_t)boot_info.fb.pixels, fb_page_count)) {
             return 1;
         }
 
-        if (identity_map_some_pages(st, &ctx, (uint64_t) page_tables, PAGE_4K(page_tables_necessary * 8))) {
+        if (identity_map_some_pages(st, &ctx, (uint64_t)page_tables, PAGE_4K(page_tables_necessary * 8))) {
             return 1;
         }
 
@@ -463,22 +463,41 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
             return 1;
         }
 
-        if (identity_map_some_pages(st, &ctx, (uint64_t) &mem_regions[0], PAGE_4K(MAX_MEM_REGIONS * sizeof(MemRegion)))) {
+        if (identity_map_some_pages(st, &ctx, (uint64_t)&mem_regions[0], PAGE_4K(MAX_MEM_REGIONS * sizeof(MemRegion)))) {
             return 1;
         }
 
-        if (identity_map_some_pages(st, &ctx, (uint64_t) &kernel_stack[0], PAGE_4K(KERNEL_STACK_SIZE))) {
+        if (identity_map_some_pages(st, &ctx, (uint64_t)&kernel_stack[0], PAGE_4K(KERNEL_STACK_SIZE))) {
             return 1;
         }
 
-        if (identity_map_some_pages(st, &ctx, (uint64_t) &boot_info, 1)) {
+        if (identity_map_some_pages(st, &ctx, (uint64_t)&boot_info, 1)) {
             return 1;
         }
 
-        printhex(st, (uintptr_t) program_memory);
-        println(st, L"Generated page tables!");
+        println(st, L"Generated page tables! Started at:");
+        printhex(st, (uintptr_t)program_memory);
         // Free ELF file... maybe?
     }
+
+    // Grab the ACPI table info
+    uint64_t rdsp = 0;
+    EFI_CONFIGURATION_TABLE *tables = st->ConfigurationTables;
+    EFI_GUID acpi_guid = EFI_ACPI_20_TABLE_GUID;
+    for (int i = 0; i < st->NumberOfTableEntries; i++) {
+        if (!memcmp(&acpi_guid, &tables[i].VendorGuid, sizeof(EFI_GUID))) {
+            rdsp = (uint64_t)tables[i].VendorTable;
+            break;
+        }
+    }
+    println(st, L"Entrypoint:");
+    printhex(st, (uint32_t)(uint64_t)boot_info.entrypoint);
+
+    println(st, L"RDSP:");
+    printhex(st, (uint32_t)rdsp);
+
+    println(st, L"Boot Info Size:");
+    printhex(st, (uint32_t)sizeof(BootInfo));
 
     // Load latest memory map
     size_t map_key;

@@ -16,6 +16,7 @@ typedef struct {
 // This is all the crap we throw into the loader
 typedef struct {
     void*      entrypoint;
+    void*      rdsp;
     PageTable* kernel_pml4; // identity mapped
 
     size_t     mem_region_count;

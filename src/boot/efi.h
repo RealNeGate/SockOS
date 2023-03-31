@@ -90,8 +90,7 @@ typedef struct {
     uint32_t Reserved;
 } EFI_TABLE_HEADER;
 
-typedef enum
-{
+typedef enum {
     TimerCancel,
     TimerPeriodic,
     TimerRelative
@@ -100,8 +99,7 @@ typedef enum
 typedef enum
 { EFI_NATIVE_INTERFACE } EFI_INTERFACE_TYPE;
 
-typedef enum
-{
+typedef enum {
     AllHandles,
     ByRegisterNotify,
     ByProtocol
@@ -122,16 +120,14 @@ typedef struct {
     uint32_t CapsuleImageSize;
 } EFI_CAPSULE_HEADER;
 
-typedef enum
-{
+typedef enum {
     AllocateAnyPages,
     AllocateMaxAddress,
     AllocateAddress,
     MaxAllocateType
 } EFI_ALLOCATE_TYPE;
 
-typedef enum
-{
+typedef enum {
     EfiReservedMemoryType,
     EfiLoaderCode,
     EfiLoaderData,
@@ -396,8 +392,18 @@ typedef struct {
     EFI_RUNTIME_SERVICES*            RuntimeServices;
     EFI_BOOT_SERVICES*               BootServices;
     size_t                           NumberOfTableEntries;
-    EFI_CONFIGURATION_TABLE*         ConfigurationTable;
+    EFI_CONFIGURATION_TABLE*         ConfigurationTables;
 } EFI_SYSTEM_TABLE;
+
+#define EFI_ACPI_TABLE_GUID                                                            \
+    {                                                                                  \
+        0xeb9d2d30, 0x2d88, 0x11d3, { 0x9a, 0x16, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d } \
+    }
+
+#define EFI_ACPI_20_TABLE_GUID                                                         \
+    {                                                                                  \
+        0x8868e871, 0xe4f1, 0x11d3, { 0xbc, 0x22, 0x00, 0x80, 0xc7, 0x3c, 0x88, 0x81 } \
+    }
 
 #define EFI_LOADED_IMAGE_PROTOCOL_GUID                                                 \
     {                                                                                  \

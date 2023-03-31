@@ -196,7 +196,7 @@ void irq_startup(void) {
 }
 
 void irq_int_handler(CPUState* state) {
-    kprintf("int %d: %x\n", state->interrupt_num, state->error);
+    //kprintf("int %d: %x\n", state->interrupt_num, state->error);
     #if 0
     kprintf("  rip=%x:%x rsp=%x:%x\n  ", state->cs, state->rip, state->ss, state->rsp, state->flags);
 
