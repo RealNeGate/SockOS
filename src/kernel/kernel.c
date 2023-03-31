@@ -212,8 +212,9 @@ void kmain(BootInfo* info) {
         }
     }
 
+    parse_acpi(boot_info->rdsp);
+
     // interrupts
     irq_startup();
-    parse_acpi(boot_info->rdsp);
     for(;;) {}
 }

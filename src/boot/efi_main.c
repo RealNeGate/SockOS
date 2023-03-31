@@ -311,6 +311,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     }
     println(st, L"Got the framebuffer!");
 
+    PageTableContext ctx = {};
     // Generate the kernel page tables
     //   they don't get used quite yet but it's
     //   far easier to just parse ELF in C than it is in assembly so we wanna get
@@ -440,9 +441,9 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         boot_info.kernel_pml4 = &page_tables[0];
 
         memset(&page_tables[0], 0, sizeof(PageTable));
-        PageTableContext ctx = {
-            .capacity = page_tables_necessary, .used = 1, .tables = page_tables
-        };
+        ctx.capacity = page_tables_necessary;
+        ctx.used = 1;
+        ctx.tables = page_tables;
 
         // Identity map all the stuff we wanna keep
         if (identity_map_some_pages(st, &ctx, (uint64_t) program_memory, PAGE_4K(program_memory_size))) {
@@ -494,6 +495,8 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     }
 
     boot_info.rdsp = (void *)rdsp;
+    println(st, L"RDSP:");
+    printhex(st, rdsp);
 
     // Load latest memory map
     size_t map_key;
@@ -526,6 +529,11 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
                 mem_regions[mem_region_count].base  = desc->PhysicalStart;
                 mem_regions[mem_region_count].pages = desc->NumberOfPages;
                 mem_region_count++;
+            } else if (desc->Type == EfiACPIMemoryNVS) {
+                // Map the ACPI things?
+                if (identity_map_some_pages(st, &ctx, desc->PhysicalStart, desc->NumberOfPages)) {
+                    panic(st, L"Failed to map ACPI");
+                }
             }
         }
         mem_regions[mem_region_count].base = 0;
