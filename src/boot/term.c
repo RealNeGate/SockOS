@@ -79,26 +79,37 @@ static void term_print_char_at(int char_x, int char_y, char ch) {
 }
 
 static void term_scroll_down1() {
-    int term_rows_to_overwrite = (term_cnt_y - 1) * TERM_FONT_CHAR_SZ_Y;
-    int next_row_stride = term_fb.stride * TERM_FONT_CHAR_SZ_Y;
-    // Shift lines from 0 to line_count-1
-    for(int y = 0; y < term_rows_to_overwrite; ++y) {
-        for(int x = 0; x < term_fb.width; ++x) {
-            int src_y = y;
-            int dst_y = y + next_row_stride;
-            term_fb.pixels[x + dst_y * term_fb.stride] = term_fb.pixels[x + src_y * term_fb.stride];
+    if(0) {
+        // TODO(bumbread): seems that there's a bug
+        int term_rows_to_overwrite = (term_cnt_y - 1) * TERM_FONT_CHAR_SZ_Y;
+        int next_row_stride = term_fb.stride * TERM_FONT_CHAR_SZ_Y;
+        // Shift lines from 0 to line_count-1
+        for(int y = 0; y < term_rows_to_overwrite; ++y) {
+            for(int x = 0; x < term_fb.width; ++x) {
+                int src_y = y + next_row_stride;
+                int dst_y = y;
+                term_fb.pixels[x + dst_y * term_fb.stride] = term_fb.pixels[x + src_y * term_fb.stride];
+            }
         }
+        // Zero-out the last line
+        for(int y = term_rows_to_overwrite; y < term_fb.height; ++y) {
+            for(int x = 0; x < term_fb.width; ++x) {
+                int src_y = y;
+                int dst_y = y + next_row_stride;
+                term_fb.pixels[x + dst_y * term_fb.stride] = term_color_bg;
+            }   
+        }
+        // Put cursor on the line above
+        term_cur_y -= 1;
     }
-    // Zero-out the last line
-    for(int y = term_rows_to_overwrite; y < term_fb.height; ++y) {
-        for(int x = 0; x < term_fb.width; ++x) {
-            int src_y = y;
-            int dst_y = y + next_row_stride;
-            term_fb.pixels[x + dst_y * term_fb.stride] = term_color_bg;
-        }   
+    else {
+        for(int y = 0; y < term_fb.height; ++y) {
+            for(int x = 0; x < term_fb.width; ++x) {
+                term_fb.pixels[x + y * term_fb.stride] = term_color_bg;
+            }
+        }
+        term_cur_y = 0;
     }
-    // Put cursor on the line above
-    term_cur_y -= 1;
 }
 
 static void term_printc(char c) {

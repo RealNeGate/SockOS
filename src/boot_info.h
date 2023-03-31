@@ -14,18 +14,38 @@ typedef struct {
     uint64_t entries[512];
 } PageTable;
 
-// This is used by the kernel but filled in by the EFI stub
+typedef enum {
+    MEM_REGION_USABLE,
+    MEM_REGION_RESERVED,
+    MEM_REGION_BOOT,
+    MEM_REGION_KERNEL,
+    MEM_REGION_FRAMEBUFFER,
+    MEM_REGION_UEFI_BOOT,
+    MEM_REGION_UEFI_RUNTIME,
+    MEM_REGION_ACPI,
+    MEM_REGION_ACPI_NVS,
+    MEM_REGION_IO,
+    MEM_REGION_IO_PORTS,
+} MemRegionType;
+
 typedef struct {
-    uintptr_t base, pages;
+    uint64_t type;
+    uint64_t base;
+    uint64_t pages;
 } MemRegion;
+
+typedef struct {
+    size_t nregions;
+    size_t cap;
+    MemRegion* regions;
+} MemMap;
 
 // This is all the crap we throw into the loader
 typedef struct {
     void*      entrypoint;
     PageTable* kernel_pml4; // identity mapped
 
-    size_t     mem_region_count;
-    MemRegion* mem_regions;
+    MemMap mem_map;
 
     // the kernel virtual memory is allocated
     // with a simple bump allocator

@@ -189,6 +189,7 @@ void foobar(void) {
 
 void kmain(BootInfo* info) {
     boot_info = info;
+    for(;;){}
 
     // Draw fancy background
     uint64_t gradient_x = (boot_info->fb.width + 255) / 256;
@@ -205,8 +206,8 @@ void kmain(BootInfo* info) {
     }
 
     size_t largest_mem_region = 0;
-    FOREACH_N(i, 1, info->mem_region_count) {
-        if (info->mem_regions[i].pages > info->mem_regions[largest_mem_region].pages) {
+    FOREACH_N(i, 1, info->mem_map.nregions) {
+        if (info->mem_map.regions[i].pages > info->mem_map.regions[largest_mem_region].pages) {
             largest_mem_region = i;
         }
     }

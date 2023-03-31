@@ -21,7 +21,6 @@ do {                          \
 #include "elf.h"
 #include "elf_loader.c"
 
-
 #define PAGE_4K(x) (((x) + 0xFFF) / 0x1000)
 #define PAGE_2M(x) (((x) + 0x1FFFFF) / 0x200000)
 #define PAGE_1G(x) (((x) + 0x3FFFFFFF) / 0x40000000)
@@ -29,11 +28,7 @@ do {                          \
 #define LOADER_BUFFER_SIZE (4 * 1024)
 #define KERNEL_BUFFER_SIZE (16 * 1024 * 1024)
 
-#define MEM_MAP_BUFFER_SIZE (16 * 1024)
-static alignas(4096) char mem_map_buffer[MEM_MAP_BUFFER_SIZE];
-
-#define MAX_MEM_REGIONS (1024)
-static alignas(4096) MemRegion mem_regions[MAX_MEM_REGIONS];
+#define MEM_MAP_LIMIT (1024)
 
 typedef void (*LoaderFunction)(BootInfo* info, uint8_t* stack);
 
@@ -152,6 +147,124 @@ static void map_pages_id(PageTableContext* ctx, uint64_t addr, uint64_t page_cou
     map_pages(ctx, addr, addr, page_count);
 }
 
+static void mem_map_mark(MemMap* mem_map, uint64_t base, uint64_t npages, uint64_t type) {
+    for(int i = 0; i != mem_map->nregions; ++i) {
+        MemRegion* region = &mem_map->regions[i];
+        size_t region_size = region->pages * 4096;
+        // Find the region that contains the base
+        if(!(region->base <= base && base < region->base + region_size)) {
+            continue;
+        }
+        // If the specified range falls perfectly onto the bounds of
+        // region, then simply change the type
+        if(region->base == base && region->pages == npages) {
+            region->type = type;
+            return;
+        }
+        uint64_t old_type = region->type;
+        // If the specified base isn't on the start of the region
+        // we split the memory region into two regions
+        if(base > region->base) {
+            if(mem_map->nregions + 1 > mem_map->cap) {
+                panic("Too many mem_map entries created!");
+            }
+            for(int j = mem_map->nregions; j-- > i+1;) {
+                MemRegion* src = &mem_map->regions[j];
+                MemRegion* dst = &mem_map->regions[j+1];
+                *dst = *src;
+            }
+            size_t offset_pages = (base - region->base) / 0x1000;
+            mem_map->nregions += 1;
+            MemRegion* new_region = &mem_map->regions[i+1];
+            new_region->base = base;
+            new_region->pages = region->pages - offset_pages;
+            new_region->type = type;
+            region->pages = offset_pages;
+            // Sync stuff
+            i += 1;
+            region = new_region;
+        }
+        // If the specified number of pages is smaller than size of the region
+        // in pages, we split the region into two again
+        if(npages < region->pages) {
+            if(mem_map->nregions + 1 > mem_map->cap) {
+                panic("Too many mem_map entries created!");
+            }
+            for(int j = mem_map->nregions; j-- > i+1;) {
+                MemRegion* src = &mem_map->regions[j];
+                MemRegion* dst = &mem_map->regions[j+1];
+                *dst = *src;
+            }
+            mem_map->nregions += 1;
+            MemRegion* new_region = &mem_map->regions[i+1];
+            new_region->base = region->base + npages * 0x1000;
+            new_region->pages = region->pages - npages;
+            new_region->type = old_type;
+            region->pages = npages;
+        }
+        return;
+
+    }
+    // If we can't find it within a region, we'll create a new mem_map entry
+    if(mem_map->nregions + 1 > mem_map->cap) {
+        panic("Too many mem_map entries created!");
+    }
+    // Find the index where to insert a new entry, has to be not in the map yet
+    // otherwise the conclusion is that the range spans the boundary between
+    // two mem_map regions, which isn't good
+    int i = 1;
+    for(; i < mem_map->nregions; ++i) {
+        MemRegion prev_region = mem_map->regions[i-1];
+        MemRegion next_region = mem_map->regions[i];
+        uint64_t prev_end = prev_region.base + prev_region.pages * 0x1000;
+        uint64_t next_start = next_region.base;
+        if(prev_end <= base && base < next_start) {
+            break;
+        }
+    }
+    if(i == mem_map->nregions) {
+        MemRegion last_region = mem_map->regions[mem_map->nregions-1];
+        uint64_t last_region_end = last_region.base + last_region.pages * 0x1000;
+        if(base < last_region_end) {
+            panic("Specified region spans region boundary or there's no space in mem_map\n");
+        }
+    }
+    // Move the entries from i to the last
+    for(int j = mem_map->nregions; j-- > i;) {
+        MemRegion* src = &mem_map->regions[j];
+        MemRegion* dst = &mem_map->regions[j+1];
+        *dst = *src;
+    }
+    // Insert the new entry
+    mem_map->regions[i].base = base;
+    mem_map->regions[i].pages = npages;
+    mem_map->regions[i].type = type;
+    mem_map->nregions += 1;
+}
+
+static void mem_map_merge_contiguous_ranges(MemMap* mem_map) {
+    MemRegion* cmp_region = &mem_map->regions[0];
+    int write_idx = 1;
+    for(int i = 1; i < mem_map->nregions; ++i) {
+        MemRegion* region = &mem_map->regions[i];
+        // If this region and the compared region are contiguous and have the same
+        // type, merge them
+        if(region->type == cmp_region->type) {
+            if(region->base == cmp_region->base + cmp_region->pages * 0x1000) {
+                cmp_region->pages += region->pages;
+                continue;
+            }
+        }
+        // Otherwise commit the new cmp_region to mem_map at the index
+        // and restart comparisons
+        mem_map->regions[write_idx] = *region;
+        cmp_region = &mem_map->regions[write_idx];
+        write_idx += 1;
+        continue;
+    }
+    mem_map->nregions = write_idx;
+}
+
 EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     EFI_STATUS status;
 
@@ -188,7 +301,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     {
         kernel_loader_region = efi_alloc(st, KERNEL_BUFFER_SIZE + LOADER_BUFFER_SIZE);
         if (kernel_loader_region == NULL) {
-            panic("Failed to allocate space for loader + kernel!\nStatus: %x\n", status);
+            panic("Failed to allocate space for loader + kernel!\nStatus: %X\n", status);
         }
 
         EFI_GUID loaded_img_proto_guid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
@@ -196,7 +309,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         status = st->BootServices->OpenProtocol(img_handle, &loaded_img_proto_guid,
             (void**)&loaded_img_proto, img_handle, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL);
         if (status != 0) {
-            panic("Failed to load img protocol!\nStatus: %x\n", status);
+            panic("Failed to load img protocol!\nStatus: %X\n", status);
         }
 
         EFI_GUID simple_fs_proto_guid = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
@@ -205,19 +318,19 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         status = st->BootServices->OpenProtocol(dev_handle, &simple_fs_proto_guid,
             (void**)&simple_fs_proto, img_handle, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL);
         if (status != 0) {
-            panic("Failed to load fs protocol!\nStatus: %x\n", status);
+            panic("Failed to load fs protocol!\nStatus: %X\n", status);
         }
 
         EFI_FILE* fs_root;
         status = simple_fs_proto->OpenVolume(simple_fs_proto, &fs_root);
         if (status != 0) {
-            panic("Failed to open fs root!\nStatus: %x\n", status);
+            panic("Failed to open fs root!\nStatus: %X\n", status);
         }
 
         EFI_FILE* kernel_file;
         status = fs_root->Open(fs_root, &kernel_file, (int16_t*)L"kernel.elf", EFI_FILE_MODE_READ, 0);
         if (status != 0) {
-            panic("Failed to open kernel.elf!\nStatus: %x\n", status);
+            panic("Failed to open kernel.elf!\nStatus: %X\n", status);
         }
 
         // Kernel buffer is right after the loader region
@@ -236,7 +349,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         EFI_FILE* loader_file;
         status = fs_root->Open(fs_root, &loader_file, (int16_t*)L"loader.bin", EFI_FILE_MODE_READ, 0);
         if (status != 0) {
-            panic("Failed to open loader.bin!\nStatus: %x\n", status);
+            panic("Failed to open loader.bin!\nStatus: %X\n", status);
         }
 
         size = LOADER_BUFFER_SIZE;
@@ -261,95 +374,54 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     boot_info.entrypoint = (void*) kernel_module.entry_addr;
     boot_info.kernel_virtual_used = kernel_module.virt_base;
 
-    // Generate the kernel page tables
-    //   they don't get used quite yet but it's
-    //   far easier to just parse ELF in C than it is in assembly so we wanna get
-    //   it out of the way
-    //
-    //   we don't wanna keep everything from the UEFI memory map, only the relevant
-    //   details so the memory map, framebuffer, the page tables themselves
-    {
-        // setup root PML4 thingy
-
-        // Allocate said space plus enough space for page tables
-        // Framebuffer is also kept so we wanna make some pages for it
-        size_t page_tables_necessary =
-            estimate_page_table_count(kernel_module.size) +
-            estimate_page_table_count(boot_info.fb.width * boot_info.fb.height * 4) +
-            estimate_page_table_count(LOADER_BUFFER_SIZE) +
-            estimate_page_table_count(MAX_MEM_REGIONS * sizeof(MemRegion)) +
-            estimate_page_table_count(sizeof(BootInfo)) +
-            estimate_page_table_count(KERNEL_STACK_SIZE) + 1;
-
-        page_tables_necessary += estimate_page_table_count(page_tables_necessary);
-
-        // 512 entries per page
-        PageTable* page_tables = efi_alloc_pages(st, page_tables_necessary);
-        if (page_tables == NULL) {
-            panic("Failed to allocate space for kernel!\nStatus: %x\n", status);
-        }
-
-
-        memset(&page_tables[0], 0, sizeof(PageTable));
-        PageTableContext ctx = {
-            .capacity = page_tables_necessary, .used = 1, .tables = page_tables
-        };
-
-        // Identity map all the stuff we wanna keep
-        map_pages(&ctx, kernel_module.virt_base, kernel_module.phys_base, PAGE_4K(kernel_module.size));
-        uint64_t fb_page_count = PAGE_4K(boot_info.fb.width * boot_info.fb.height * 4);
-        map_pages_id(&ctx, (uint64_t) boot_info.fb.pixels, fb_page_count);
-        map_pages_id(&ctx, (uint64_t) page_tables, PAGE_4K(page_tables_necessary * 8));
-        map_pages_id(&ctx, (uint64_t) &kernel_loader_region[0], PAGE_4K(LOADER_BUFFER_SIZE));
-        map_pages_id(&ctx, (uint64_t) &mem_regions[0], PAGE_4K(MAX_MEM_REGIONS * sizeof(MemRegion)));
-        map_pages_id(&ctx, (uint64_t) &kernel_stack[0], PAGE_4K(KERNEL_STACK_SIZE));
-        map_pages_id(&ctx, (uint64_t) &boot_info, 1);
-        boot_info.kernel_pml4 = &page_tables[0];
-        // Free ELF file... maybe?
+    // Allocate space for our page tables before we exit UEFI
+    size_t page_tables_count = 4ull * 1024 * 1024 / 4096;
+    printf("Allocating %X bytes for page tables\n", page_tables_count * 4096);
+    PageTable* page_tables = efi_alloc(st, page_tables_count);
+    if (page_tables == NULL) {
+        panic("Failed to allocate space for page tables!\n", status);
     }
+    memset(&page_tables[0], 0, sizeof(PageTable));
+    PageTableContext ctx = {
+        .capacity = page_tables_count, .used = 1, .tables = page_tables
+    };
 
     // Load latest memory map
+    size_t fb_size_pages = PAGE_4K(fb.width * fb.height * sizeof(uint32_t));
     size_t map_key;
-    {
-        size_t desc_size;
-        uint32_t desc_version;
-        size_t size = MEM_MAP_BUFFER_SIZE;
-
-        // you can't make any more UEFI calls after this GetMemoryMap because it'll
-        // *apparently* cause some issues and change the map_key which is used to
-        // actually exit the UEFI crap
-        status = st->BootServices->GetMemoryMap(&size, (EFI_MEMORY_DESCRIPTOR*)mem_map_buffer, &map_key, &desc_size, &desc_version);
-
-        if (status != 0) {
-            panic("Failed to get memory map!\nStatus: %x", status);
-        }
-
-        size_t desc_count = size / desc_size;
-        size_t mem_region_count = 0;
-        for (int i = 0; i < desc_count && mem_region_count < MAX_MEM_REGIONS; i++) {
-            EFI_MEMORY_DESCRIPTOR* desc = (EFI_MEMORY_DESCRIPTOR*)(mem_map_buffer + (i * desc_size));
-
-            if (desc->Type == EfiConventionalMemory && desc->PhysicalStart >= 0x300000) {
-                /*println(st, L"Range:");
-                printhex(st, desc->PhysicalStart);
-                printhex(st, desc->NumberOfPages * 4096);
-                println(st, L"");*/
-
-                mem_regions[mem_region_count].base  = desc->PhysicalStart;
-                mem_regions[mem_region_count].pages = desc->NumberOfPages;
-                mem_region_count++;
-            }
-        }
-        mem_regions[mem_region_count].base = 0;
-
-        boot_info.mem_regions = mem_regions;
-        boot_info.mem_region_count = mem_region_count;
-    }
+    MemMap mem_map = efi_get_mem_map(st, &map_key, MEM_MAP_LIMIT);
+    mem_map_mark(&mem_map, kernel_module.phys_base, PAGE_4K(kernel_module.size), MEM_REGION_KERNEL);
+    mem_map_mark(&mem_map, (uint64_t) fb.pixels, fb_size_pages, MEM_REGION_FRAMEBUFFER);
+    mem_map_merge_contiguous_ranges(&mem_map);
+    boot_info.mem_map = mem_map;
 
     status = st->BootServices->ExitBootServices(img_handle, map_key);
     if (status != 0) {
-        panic("Failed to exit EFI\nStatus: %x", status);
+        panic("Failed to exit EFI\nStatus: %X", status);
     }
+
+    // Print memory map
+    {
+        printf("Memory map (%d entries):\n", mem_map.nregions);
+        for(int i = 0; i != mem_map.nregions; ++i) {
+            MemRegion region = mem_map.regions[i];
+            char* name = mem_region_name(region.type);
+            printf("%d: %X .. %X [%s]\n", i, region.base, region.base + region.pages*4096, name);
+        }
+    }
+
+    // Generate the page tables
+    // Map everything in the memory map that's ever been allocated
+    for(int i = 0; i != mem_map.nregions; ++i) {
+        MemRegion region = mem_map.regions[i];
+        if(region.type == MEM_REGION_KERNEL) {
+            map_pages(&ctx, kernel_module.virt_base, region.base, region.pages);
+        }
+        else if(region.type != MEM_REGION_USABLE) {
+            map_pages_id(&ctx, region.base, region.pages);
+        }
+    }
+    boot_info.kernel_pml4 = &page_tables[0];
 
     // memset(framebuffer, 0, framebuffer_stride * framebuffer_height * sizeof(uint32_t));
     for (size_t j = 0; j < 50; j++) {

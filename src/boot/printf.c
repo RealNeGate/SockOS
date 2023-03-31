@@ -12,7 +12,7 @@ static inline void writes(char* str) {
 
 static inline void writex32(uint32_t num) {
     const char hex[] = "0123456789abcdef";
-    char buf[16];
+    char buf[16] = {0};
     int idx = sizeof buf - 1;
     for(int i = 0; i != 8; ++i) {
         uint8_t digit = num % 16;
@@ -27,7 +27,7 @@ static inline void writex32(uint32_t num) {
 
 static inline void writex64(uint64_t num) {
     const char hex[] = "0123456789abcdef";
-    char buf[32];
+    char buf[32] = {0};
     int idx = sizeof buf - 1;
     for(int i = 0; i != 16; ++i) {
         uint8_t digit = num % 16;
@@ -104,7 +104,7 @@ static inline void vprintf(char* fmt, va_list args) {
                     char ch = va_arg(args, int);
                     writec(ch);
                 } break;
-                case 'S': {
+                case 's': {
                     char* str = va_arg(args, char*);
                     writes(str);
                 } break;
