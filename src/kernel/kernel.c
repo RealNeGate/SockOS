@@ -160,6 +160,20 @@ static void kprintf(char *fmt, ...) {
                 put_buffer(tbuf, sz - 1);
                 min_len = 0;
             } break;
+            case 'p': {
+                uint64_t i = __builtin_va_arg(args, uint64_t);
+                uint8_t tbuf[64];
+                int sz = itoa(i, 16, tbuf);
+                int pad_sz = 16 - (sz - 1);
+                put_char('0');
+                put_char('x');
+                while (pad_sz > 0) {
+                    put_char('0');
+                    pad_sz--;
+                }
+                put_buffer(tbuf, sz - 1);
+                min_len = 0;
+            } break;
             case 'b': {
                 uint64_t i = __builtin_va_arg(args, uint64_t);
 
@@ -204,10 +218,25 @@ void kmain(BootInfo* info) {
         }
     }
 
-    size_t largest_mem_region = 0;
-    FOREACH_N(i, 1, info->mem_map.nregions) {
-        if (info->mem_map.regions[i].pages > info->mem_map.regions[largest_mem_region].pages) {
-            largest_mem_region = i;
+    MemMap mem_map = info->mem_map;
+    FOREACH_N(i, 0, mem_map.nregions) {
+        MemRegion region = mem_map.regions[i];
+        if(region.type == MEM_REGION_USABLE) {
+            continue;
+        }
+        uint64_t vaddr = region.base;
+        PageInfo page = get_page_info(info->kernel_pml4, vaddr);
+        if(!page.present) {
+            kprintf("%p -> <not mapped>\n", vaddr);
+        }
+        else {
+            char flags[8] = {'r', '-', 'x', 's', '-', '-', 0};
+            if(page.write)    flags[1] = 'w';
+            if(page.nex)      flags[2] = '-';
+            if(page.user)     flags[3] = 'u';
+            if(page.accessed) flags[4] = 'a';
+            if(page.dirty)    flags[5] = 'd';
+            kprintf("%p -> %p [%s]\n", vaddr, page.paddr, flags);
         }
     }
 

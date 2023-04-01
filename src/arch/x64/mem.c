@@ -15,7 +15,7 @@ struct {
 static PageTable* get_or_alloc_pt(PageTable* parent, size_t index, int depth) {
     if (parent->entries[index] != 0) {
         for (int i = 0; i < depth; i++) kprintf("  ");
-        kprintf("Get old page %x (%x)\n", index, (int) (uintptr_t) parent);
+        // kprintf("Get old page %x (%x)\n", index, (int) (uintptr_t) parent);
 
         return (PageTable*)(parent->entries[index] & 0xFFFFFFFFFFFFF000);
     }
@@ -34,6 +34,38 @@ static PageTable* get_or_alloc_pt(PageTable* parent, size_t index, int depth) {
     kassert(((uintptr_t) new_pt & 0xFFF) == 0 && "page tables must be 4KiB aligned");
     parent->entries[index] = ((uint64_t) new_pt) | 3;
     return new_pt;
+}
+
+typedef struct {
+    uint64_t paddr;
+    uint64_t vaddr;
+    bool present;
+    bool write;
+    bool nex;
+    bool user;
+    bool accessed;
+    bool dirty;
+} PageInfo;
+
+PageInfo get_page_info(PageTable* pml4_table, uint64_t vaddr) {
+    PageInfo result;
+    PageTable* pml3_table = get_or_alloc_pt(pml4_table, (vaddr >> 39) & 0x1FF, 0); // 512GiB
+    PageTable* pml2_table = get_or_alloc_pt(pml3_table, (vaddr >> 30) & 0x1FF, 1); // 1GiB
+    PageTable* pml1_table = get_or_alloc_pt(pml2_table, (vaddr >> 21) & 0x1FF, 2); // 2MiB
+    size_t pte_index = (vaddr >> 12) & 0x1FF; // 4KiB
+    uint64_t pte_entry = pml1_table->entries[pte_index];
+    result.present = pte_entry & 1;
+    result.vaddr = vaddr;
+    if(!result.present) {
+        return result;
+    }
+    result.paddr = pte_entry & (uint64_t)0x8ffffffffffff000ull;
+    result.write    = (pte_entry >> 1) & 1;
+    result.user     = (pte_entry >> 2) & 1;
+    result.accessed = (pte_entry >> 5) & 1;
+    result.dirty    = (pte_entry >> 6) & 1;
+    result.nex      = (pte_entry >> 63) & 1;
+    return result;
 }
 
 static inline void __native_flush_tlb_single(unsigned long addr) {
