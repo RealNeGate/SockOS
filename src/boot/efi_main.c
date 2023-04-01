@@ -393,7 +393,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     // Allocate space for our page tables before we exit UEFI
     size_t page_tables_count = 4ull * 1024 * 1024 / 4096;
     printf("Allocating %X bytes for page tables\n", page_tables_count * 4096);
-    PageTable* page_tables = efi_alloc(st, page_tables_count);
+    PageTable* page_tables = efi_alloc_pages(st, page_tables_count);
     if (page_tables == NULL) {
         panic("Failed to allocate space for page tables!\n", status);
     }

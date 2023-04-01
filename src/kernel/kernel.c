@@ -188,7 +188,6 @@ void foobar(void) {
 }
 
 void kmain(BootInfo* info) {
-    for(;;){}
     boot_info = info;
 
     // Draw fancy background

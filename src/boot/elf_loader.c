@@ -60,6 +60,8 @@ static bool elf_load(EFI_SYSTEM_TABLE* st, void* elf_base, ELF_Module *module) {
         uint8_t* dst_data = phys_base + base_offset;
         uint8_t* src_data = elf + segment->p_offset;
         memcpy(dst_data, src_data, segment->p_filesz);
+        printf("Memory dump at %X:\n", dst_data);
+        memdump(dst_data, 16);
         // TODO(NeGate): set new memory protection rules
         #if 0
         DWORD new_protect = 0;
@@ -98,7 +100,7 @@ static bool elf_load(EFI_SYSTEM_TABLE* st, void* elf_base, ELF_Module *module) {
                 panic("Unable to handle unknown relocation type!\n\n");
             }
         }
-    }
+    }  
     module->entry_addr = (void*) elf_header->e_entry;
     module->virt_base = virt_base;
     module->phys_base = (uint64_t) phys_base;
