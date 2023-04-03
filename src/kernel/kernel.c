@@ -224,12 +224,12 @@ void kmain(BootInfo* info) {
         if(region.type == MEM_REGION_USABLE) {
             continue;
         }
+
         uint64_t vaddr = region.base;
         PageInfo page = get_page_info(info->kernel_pml4, vaddr);
         if(!page.present) {
             kprintf("%p -> <not mapped>\n", vaddr);
-        }
-        else {
+        } else {
             char flags[8] = {'r', '-', 'x', 's', '-', '-', 0};
             if(page.write)    flags[1] = 'w';
             if(page.nex)      flags[2] = '-';
@@ -239,6 +239,16 @@ void kmain(BootInfo* info) {
             kprintf("%p -> %p [%s]\n", vaddr, page.paddr, flags);
         }
     }
+
+    init_physical_page_alloc(&mem_map);
+
+    /*MemRegion* mine = &info->mem_regions[largest_mem_region];
+    kprintf("%x - %x", mine->base, mine->base + (mine->pages * 4096) - 1);
+    kprintf("%x", sizeof(BitmapAllocPage));
+
+    //ACPI_RSDP_Desc_V2 *rsdp_header = (ACPI_RSDP_Desc_V2 *)boot_info->rsdp;
+    memdump(boot_info->kernel_pml4->entries, boot_info->pt_capacity);
+    //parse_acpi(boot_info->rsdp);*/
 
     // interrupts
     irq_startup();

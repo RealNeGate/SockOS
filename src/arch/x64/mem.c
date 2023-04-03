@@ -6,11 +6,49 @@ typedef enum Result {
     RESULT_ALLOCATION_UNALIGNED,
 } Result;
 
+enum {
+    BITMAP_ALLOC_WORD_CAP = (4096 - sizeof(size_t[2])) / sizeof(uint64_t),
+    BITMAP_ALLOC_SPACE_COVERED = BITMAP_ALLOC_WORD_CAP * 64 * 4096,
+};
+
+// this is what we use to allocate physical memory pages, it's a page big
+typedef struct BitmapAllocPage BitmapAllocPage;
+struct BitmapAllocPage {
+    BitmapAllocPage* next;
+    // we just track the popcount since once we're at 4 pages left
+    uint32_t pages_used, cap;
+    uint64_t used[BITMAP_ALLOC_WORD_CAP];
+};
+_Static_assert(sizeof(BitmapAllocPage) == 4096, "BitmapAllocPage must be a page big");
+
 struct {
     size_t capacity;
     size_t used;
     _Alignas(4096) PageTable tables[512];
 } muh_pages = { .capacity = 512 };
+
+static _Alignas(4096) BitmapAllocPage root_alloc_page;
+
+static void init_physical_page_alloc(MemMap* restrict mem_map) {
+    #if 0
+    FOREACH_N(i, 0, mem_map->nregions) {
+        MemRegion* restrict region = &mem_map->regions[i];
+
+        size_t used = sizeof(BitmapAllocPage);
+        BitmapAllocPage* page = (BitmapAllocPage*) ;
+
+        while (used < BITMAP_ALLOC_SPACE_COVERED) {
+            used += BITMAP_ALLOC_SPACE_COVERED;
+        }
+    }
+    #endif
+}
+
+static uintptr_t alloc_physical_page(void) {
+    // find page with some
+    // BitmapAllocPage* p = &root_alloc_page;
+    return 0;
+}
 
 static PageTable* get_or_alloc_pt(PageTable* parent, size_t index, int depth) {
     if (parent->entries[index] != 0) {
@@ -56,7 +94,7 @@ PageInfo get_page_info(PageTable* pml4_table, uint64_t vaddr) {
     uint64_t pte_entry = pml1_table->entries[pte_index];
     result.present = pte_entry & 1;
     result.vaddr = vaddr;
-    if(!result.present) {
+    if (!result.present) {
         return result;
     }
     result.paddr = pte_entry & (uint64_t)0x8ffffffffffff000ull;
@@ -102,6 +140,28 @@ static Result memmap__view(PageTable* address_space, uintptr_t phys_addr, size_t
     return RESULT_SUCCESS;
 }
 
+static void memdump(uint64_t *buffer, size_t size) {
+    int scale = 16;
+    int max_pixel = boot_info->fb.width * boot_info->fb.height;
+    int width = boot_info->fb.width;
+
+    for (int i = 0; i < size; i++) {
+        uint32_t color = 0xFF000000 | ((buffer[i] > 0) ? buffer[i] : 0xFF050505);
+
+        for (int y = 0; y < scale; y++) {
+            for (int x = 0; x < scale; x++) {
+
+                int sx = ((i * scale) % width) + x;
+                int sy = (((i * scale) / width) * scale) + y;
+                int idx = (sy * width) + sx;
+                if (idx >= max_pixel) return;
+
+                boot_info->fb.pixels[idx] = color;
+            }
+        }
+    }
+}
+
 static uint64_t memmap__probe(PageTable* address_space, uintptr_t virt) {
     size_t l[4] = {
         (virt >> 39) & 0x1FF,
@@ -124,4 +184,3 @@ static uint64_t memmap__probe(PageTable* address_space, uintptr_t virt) {
 
     return curr->entries[l[3]];
 }
-
