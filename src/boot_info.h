@@ -42,7 +42,6 @@ typedef struct {
 
 // This is all the crap we throw into the loader
 typedef struct {
-    void*      entrypoint;
     PageTable* kernel_pml4; // identity mapped
 	size_t     pt_used;
     size_t     pt_capacity;
@@ -57,5 +56,4 @@ typedef struct {
 } BootInfo;
 
 // loader.asm needs these to be here
-_Static_assert(offsetof(BootInfo, entrypoint) == 0, "the loader is sad");
-_Static_assert(offsetof(BootInfo, kernel_pml4) == 8, "the loader is sad 2");
+_Static_assert(offsetof(BootInfo, kernel_pml4) == 0, "the loader is sad 2");

@@ -25,9 +25,7 @@ do {                          \
 #define PAGE_2M(x) (((x) + 0x1FFFFF) / 0x200000)
 #define PAGE_1G(x) (((x) + 0x3FFFFFFF) / 0x40000000)
 
-#define LOADER_BUFFER_SIZE (4 * 1024)
 #define KERNEL_BUFFER_SIZE (16 * 1024 * 1024)
-
 #define MEM_MAP_LIMIT (1024)
 
 typedef void (*LoaderFunction)(BootInfo* info, uint8_t* stack);
@@ -316,12 +314,12 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     term_set_wrap(true);
     printf("Framebuffer at %X\n", (uint64_t) fb.pixels);
 
-    // Load the kernel and loader from disk
-    char* kernel_loader_region;
+    // Load the kernel from disk
+    char* kernel_buffer;
     {
-        kernel_loader_region = efi_alloc(st, KERNEL_BUFFER_SIZE + LOADER_BUFFER_SIZE);
-        if (kernel_loader_region == NULL) {
-            panic("Failed to allocate space for loader + kernel!\nStatus: %X\n", status);
+        kernel_buffer = efi_alloc(st, KERNEL_BUFFER_SIZE);
+        if (kernel_buffer == NULL) {
+            panic("Failed to allocate space for kernel!\nStatus: %X\n", status);
         }
 
         EFI_GUID loaded_img_proto_guid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
@@ -355,7 +353,6 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 
         // Kernel buffer is right after the loader region
         size_t size = KERNEL_BUFFER_SIZE;
-        char*  kernel_buffer = &kernel_loader_region[LOADER_BUFFER_SIZE];
         kernel_file->Read(kernel_file, &size, kernel_buffer);
         if (size >= KERNEL_BUFFER_SIZE) {
             panic("Kernel too large to fit into buffer!\n");
@@ -363,28 +360,14 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 
         // Verify ELF magic number
         if (memcmp(kernel_buffer, (uint8_t[]) { 0x7F, 'E', 'L', 'F' }, 4) != 0) {
-            panic("kernel.o is not a valid ELF file!\n");
+            panic("kernel.elf is not a valid ELF file!\n");
         }
 
-        EFI_FILE* loader_file;
-        status = fs_root->Open(fs_root, &loader_file, (int16_t*)L"loader.bin", EFI_FILE_MODE_READ, 0);
-        if (status != 0) {
-            panic("Failed to open loader.bin!\nStatus: %X\n", status);
-        }
-
-        size = LOADER_BUFFER_SIZE;
-        char* loader_buffer = &kernel_loader_region[0];
-        loader_file->Read(loader_file, &size, loader_buffer);
-
-        if (size >= LOADER_BUFFER_SIZE) {
-            panic("Loader too large to fit into buffer!\n");
-        }
-
-        printf("Loaded the kernel and loader at: %X\n", kernel_loader_region);
+        printf("Loaded the kernel at: %X\n", kernel_buffer);
     }
 
     ELF_Module kernel_module;
-    if(!elf_load(st, kernel_loader_region + LOADER_BUFFER_SIZE, &kernel_module)) {
+    if(!elf_load(st, kernel_buffer, &kernel_module)) {
         panic("Failed to load the kernel module");
     }
     printf("Loaded the kernel at: %X\n", kernel_module.phys_base);
@@ -417,10 +400,8 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     }
 
     boot_info.rsdp = (void *)rsdp;
-    efi_println(st, L"RSDP:");
-    efi_print_hex(st, rsdp);
-
-    efi_println(st, L"Beginning EFI handoff...");
+    printf("RSDP: %X", rsdp);
+    printf("Beginning EFI handoff...\n");
 
     // Load latest memory map
     size_t fb_size_pages = PAGE_4K(fb.width * fb.height * sizeof(uint32_t));
@@ -475,11 +456,14 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     printf("Kernel stack: %X\n", kstack);
 
     printf("Jumping to the kernel: %X\n", kernel_module.entry_addr);
-    boot_info.entrypoint = (void*) kernel_module.entry_addr;
     boot_info.kernel_virtual_used = kernel_module.virt_base;
     boot_info.fb = fb;
     boot_info.mem_map = mem_map;
     boot_info.kernel_pml4 = &page_tables[0];
-    ((LoaderFunction)kernel_loader_region)(&boot_info, kstack);
+
+    // transition to kernel page table
+    asm volatile("movq %0, %%cr3" ::"r" (boot_info.kernel_pml4) : "memory");
+
+    ((LoaderFunction) kernel_module.entry_addr)(&boot_info, kstack);
     return 0;
 }
