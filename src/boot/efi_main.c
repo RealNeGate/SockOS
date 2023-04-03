@@ -457,10 +457,8 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
             map_pages(&ctx, kernel_module.virt_base, region.base, region.pages);
         }
         else {
-            if(region.type != MEM_REGION_USABLE) {
-                printf("Making a map %X -> %X (%X pages)\n", region.base, region.base, region.pages);
-                map_pages_id(&ctx, region.base, region.pages);
-            }
+            printf("Making a map %X -> %X (%X pages)\n", region.base, region.base, region.pages);
+            map_pages_id(&ctx, region.base, region.pages);
         }
     }
     boot_info.pt_used = ctx.used;

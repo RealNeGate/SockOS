@@ -10,7 +10,7 @@ static void put_string(const char* str);
 static void put_number(uint64_t x, uint8_t base);
 static void kprintf(char *fmt, ...);
 
-#define kassert(cond) ((cond) ? 0 : (kprintf("%s:%d: assertion failed!\n  %s\n", __FILE__, __LINE__, #cond), __builtin_trap()))
+#define kassert(cond, ...) ((cond) ? 0 : (kprintf("%s:%d: assertion failed!\n  %s\n  ", __FILE__, __LINE__, #cond), kprintf(__VA_ARGS__), __builtin_trap()))
 
 // core components
 #include "kernel/str.c"
@@ -242,6 +242,19 @@ void kmain(BootInfo* info) {
     }
 
     init_physical_page_alloc(&mem_map);
+
+    kprintf("%p\n", alloc_physical_page());
+    kprintf("%p\n", alloc_physical_page());
+
+    void* p = alloc_physical_page();
+    kprintf("%p\n", p);
+
+    kprintf("%p\n", alloc_physical_page());
+
+    free_physical_page(p);
+    kprintf("free %p\n", p);
+
+    kprintf("%p\n", alloc_physical_page());
 
     /*MemRegion* mine = &info->mem_regions[largest_mem_region];
     kprintf("%x - %x", mine->base, mine->base + (mine->pages * 4096) - 1);

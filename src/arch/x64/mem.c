@@ -6,17 +6,21 @@ typedef enum Result {
     RESULT_ALLOCATION_UNALIGNED,
 } Result;
 
-enum {
-    BITMAP_ALLOC_WORD_CAP = (PAGE_SIZE - sizeof(size_t[2])) / sizeof(uint64_t),
-    BITMAP_ALLOC_PAGES_COVERED = BITMAP_ALLOC_WORD_CAP * 64,
-};
-
 // this is what we use to allocate physical memory pages, it's a page big
 typedef struct BitmapAllocPage BitmapAllocPage;
-struct BitmapAllocPage {
+typedef struct BitmapAllocPageHeader {
     BitmapAllocPage* next;
     // we just track the popcount
     uint32_t popcount, cap;
+} BitmapAllocPageHeader;
+
+enum {
+    BITMAP_ALLOC_WORD_CAP = (PAGE_SIZE - sizeof(BitmapAllocPageHeader)) / sizeof(uint64_t),
+    BITMAP_ALLOC_PAGES_COVERED = BITMAP_ALLOC_WORD_CAP * 64,
+};
+
+struct BitmapAllocPage {
+    BitmapAllocPageHeader header;
     uint64_t used[BITMAP_ALLOC_WORD_CAP];
 };
 _Static_assert(sizeof(BitmapAllocPage) == 4096, "BitmapAllocPage must be a page big");
@@ -35,50 +39,105 @@ static BitmapAllocPage* new_bitmap_alloc_page(uintptr_t p) {
     return page;
 }
 
-static void append_bitmap_alloc_page(BitmapAllocPage* page) {
+static BitmapAllocPage* append_bitmap_alloc_page(BitmapAllocPage* page) {
     if (alloc_head == NULL) {
         alloc_head = alloc_tail = page;
     } else {
-        alloc_tail->next = page;
+        alloc_tail->header.next = page;
         alloc_tail = page;
     }
+    return page;
 }
 
 static void mark_bitmap_alloc_page(BitmapAllocPage* page, size_t i) {
     page->used[i / 64] |= (1ull << (i % 64));
-    page->popcount += 1;
+    page->header.popcount += 1;
 }
 
 static void init_physical_page_alloc(MemMap* restrict mem_map) {
     FOREACH_N(i, 0, mem_map->nregions) {
         MemRegion* restrict region = &mem_map->regions[i];
+        if (region->type != MEM_REGION_USABLE || region->base < 0x100000) {
+            continue;
+        }
+
         size_t total_pages = region->pages;
+        kprintf("Region start: %p (%d pages, %d pages max in freelist)\n", region->base, region->pages, BITMAP_ALLOC_PAGES_COVERED);
 
         BitmapAllocPage* page = new_bitmap_alloc_page(region->base);
         append_bitmap_alloc_page(page);
 
         size_t used = 1;
-        while (used + BITMAP_ALLOC_PAGES_COVERED + 1 >= BITMAP_ALLOC_PAGES_COVERED) {
-            page->cap = BITMAP_ALLOC_PAGES_COVERED - 1;
+        while (used + BITMAP_ALLOC_PAGES_COVERED + 1 < total_pages) {
+            page->header.cap = BITMAP_ALLOC_PAGES_COVERED - 1;
+            kprintf("1: cap = %p\n", page->header.cap);
 
             // highest page is being used to store the next freelist start
             mark_bitmap_alloc_page(page, BITMAP_ALLOC_WORD_CAP - 1);
             used += BITMAP_ALLOC_PAGES_COVERED - 1;
 
-            BitmapAllocPage* new_page = new_bitmap_alloc_page(region->base + used*PAGE_SIZE);
-            page->cap = BITMAP_ALLOC_PAGES_COVERED;
-            page = new_page;
+            // move ahead to this new bitmap
+            page = append_bitmap_alloc_page(new_bitmap_alloc_page(region->base + used*PAGE_SIZE));
         }
 
         // trim last page
-        page->cap = (total_pages - used) - 1;
+        page->header.cap = total_pages - used;
+        kprintf("2: cap = %p\n", page->header.cap);
     }
 }
 
-static uintptr_t alloc_physical_page(void) {
-    // find page with some
-    // BitmapAllocPage* p = &root_alloc_page;
-    return 0;
+static BitmapAllocPage* find_physical_alloc(const void* ptr_) {
+    const char* ptr = ptr_;
+
+    BitmapAllocPage* p = alloc_head;
+    for (; p != NULL; p = p->header.next) {
+        // range check
+        char* start = (char*) p;
+        char* end   = start + p->header.cap*PAGE_SIZE;
+
+        if (ptr >= start && ptr < end) {
+            return p;
+        }
+    }
+
+    return NULL;
+}
+
+static char* alloc_physical_page(void) {
+    // find page with some empty page first
+    BitmapAllocPage* p = alloc_head;
+    while (p != NULL && p->header.popcount >= p->header.cap) {
+        p = p->header.next;
+    }
+
+    // we've run out of physical pages
+    if (p == NULL) {
+        return NULL;
+    }
+
+    // find free bit
+    FOREACH_N(i, 0, BITMAP_ALLOC_WORD_CAP) if (p->used[i] != UINT64_MAX) {
+        int bit = p->used[i] ? __builtin_ffsll(~p->used[i]) - 1 : 0;
+        size_t index = i*64 + bit;
+
+        mark_bitmap_alloc_page(p, index);
+
+        char* base = (char*) p;
+        return base + ((index + 1)*PAGE_SIZE);
+    }
+
+    kassert(0, "unreachable");
+}
+
+static void free_physical_page(const void* ptr) {
+    BitmapAllocPage* p = find_physical_alloc(ptr);
+    kassert(p != NULL, "attempt to free non-allocated page");
+
+    size_t page_index = (((char*) ptr - (char*) p) / PAGE_SIZE) - 1;
+    uint64_t mask = 1ull << (page_index % 64);
+
+    kassert(p->used[page_index / 64] & mask, "double free?");
+    p->used[page_index / 64] &= ~mask;
 }
 
 static PageTable* get_or_alloc_pt(PageTable* parent, size_t index, int depth) {
@@ -100,7 +159,7 @@ static PageTable* get_or_alloc_pt(PageTable* parent, size_t index, int depth) {
     PageTable* new_pt = &muh_pages.tables[muh_pages.used++];
     memset(new_pt, 0, sizeof(PageTable));
 
-    kassert(((uintptr_t) new_pt & 0xFFF) == 0 && "page tables must be 4KiB aligned");
+    kassert(((uintptr_t) new_pt & 0xFFF) == 0, "page tables must be 4KiB aligned");
     parent->entries[index] = ((uint64_t) new_pt) | 3;
     return new_pt;
 }
@@ -160,7 +219,6 @@ static Result memmap__view(PageTable* address_space, uintptr_t phys_addr, size_t
 
         // | 3 is because we make the pages both PRESENT and WRITABLE
         kprintf("%x\n", phys_addr);
-        for(;;){}
         table_l1->entries[pte_index] = (phys_addr & 0xFFFFFFFFFFFFF000) | 3;
         __native_flush_tlb_single(virt);
 
