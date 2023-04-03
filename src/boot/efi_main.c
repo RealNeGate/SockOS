@@ -413,14 +413,14 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         }
     }
     if (rsdp == 0) {
-        panic(st, L"Failed to get RDSP!");
+        panic("Failed to get RDSP!");
     }
 
     boot_info.rsdp = (void *)rsdp;
-    println(st, L"RSDP:");
-    printhex(st, rsdp);
+    efi_println(st, L"RSDP:");
+    efi_print_hex(st, rsdp);
 
-    println(st, L"Beginning EFI handoff...");
+    efi_println(st, L"Beginning EFI handoff...");
 
     // Load latest memory map
     size_t fb_size_pages = PAGE_4K(fb.width * fb.height * sizeof(uint32_t));
@@ -463,8 +463,8 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
             }
         }
     }
-	boot_info.pt_used = ctx.used;
-	boot_info.pt_capacity = ctx.capacity;
+    boot_info.pt_used = ctx.used;
+    boot_info.pt_capacity = ctx.capacity;
 
     // memset(framebuffer, 0, framebuffer_stride * framebuffer_height * sizeof(uint32_t));
     for (size_t j = 0; j < 50; j++) {
