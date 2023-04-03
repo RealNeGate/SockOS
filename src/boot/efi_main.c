@@ -413,14 +413,12 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         }
     }
     if (rsdp == 0) {
-        panic(st, L"Failed to get RDSP!");
+        panic("Failed to get RDSP!\n");
     }
 
     boot_info.rsdp = (void *)rsdp;
-    println(st, L"RSDP:");
-    printhex(st, rsdp);
-
-    println(st, L"Beginning EFI handoff...");
+	printf("RDSP: %x\n", rsdp);
+    printf("Beginning EFI handoff...\n");
 
     // Load latest memory map
     size_t fb_size_pages = PAGE_4K(fb.width * fb.height * sizeof(uint32_t));
