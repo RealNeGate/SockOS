@@ -203,6 +203,7 @@ void foobar(void) {
 
 void kmain(BootInfo* info) {
     boot_info = info;
+	kprintf("Beginning kernel boot...\n");
 
     // Draw fancy background
     uint64_t gradient_x = (boot_info->fb.width + 255) / 256;
