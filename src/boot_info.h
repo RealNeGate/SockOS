@@ -44,6 +44,9 @@ typedef struct {
 typedef struct {
     void*      entrypoint;
     PageTable* kernel_pml4; // identity mapped
+	size_t     pt_used;
+    size_t     pt_capacity;
+    void*      rsdp;
 
     MemMap mem_map;
 
@@ -52,3 +55,7 @@ typedef struct {
     size_t kernel_virtual_used;
     Framebuffer fb;
 } BootInfo;
+
+// loader.asm needs these to be here
+_Static_assert(offsetof(BootInfo, entrypoint) == 0, "the loader is sad");
+_Static_assert(offsetof(BootInfo, kernel_pml4) == 8, "the loader is sad 2");

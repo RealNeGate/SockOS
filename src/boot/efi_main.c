@@ -402,6 +402,26 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         .capacity = page_tables_count, .used = 1, .tables = page_tables
     };
 
+    // Grab the ACPI table info
+    uint64_t rsdp = 0;
+    EFI_CONFIGURATION_TABLE *tables = st->ConfigurationTables;
+    EFI_GUID acpi_guid = EFI_ACPI_20_TABLE_GUID;
+    for (int i = 0; i < st->NumberOfTableEntries; i++) {
+        if (!memcmp(&acpi_guid, &tables[i].VendorGuid, sizeof(EFI_GUID))) {
+            rsdp = (uint64_t)tables[i].VendorTable;
+            break;
+        }
+    }
+    if (rsdp == 0) {
+        panic(st, L"Failed to get RDSP!");
+    }
+
+    boot_info.rsdp = (void *)rsdp;
+    println(st, L"RSDP:");
+    printhex(st, rsdp);
+
+    println(st, L"Beginning EFI handoff...");
+
     // Load latest memory map
     size_t fb_size_pages = PAGE_4K(fb.width * fb.height * sizeof(uint32_t));
     size_t map_key;
@@ -443,6 +463,8 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
             }
         }
     }
+	boot_info.pt_used = ctx.used;
+	boot_info.pt_capacity = ctx.capacity;
 
     // memset(framebuffer, 0, framebuffer_stride * framebuffer_height * sizeof(uint32_t));
     for (size_t j = 0; j < 50; j++) {
