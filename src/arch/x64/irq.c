@@ -192,6 +192,6 @@ void irq_int_handler(CPUState* state) {
     // another one can come in, it's a little write only register
     // in the LAPIC.
     if (state->interrupt_num == 32) {
-        apic[0xB0 / 4] = 0;
+        APIC(0xB0) = 0;
     }
 }

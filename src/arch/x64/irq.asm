@@ -12,7 +12,6 @@ section .text
 irq_enable:
     lidt [rdi]
     sti
-    int 3
     ret
 
 irq_disable:
@@ -84,7 +83,6 @@ asm_int_handler:
 
     mov rdi, rsp
     call irq_int_handler
-    mov rsp, rax
 
     ; fxrstor also needs to be aligned to 16bytes
     ; add rsp, 512 + 16

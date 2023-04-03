@@ -103,7 +103,7 @@ static BitmapAllocPage* find_physical_alloc(const void* ptr_) {
     return NULL;
 }
 
-static char* alloc_physical_page(void) {
+static void* alloc_physical_page(void) {
     // find page with some empty page first
     BitmapAllocPage* p = alloc_head;
     while (p != NULL && p->header.popcount >= p->header.cap) {
@@ -148,15 +148,11 @@ static PageTable* get_or_alloc_pt(PageTable* parent, size_t index, int depth) {
         return (PageTable*)(parent->entries[index] & 0xFFFFFFFFFFFFF000);
     }
 
-    // Allocate new L3 entry
-    if (muh_pages.used + 1 >= muh_pages.capacity) {
-        return NULL;
-    }
-
+    // Allocate new page entry
     for (int i = 0; i < depth; i++) kprintf("  ");
     kprintf("Alloc new page %x (%x)\n", index, (int) (uintptr_t) parent);
 
-    PageTable* new_pt = &muh_pages.tables[muh_pages.used++];
+    PageTable* new_pt = alloc_physical_page();
     memset(new_pt, 0, sizeof(PageTable));
 
     kassert(((uintptr_t) new_pt & 0xFFF) == 0, "page tables must be 4KiB aligned");
@@ -200,14 +196,14 @@ static inline void __native_flush_tlb_single(unsigned long addr) {
     asm volatile("invlpg (%0)" ::"r" (addr) : "memory");
 }
 
-// View will map a physical memory region into virtual memory.
+// Identity map
 static Result memmap__view(PageTable* address_space, uintptr_t phys_addr, size_t size, void** dst) {
     size_t page_count = (size + PAGE_SIZE - 1) / PAGE_SIZE;
     if (phys_addr & 0xFFFull) {
         return RESULT_ALLOCATION_UNALIGNED;
     }
-    uintptr_t virt = boot_info->kernel_virtual_used;
-    boot_info->kernel_virtual_used += page_count*PAGE_SIZE;
+
+    uintptr_t virt = phys_addr;
 
     // Generate the page table mapping
     void* v = (void*) virt;

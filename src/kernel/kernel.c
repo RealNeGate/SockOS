@@ -243,6 +243,7 @@ void kmain(BootInfo* info) {
 
     init_physical_page_alloc(&mem_map);
 
+    #if 0
     kprintf("%p\n", alloc_physical_page());
     kprintf("%p\n", alloc_physical_page());
 
@@ -255,6 +256,7 @@ void kmain(BootInfo* info) {
     kprintf("free %p\n", p);
 
     kprintf("%p\n", alloc_physical_page());
+    #endif
 
     /*MemRegion* mine = &info->mem_regions[largest_mem_region];
     kprintf("%x - %x", mine->base, mine->base + (mine->pages * 4096) - 1);
