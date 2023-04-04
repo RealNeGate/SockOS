@@ -177,7 +177,7 @@ void irq_startup(void) {
 }
 
 void irq_int_handler(CPUState* state) {
-    //kprintf("int %d: %x\n", state->interrupt_num, state->error);
+    // kprintf("int %d: %x\n", state->interrupt_num, state->error);
     #if 0
     kprintf("  rip=%x:%x rsp=%x:%x\n  ", state->cs, state->rip, state->ss, state->rsp, state->flags);
 
@@ -192,6 +192,33 @@ void irq_int_handler(CPUState* state) {
     // another one can come in, it's a little write only register
     // in the LAPIC.
     if (state->interrupt_num == 32) {
+        Thread* next = threads_try_switch();
+        kassert(next, "threads_try_switch failed to decide");
+
+        // do thread context switch, if we changed
+        if (threads_current != next) {
+            kprintf("switch: %p\n", next);
+
+            // if we're switching, save old thread state
+            if (threads_current != NULL) {
+                threads_current->state = *state;
+            }
+
+            *state = next->state;
+            threads_current = next;
+        }
+
         APIC(0xB0) = 0;
     }
+}
+
+CPUState new_thread_state(void* entrypoint, void* stack, size_t stack_size, bool is_user) {
+    // the stack will grow downwards
+    char* stack_top = ((char*) stack) + stack_size;
+
+    // the other registers are zeroed by default
+    return (CPUState){
+        .rip = (uintptr_t) entrypoint, .rsp = (uintptr_t) stack_top,
+        .flags = 0x200, .cs = 0x08, .ss = 0x10,
+    };
 }

@@ -1,4 +1,4 @@
-static void* memset(void* buffer, int c, size_t n) {
+void* memset(void* buffer, int c, size_t n) {
     uint8_t* buf = (uint8_t*)buffer;
     for (size_t i = 0; i < n; i++) {
         buf[i] = c;
@@ -6,7 +6,7 @@ static void* memset(void* buffer, int c, size_t n) {
     return (void*)buf;
 }
 
-static void* memcpy(void* dest, const void* src, size_t n) {
+void* memcpy(void* dest, const void* src, size_t n) {
     uint8_t* d = (uint8_t*)dest;
     uint8_t* s = (uint8_t*)src;
     for (size_t i = 0; i < n; i++) {
@@ -15,7 +15,7 @@ static void* memcpy(void* dest, const void* src, size_t n) {
     return (void*)dest;
 }
 
-static int memcmp(const void* a, const void* b, size_t n) {
+int memcmp(const void* a, const void* b, size_t n) {
     uint8_t* aa = (uint8_t*)a;
     uint8_t* bb = (uint8_t*)b;
 
@@ -26,7 +26,7 @@ static int memcmp(const void* a, const void* b, size_t n) {
     return 0;
 }
 
-static bool memeq(const void* a, const void* b, size_t n) {
+bool memeq(const void* a, const void* b, size_t n) {
     uint8_t* aa = (uint8_t*)a;
     uint8_t* bb = (uint8_t*)b;
 

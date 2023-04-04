@@ -3,7 +3,7 @@
 #include "font.h"
 
 static BootInfo* boot_info;
-// static uint16_t  cursor;
+static uint16_t  cursor;
 
 static void put_char(int ch);
 static void put_string(const char* str);
@@ -11,15 +11,27 @@ static void put_number(uint64_t x, uint8_t base);
 static void kprintf(char *fmt, ...);
 
 #define kassert(cond, ...) ((cond) ? 0 : (kprintf("%s:%d: assertion failed!\n  %s\n  ", __FILE__, __LINE__, #cond), kprintf(__VA_ARGS__), __builtin_trap()))
-
-#define panic(...) (kprintf("panic %s:%d\n", __FILE__, __LINE__), kprintf(__VA_ARGS__), __builtin_trap())
+#define panic(...) (kprintf("%s:%d: panic!\n", __FILE__, __LINE__), kprintf(__VA_ARGS__), __builtin_trap())
 
 // core components
-#include "kernel/str.c"
+#include "str.c"
 
+#ifdef __x86_64__
+#include "arch/x64/x64.c"
+#endif
+
+// forward decls
+#include "threads.c"
+
+#ifdef __x86_64__
 #include "arch/x64/acpi.c"
 #include "arch/x64/mem.c"
 #include "arch/x64/irq.c"
+#endif
+
+// components which depend on architecture stuff
+#define IMPL
+#include "threads.c"
 
 static int itoa(uint64_t i, uint8_t base, uint8_t *buf) {
     static const char bchars[] = "0123456789ABCDEF";
@@ -77,22 +89,26 @@ static void put_buffer(const uint8_t* buf, int size) {
 
 static void put_char(int ch) {
     io_out8(0x3f8, ch);
-    /*int columns = (boot_info->fb.width - 16) / 16;
+}
+
+static void draw_sprite(uint32_t color, int ch) {
+    int columns = (boot_info->fb.width - 16) / 16;
     int rows = (boot_info->fb.height - 16) / 16;
 
     int x = (cursor % columns) * 16;
     int y = (cursor / columns) * 16;
+
     const uint8_t* bitmap = FONT[(int)ch];
 
     for (size_t yy = 0; yy < 16; yy++) {
         for (size_t xx = 0; xx < 16; xx++) {
             if (bitmap[yy / 2] & (1 << (xx / 2))) {
-                boot_info->fb.pixels[(8 + x + xx) + ((8 + y + yy) * boot_info->fb.stride)] = 0xFFFFFFFF;
+                boot_info->fb.pixels[(8 + x + xx) + ((8 + y + yy) * boot_info->fb.stride)] = color;
             }
         }
     }
 
-    cursor = (cursor + 1) % (columns * rows);*/
+    cursor = (cursor + 1) % (columns * rows);
 }
 
 #define _PRINT_BUFFER_LEN 128
@@ -204,6 +220,16 @@ void foobar(void) {
     }
 }
 
+static int test_thread_a(void* arg) {
+    for (;;) put_char('A');
+    return 0;
+}
+
+static int test_thread_b(void* arg) {
+    for (;;) put_char('B');
+    return 0;
+}
+
 void kmain(BootInfo* info) {
     boot_info = info;
 	kprintf("Beginning kernel boot...\n");
@@ -268,6 +294,10 @@ void kmain(BootInfo* info) {
     parse_acpi(boot_info->rsdp);
 
     // interrupts
+    threads_init();
+    threads_spawn(test_thread_a, 0);
+    threads_spawn(test_thread_b, 0);
+
     irq_startup();
     for(;;) {}
 }
