@@ -295,8 +295,8 @@ void kmain(BootInfo* info) {
 
     // interrupts
     threads_init();
-    threads_spawn(test_thread_a, 0);
-    threads_spawn(test_thread_b, 0);
+    threads_spawn(test_thread_a, 0, false);
+    threads_spawn(test_thread_b, 0, false);
 
     irq_startup();
     for(;;) {}
