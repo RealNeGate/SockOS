@@ -12,9 +12,12 @@ static void kprintf(char *fmt, ...);
 
 #define kassert(cond, ...) ((cond) ? 0 : (kprintf("%s:%d: assertion failed!\n  %s\n  ", __FILE__, __LINE__, #cond), kprintf(__VA_ARGS__), __builtin_trap()))
 
+#define panic(...) (kprintf("panic %s:%d\n", __FILE__, __LINE__), kprintf(__VA_ARGS__), __builtin_trap())
+
 // core components
 #include "kernel/str.c"
 
+#include "arch/x64/acpi.c"
 #include "arch/x64/mem.c"
 #include "arch/x64/irq.c"
 
@@ -260,11 +263,9 @@ void kmain(BootInfo* info) {
 
     /*MemRegion* mine = &info->mem_regions[largest_mem_region];
     kprintf("%x - %x", mine->base, mine->base + (mine->pages * 4096) - 1);
-    kprintf("%x", sizeof(BitmapAllocPage));
+    kprintf("%x", sizeof(BitmapAllocPage));*/
 
-    //ACPI_RSDP_Desc_V2 *rsdp_header = (ACPI_RSDP_Desc_V2 *)boot_info->rsdp;
-    memdump(boot_info->kernel_pml4->entries, boot_info->pt_capacity);
-    //parse_acpi(boot_info->rsdp);*/
+    parse_acpi(boot_info->rsdp);
 
     // interrupts
     irq_startup();
