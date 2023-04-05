@@ -1,9 +1,11 @@
 #include <common.h>
+#include <stdatomic.h>
 #include <boot_info.h>
+#include <elf.h>
 #include "font.h"
 
-static BootInfo* boot_info;
-static uint16_t  cursor;
+BootInfo boot_info;
+static uint16_t cursor;
 
 static void put_char(int ch);
 static void put_string(const char* str);
@@ -92,8 +94,8 @@ static void put_char(int ch) {
 }
 
 static void draw_sprite(uint32_t color, int ch) {
-    int columns = (boot_info->fb.width - 16) / 16;
-    int rows = (boot_info->fb.height - 16) / 16;
+    int columns = (boot_info.fb.width - 16) / 16;
+    int rows = (boot_info.fb.height - 16) / 16;
 
     int x = (cursor % columns) * 16;
     int y = (cursor / columns) * 16;
@@ -103,7 +105,7 @@ static void draw_sprite(uint32_t color, int ch) {
     for (size_t yy = 0; yy < 16; yy++) {
         for (size_t xx = 0; xx < 16; xx++) {
             if (bitmap[yy / 2] & (1 << (xx / 2))) {
-                boot_info->fb.pixels[(8 + x + xx) + ((8 + y + yy) * boot_info->fb.stride)] = color;
+                boot_info.fb.pixels[(8 + x + xx) + ((8 + y + yy) * boot_info.fb.stride)] = color;
             }
         }
     }
@@ -216,7 +218,7 @@ static void kprintf(char *fmt, ...) {
 
 void foobar(void) {
     for (size_t i = 500; i < 1000; i++) {
-        boot_info->fb.pixels[i] = 0xFF00FFFF;
+        boot_info.fb.pixels[i] = 0xFF00FFFF;
     }
 }
 
@@ -230,21 +232,43 @@ static int test_thread_b(void* arg) {
     return 0;
 }
 
-void kmain(BootInfo* info) {
-    boot_info = info;
+#define STR2(x) #x
+#define STR(x) STR2(x)
+
+// this aligns start address to 16 and terminates byte array with explict 0
+// which is not really needed, feel free to change it to whatever you want/need
+#define INCBIN(name, file) \
+__asm__(".section .rodata\n" \
+    ".global incbin_" STR(name) "_start\n" \
+    ".balign 16\n" \
+    "incbin_" STR(name) "_start:\n" \
+    ".incbin \"" file "\"\n" \
+    \
+    ".global incbin_" STR(name) "_end\n" \
+    ".balign 1\n" \
+    "incbin_" STR(name) "_end:\n" \
+    ".byte 0\n" \
+); \
+extern __attribute__((aligned(16))) const uint8_t incbin_ ## name ## _start[]; \
+extern                              const uint8_t incbin_ ## name ## _end[]
+
+INCBIN(test_program, "test.elf");
+
+void kmain(BootInfo* restrict info) {
+    boot_info = *info;
 	kprintf("Beginning kernel boot...\n");
 
     // Draw fancy background
-    uint64_t gradient_x = (boot_info->fb.width + 255) / 256;
-    uint64_t gradient_y = (boot_info->fb.height + 255) / 256;
+    uint64_t gradient_x = (boot_info.fb.width + 255) / 256;
+    uint64_t gradient_y = (boot_info.fb.height + 255) / 256;
 
-    for (size_t j = 0; j < boot_info->fb.height; j++) {
+    for (size_t j = 0; j < boot_info.fb.height; j++) {
         uint32_t g = ((j / gradient_y) / 2) + 0x7F;
 
-        for (size_t i = 0; i < boot_info->fb.width; i++) {
+        for (size_t i = 0; i < boot_info.fb.width; i++) {
             uint32_t b = ((i / gradient_x) / 2) + 0x7F;
 
-            boot_info->fb.pixels[i + (j * boot_info->fb.stride)] = 0xFF000000 | (g << 16) | (b << 8);
+            boot_info.fb.pixels[i + (j * boot_info.fb.stride)] = 0xFF000000 | (g << 16) | (b << 8);
         }
     }
 
@@ -291,12 +315,13 @@ void kmain(BootInfo* info) {
     kprintf("%x - %x", mine->base, mine->base + (mine->pages * 4096) - 1);
     kprintf("%x", sizeof(BitmapAllocPage));*/
 
-    parse_acpi(boot_info->rsdp);
+    parse_acpi(boot_info.rsdp);
 
     // interrupts
     threads_init();
-    threads_spawn(test_thread_a, 0, false);
-    threads_spawn(test_thread_b, 0, false);
+
+    // Threadgroup* toy_process;
+    threadgroup_spawn(incbin_test_program_start, incbin_test_program_end - incbin_test_program_start, NULL);
 
     irq_startup();
     for(;;) {}

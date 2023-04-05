@@ -18,7 +18,7 @@ do {                          \
 
 #include "efi.h"
 #include "efi_util.c"
-#include "elf.h"
+#include <elf.h>
 #include "elf_loader.c"
 
 #define PAGE_4K(x) (((x) + 0xFFF) / 0x1000)
@@ -47,8 +47,6 @@ static size_t estimate_page_table_count(size_t size) {
 }
 
 static alignas(4096) BootInfo boot_info;
-
-#define KERNEL_STACK_SIZE 0x200000
 static alignas(4096) uint8_t kernel_stack[KERNEL_STACK_SIZE];
 
 inline static size_t align_up(size_t a, size_t b) {
@@ -82,7 +80,7 @@ static void map_pages(PageTableContext* ctx, uint64_t virt_addr, uint64_t phys_a
             address_space->entries[pml4_index] = ((uint64_t)table_l3) | 3;
         } else {
             // Used the bits 51:12 as the table address
-            table_l3 = (PageTable*)(address_space->entries[pml4_index] & 0xFFFFFFFFFFFFF000);
+            table_l3 = (PageTable*)(address_space->entries[pml4_index] & 0xFFFFFFFFF000);
         }
 
         // 1GB
@@ -99,7 +97,7 @@ static void map_pages(PageTableContext* ctx, uint64_t virt_addr, uint64_t phys_a
             table_l3->entries[pdpte_index] = ((uint64_t)table_l2) | 3;
         } else {
             // Used the bits 51:12 as the table address
-            table_l2 = (PageTable*)(table_l3->entries[pdpte_index] & 0xFFFFFFFFFFFFF000);
+            table_l2 = (PageTable*)(table_l3->entries[pdpte_index] & 0xFFFFFFFFF000);
         }
 
         // 2MB
@@ -116,12 +114,12 @@ static void map_pages(PageTableContext* ctx, uint64_t virt_addr, uint64_t phys_a
             table_l2->entries[pde_index] = ((uint64_t)table_l1) | 3;
         } else {
             // Used the bits 51:12 as the table address
-            table_l1 = (PageTable*)(table_l2->entries[pde_index] & 0xFFFFFFFFFFFFF000);
+            table_l1 = (PageTable*)(table_l2->entries[pde_index] & 0xFFFFFFFFF000);
         }
 
         // 4KB
         // | 3 is because we make the pages both PRESENT and WRITABLE
-        table_l1->entries[pte_index] = (phys_addr & 0xFFFFFFFFFFFFF000) | 3;
+        table_l1->entries[pte_index] = (phys_addr & 0xFFFFFFFFF000) | 3;
         phys_addr += PAGE_SIZE;
         virt_addr += PAGE_SIZE;
 
@@ -442,8 +440,6 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
             map_pages_id(&ctx, region.base, region.pages);
         }
     }
-    boot_info.pt_used = ctx.used;
-    boot_info.pt_capacity = ctx.capacity;
 
     // memset(framebuffer, 0, framebuffer_stride * framebuffer_height * sizeof(uint32_t));
     for (size_t j = 0; j < 50; j++) {
@@ -457,9 +453,11 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 
     printf("Jumping to the kernel: %X\n", kernel_module.entry_addr);
     boot_info.kernel_virtual_used = kernel_module.virt_base;
+    boot_info.elf_physical_ptr = kernel_module.phys_base;
     boot_info.fb = fb;
     boot_info.mem_map = mem_map;
     boot_info.kernel_pml4 = &page_tables[0];
+    boot_info.kernel_stack = kernel_stack;
 
     // transition to kernel page table
     asm volatile("movq %0, %%cr3" ::"r" (boot_info.kernel_pml4) : "memory");

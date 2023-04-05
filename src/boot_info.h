@@ -7,7 +7,8 @@ typedef struct {
 } Framebuffer;
 
 enum {
-    PAGE_SIZE = 4096
+    PAGE_SIZE = 4096,
+    KERNEL_STACK_SIZE = 0x200000,
 };
 
 typedef struct {
@@ -43,11 +44,12 @@ typedef struct {
 // This is all the crap we throw into the loader
 typedef struct {
     PageTable* kernel_pml4; // identity mapped
-	size_t     pt_used;
-    size_t     pt_capacity;
     void*      rsdp;
 
     MemMap mem_map;
+
+    uintptr_t elf_physical_ptr;
+    uint8_t* kernel_stack;
 
     // the kernel virtual memory is allocated
     // with a simple bump allocator
@@ -55,5 +57,5 @@ typedef struct {
     Framebuffer fb;
 } BootInfo;
 
-// loader.asm needs these to be here
-_Static_assert(offsetof(BootInfo, kernel_pml4) == 0, "the loader is sad 2");
+// loader.asm & irq.asm needs these to be here
+_Static_assert(offsetof(BootInfo, kernel_pml4) == 0, "the loader is sad");

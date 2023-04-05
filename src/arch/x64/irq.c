@@ -150,8 +150,9 @@ void irq_startup(void) {
             kprintf("We're the main core\n");
         }
 
-        // get the address (it's above the 63-12 bits)
-        if (memmap__view(boot_info->kernel_pml4, x & ~0xFFF, PAGE_SIZE, (void**) &apic)) {
+        // get the address (it's above the 63-12 bits) and identity map it
+        apic = (void*) (x & ~0xFFF);
+        if (memmap__view(boot_info.kernel_pml4, (uintptr_t) apic, (uintptr_t) apic, PAGE_SIZE)) {
             kprintf("Could not map view of local ACPI!!!\n");
             return;
         }
@@ -168,7 +169,7 @@ void irq_startup(void) {
         //   timer divide reg
         APIC(0x3E0) = 0b1011;
         //   initial timer count
-        APIC(0x380) = 10000;
+        APIC(0x380) = 100000;
     }
 
     // asm volatile ("1: jmp 1b");
@@ -176,13 +177,13 @@ void irq_startup(void) {
     irq_enable(&idt);
 }
 
-void irq_int_handler(CPUState* state) {
-    // kprintf("int %d: %x\n", state->interrupt_num, state->error);
-    #if 0
-    kprintf("  rip=%x:%x rsp=%x:%x\n  ", state->cs, state->rip, state->ss, state->rsp, state->flags);
+PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space) {
+    kprintf("int %d: %x\n", state->interrupt_num, state->error);
+    kprintf("  rip=%p rsp=%p\n  ", state->rip, state->rsp);
 
+    #if 0
     uint8_t* mem = (uint8_t*) state->rip;
-    for (int i = -2; i <= 2; i++) {
+    for (int i = -16; i <= 16; i++) {
         kprintf("%x ", mem[i]);
     }
     kprintf("\n");
@@ -208,17 +209,23 @@ void irq_int_handler(CPUState* state) {
             threads_current = next;
         }
 
+        // acknowledge timer
         APIC(0xB0) = 0;
+
+        return next->parent->address_space;
+    } else {
+        return old_address_space;
     }
 }
 
-CPUState new_thread_state(void* entrypoint, void* stack, size_t stack_size, bool is_user) {
+CPUState new_thread_state(void* entrypoint, uintptr_t stack, size_t stack_size, bool is_user) {
     // the stack will grow downwards
-    char* stack_top = ((char*) stack) + stack_size;
+    uintptr_t stack_top = stack + stack_size;
+    kprintf("stack_top=%p\n", stack_top);
 
     // the other registers are zeroed by default
     return (CPUState){
-        .rip = (uintptr_t) entrypoint, .rsp = (uintptr_t) stack_top,
-        .flags = 0x200, .cs = 0x08, .ss = 0x10,
+        .rip = (uintptr_t) entrypoint, .rsp = stack_top,
+        .flags = 0x200, .cs = is_user ? 0x18 : 0x08, .ss = is_user ? 0x20 : 0x10,
     };
 }

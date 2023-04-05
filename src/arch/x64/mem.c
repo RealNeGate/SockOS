@@ -122,11 +122,56 @@ static void* alloc_physical_page(void) {
 
         mark_bitmap_alloc_page(p, index);
 
-        char* base = (char*) p;
-        return base + ((index + 1)*PAGE_SIZE);
+        // zero pages here to avoid problems everywhere else
+        char* result = ((char*) p) + ((index+1) * PAGE_SIZE);
+        memset(result, 0, PAGE_SIZE);
+        return result;
     }
 
     kassert(0, "unreachable");
+}
+
+static void* alloc_physical_pages(size_t num_pages) {
+    BitmapAllocPage* p = alloc_head;
+
+    for (;;) {
+        // find page with some empty page first
+        while (p != NULL && p->header.popcount + num_pages > p->header.cap) {
+            p = p->header.next;
+        }
+
+        // we've run out of physical pages
+        if (p == NULL) {
+            return NULL;
+        }
+
+        // find free bit
+        FOREACH_N(i, 0, BITMAP_ALLOC_WORD_CAP) if (p->used[i] != UINT64_MAX) {
+            int bit = p->used[i] ? __builtin_ffsll(~p->used[i]) - 1 : 0;
+            size_t index = i*64 + bit;
+
+            // check for sequential pages
+            FOREACH_N(j, 1, num_pages) {
+                size_t index2 = index + j;
+                uint64_t mask = (1u << (index2 % 64));
+
+                if (p->used[index2 / 64] & mask) goto bad_region;
+            }
+
+            mark_bitmap_alloc_page(p, index);
+
+            // zero pages here to avoid problems everywhere else
+            char* result = ((char*) p) + ((index+1) * PAGE_SIZE);
+            memset(result, 0, num_pages * PAGE_SIZE);
+            return result;
+
+            // couldn't find enough sequential pages
+            bad_region:
+            break;
+        }
+
+        p = p->header.next;
+    }
 }
 
 static void free_physical_page(const void* ptr) {
@@ -140,12 +185,16 @@ static void free_physical_page(const void* ptr) {
     p->used[page_index / 64] &= ~mask;
 }
 
+static uint64_t canonical_addr(uint64_t ptr) {
+    return (ptr >> 48) != 0 ? ptr | (0xFFFull << 48) : ptr;
+}
+
 static PageTable* get_or_alloc_pt(PageTable* parent, size_t index, int depth) {
     if (parent->entries[index] != 0) {
         for (int i = 0; i < depth; i++) kprintf("  ");
-        // kprintf("Get old page %x (%x)\n", index, (int) (uintptr_t) parent);
+        kprintf("Get old page %x (%x)\n", index, (int) (uintptr_t) parent);
 
-        return (PageTable*)(parent->entries[index] & 0xFFFFFFFFFFFFF000);
+        return (PageTable*) canonical_addr(parent->entries[index] & 0xFFFFFFFFF000ull);
     }
 
     // Allocate new page entry
@@ -153,8 +202,6 @@ static PageTable* get_or_alloc_pt(PageTable* parent, size_t index, int depth) {
     kprintf("Alloc new page %x (%x)\n", index, (int) (uintptr_t) parent);
 
     PageTable* new_pt = alloc_physical_page();
-    memset(new_pt, 0, sizeof(PageTable));
-
     kassert(((uintptr_t) new_pt & 0xFFF) == 0, "page tables must be 4KiB aligned");
     parent->entries[index] = ((uint64_t) new_pt) | 3;
     return new_pt;
@@ -197,38 +244,32 @@ static inline void __native_flush_tlb_single(unsigned long addr) {
 }
 
 // Identity map
-static Result memmap__view(PageTable* address_space, uintptr_t phys_addr, size_t size, void** dst) {
+static Result memmap__view(PageTable* address_space, uintptr_t phys_addr, uintptr_t virt_addr, size_t size) {
     size_t page_count = (size + PAGE_SIZE - 1) / PAGE_SIZE;
-    if (phys_addr & 0xFFFull) {
-        return RESULT_ALLOCATION_UNALIGNED;
-    }
-
-    uintptr_t virt = phys_addr;
+    kassert((phys_addr & 0xFFFull) == 0, "physical address unaligned (%p)", phys_addr);
+    kassert((virt_addr & 0xFFFull) == 0, "virtual address unaligned (%p)", virt_addr);
 
     // Generate the page table mapping
-    void* v = (void*) virt;
     for (size_t i = 0; i < page_count; i++) {
-        PageTable* table_l3 = get_or_alloc_pt(address_space, (virt >> 39) & 0x1FF, 0); // 512GiB
-        PageTable* table_l2 = get_or_alloc_pt(table_l3,      (virt >> 30) & 0x1FF, 1); // 1GiB
-        PageTable* table_l1 = get_or_alloc_pt(table_l2,      (virt >> 21) & 0x1FF, 2); // 2MiB
-        size_t pte_index = (virt >> 12) & 0x1FF; // 4KiB
+        PageTable* table_l3 = get_or_alloc_pt(address_space, (virt_addr >> 39) & 0x1FF, 0); // 512GiB
+        PageTable* table_l2 = get_or_alloc_pt(table_l3,      (virt_addr >> 30) & 0x1FF, 1); // 1GiB
+        PageTable* table_l1 = get_or_alloc_pt(table_l2,      (virt_addr >> 21) & 0x1FF, 2); // 2MiB
+        size_t pte_index = (virt_addr >> 12) & 0x1FF; // 4KiB
 
         // | 3 is because we make the pages both PRESENT and WRITABLE
-        kprintf("%x\n", phys_addr);
-        table_l1->entries[pte_index] = (phys_addr & 0xFFFFFFFFFFFFF000) | 3;
-        __native_flush_tlb_single(virt);
+        table_l1->entries[pte_index] = (phys_addr & 0xFFFFFFFFF000) | 3;
+        __native_flush_tlb_single(virt_addr);
 
-        virt += PAGE_SIZE, phys_addr += PAGE_SIZE;
+        virt_addr += PAGE_SIZE, phys_addr += PAGE_SIZE;
     }
 
-    *dst = v;
     return RESULT_SUCCESS;
 }
 
 static void memdump(uint64_t *buffer, size_t size) {
     int scale = 16;
-    int max_pixel = boot_info->fb.width * boot_info->fb.height;
-    int width = boot_info->fb.width;
+    int max_pixel = boot_info.fb.width * boot_info.fb.height;
+    int width = boot_info.fb.width;
 
     for (int i = 0; i < size; i++) {
         uint32_t color = 0xFF000000 | ((buffer[i] > 0) ? buffer[i] : 0xFF050505);
@@ -241,7 +282,7 @@ static void memdump(uint64_t *buffer, size_t size) {
                 int idx = (sy * width) + sx;
                 if (idx >= max_pixel) return;
 
-                boot_info->fb.pixels[idx] = color;
+                boot_info.fb.pixels[idx] = color;
             }
         }
     }
@@ -264,7 +305,7 @@ static uint64_t memmap__probe(PageTable* address_space, uintptr_t virt) {
             return 0;
         }
 
-        curr = (PageTable*) (curr->entries[l[i]] & 0xFFFFFFFFFFFFF000);
+        curr = (PageTable*) canonical_addr(curr->entries[l[i]] & 0xFFFFFFFFF000ull);
     }
 
     return curr->entries[l[3]];

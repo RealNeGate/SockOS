@@ -4,8 +4,10 @@ bits 64
 global irq_enable
 global irq_disable
 global IDT_Descriptor
+global asm_int_handler
 
 extern irq_int_handler
+extern boot_info
 
 section .text
 
@@ -57,6 +59,7 @@ DEFINE_INT 47
 DEFINE_INT 112
 asm_int_handler:
     cld
+
     push rax
     push rcx
     push rdx
@@ -73,13 +76,17 @@ asm_int_handler:
     push r14
     push r15
 
+    ; switch to kernel PML4
+    mov rsi, cr3
+    mov rax, [boot_info + 0]
+    mov cr3, rax
+
     ; fxsave needs to be aligned to 16bytes
     ; mov rbx,rsp
     ; and rsp,~0xF
     ; fxsave  [rsp - 512]
     ; mov rsp,rbx
     ; sub rsp,512 + 16
-
 
     mov rdi, rsp
     call irq_int_handler
@@ -89,6 +96,9 @@ asm_int_handler:
     ; mov rbx,rsp
     ; and rbx,~0xF
     ; fxrstor [rbx - 512]
+
+    ; switch to whichever address space we returned
+    mov cr3, rax
 
     cli
 

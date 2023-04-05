@@ -100,7 +100,7 @@ static bool elf_load(EFI_SYSTEM_TABLE* st, void* elf_base, ELF_Module *module) {
                 panic("Unable to handle unknown relocation type!\n\n");
             }
         }
-    }  
+    }
     module->entry_addr = (void*) elf_header->e_entry;
     module->virt_base = virt_base;
     module->phys_base = (uint64_t) phys_base;
