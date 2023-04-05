@@ -362,7 +362,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 
         printf("Loaded the kernel at: %X\n", kernel_buffer);
     }
-    
+
     // Load the kernel ELF
     ELF_Module kernel_module;
     if(!elf_load(st, kernel_buffer, &kernel_module)) {
@@ -370,7 +370,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     }
     printf("Loaded the kernel at: %X\n", kernel_module.phys_base);
     printf("Kernel entry: %X\n", kernel_module.entry_addr);
-    
+
     // Create the stack for the kernel
     void* kstack_base = efi_alloc(st, KERNEL_STACK_SIZE);
     void* kstack_end  = (uint8_t*) kstack_base + KERNEL_STACK_SIZE;
@@ -413,7 +413,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     // TODO(flysand): there seems to be a bug in mem_map_mark, if we switch around the two lines below
     // the function refuses to remap the kernel memory region. Gotta investigate that when I'm not sleepy
     mem_map_mark(&mem_map, kernel_module.phys_base, PAGE_4K(kernel_module.size), MEM_REGION_KERNEL);
-    mem_map_mark(&mem_map, (uint64_t) kstack_base, PAGE_4K(KERNEL_STACK_SIZE), MEM_REGION_KERNEL);
+    mem_map_mark(&mem_map, (uint64_t) kstack_base, PAGE_4K(KERNEL_STACK_SIZE), MEM_REGION_KSTACK);
     mem_map_mark(&mem_map, (uint64_t) fb.pixels, fb_size_pages, MEM_REGION_FRAMEBUFFER);
     mem_map_merge_contiguous_ranges(&mem_map);
     if(!mem_map_verify(&mem_map)) {
@@ -465,7 +465,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     boot_info.fb = fb;
     boot_info.mem_map = mem_map;
     boot_info.kernel_pml4 = &page_tables[0];
-    boot_info.kernel_stack = kstack_end;
+    boot_info.kernel_stack = kstack_base;
 
     // transition to kernel page table
     asm volatile("movq %0, %%cr3" ::"r" (boot_info.kernel_pml4) : "memory");

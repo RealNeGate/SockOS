@@ -72,29 +72,29 @@ static uint64_t efi_cvt_mem_desc_type(uint32_t efi_type) {
     switch(efi_type) {
         case EfiLoaderCode:
         case EfiLoaderData:
-            return MEM_REGION_BOOT;
+        return MEM_REGION_BOOT;
         case EfiBootServicesCode:
         case EfiBootServicesData:
-            // return MEM_REGION_UEFI_BOOT;
-            return MEM_REGION_USABLE;
+        // return MEM_REGION_UEFI_BOOT;
+        return MEM_REGION_USABLE;
         case EfiRuntimeServicesCode:
         case EfiRuntimeServicesData:
-            return MEM_REGION_UEFI_RUNTIME;
+        return MEM_REGION_UEFI_RUNTIME;
         case EfiConventionalMemory:
-            return MEM_REGION_USABLE;
+        return MEM_REGION_USABLE;
         case EfiACPIReclaimMemory:
-            return MEM_REGION_ACPI;
+        return MEM_REGION_ACPI;
         case EfiACPIMemoryNVS:
-            return MEM_REGION_ACPI_NVS;
+        return MEM_REGION_ACPI_NVS;
         case EfiMemoryMappedIO:
-            return MEM_REGION_IO;
+        return MEM_REGION_IO;
         case EfiMemoryMappedIOPortSpace:
-            return MEM_REGION_IO_PORTS;
+        return MEM_REGION_IO_PORTS;
         case EfiPalCode:
         case EfiUnusableMemory:
         case EfiPersistentMemory: // ?
         case EfiReservedMemoryType:
-            return MEM_REGION_RESERVED;
+        return MEM_REGION_RESERVED;
         default: {
             if(0x80000000 <= efi_type && efi_type <= 0xFFFFFFFF) {
                 return MEM_REGION_USABLE;
@@ -111,6 +111,7 @@ static char* mem_region_name(uint64_t type) {
         case MEM_REGION_USABLE:       return "MEM_REGION_USABLE";
         case MEM_REGION_RESERVED:     return "MEM_REGION_RESERVED";
         case MEM_REGION_BOOT:         return "MEM_REGION_BOOT";
+        case MEM_REGION_KSTACK:       return "MEM_REGION_KSTACK";
         case MEM_REGION_KERNEL:       return "MEM_REGION_KERNEL";
         case MEM_REGION_UEFI_BOOT:    return "MEM_REGION_UEFI_BOOT";
         case MEM_REGION_UEFI_RUNTIME: return "MEM_REGION_UEFI_RUNTIME";
@@ -160,7 +161,7 @@ static MemMap efi_get_mem_map(EFI_SYSTEM_TABLE* st, size_t* efi_map_key, size_t 
         uint64_t type = efi_cvt_mem_desc_type(desc->Type);
         uint64_t paddr = (uint64_t) desc->PhysicalStart;
         uint64_t npages = desc->NumberOfPages;
-        regions[i].type = type;        
+        regions[i].type = type;
         regions[i].base  = paddr;
         regions[i].pages = npages;
         char* name = mem_region_name(regions[i].type);
