@@ -47,7 +47,6 @@ static size_t estimate_page_table_count(size_t size) {
 }
 
 static alignas(4096) BootInfo boot_info;
-static alignas(4096) uint8_t kernel_stack[KERNEL_STACK_SIZE];
 
 inline static size_t align_up(size_t a, size_t b) {
     return a + (b - (a % b)) % b;
@@ -363,13 +362,19 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 
         printf("Loaded the kernel at: %X\n", kernel_buffer);
     }
-
+    
+    // Load the kernel ELF
     ELF_Module kernel_module;
     if(!elf_load(st, kernel_buffer, &kernel_module)) {
         panic("Failed to load the kernel module");
     }
     printf("Loaded the kernel at: %X\n", kernel_module.phys_base);
     printf("Kernel entry: %X\n", kernel_module.entry_addr);
+    
+    // Create the stack for the kernel
+    void* kstack_base = efi_alloc(st, KERNEL_STACK_SIZE);
+    void* kstack_end  = (uint8_t*) kstack_base + KERNEL_STACK_SIZE;
+    printf("Kernel stack: %X .. %X\n", kstack_base, kstack_end);
 
     // Allocate space for our page tables before we exit UEFI
     size_t page_tables_count = 4ull * 1024 * 1024 / 4096;
@@ -405,7 +410,10 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     size_t fb_size_pages = PAGE_4K(fb.width * fb.height * sizeof(uint32_t));
     size_t map_key;
     MemMap mem_map = efi_get_mem_map(st, &map_key, MEM_MAP_LIMIT);
+    // TODO(flysand): there seems to be a bug in mem_map_mark, if we switch around the two lines below
+    // the function refuses to remap the kernel memory region. Gotta investigate that when I'm not sleepy
     mem_map_mark(&mem_map, kernel_module.phys_base, PAGE_4K(kernel_module.size), MEM_REGION_KERNEL);
+    mem_map_mark(&mem_map, (uint64_t) kstack_base, PAGE_4K(KERNEL_STACK_SIZE), MEM_REGION_KERNEL);
     mem_map_mark(&mem_map, (uint64_t) fb.pixels, fb_size_pages, MEM_REGION_FRAMEBUFFER);
     mem_map_merge_contiguous_ranges(&mem_map);
     if(!mem_map_verify(&mem_map)) {
@@ -431,7 +439,10 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     // Map everything in the memory map that's ever been allocated
     for(int i = 0; i != mem_map.nregions; ++i) {
         MemRegion region = mem_map.regions[i];
-        if(region.type == MEM_REGION_KERNEL) {
+        if(region.base == kernel_module.phys_base) {
+            if(region.type != MEM_REGION_KERNEL) {
+                panic("Something bad is located at kernel's paddr");
+            }
             printf("Making a map %X -> %X (%X pages)\n", kernel_module.virt_base, region.base, region.pages);
             map_pages(&ctx, kernel_module.virt_base, region.base, region.pages);
         }
@@ -448,20 +459,17 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         }
     }
 
-    void* kstack = kernel_stack + KERNEL_STACK_SIZE;
-    printf("Kernel stack: %X\n", kstack);
-
     printf("Jumping to the kernel: %X\n", kernel_module.entry_addr);
     boot_info.kernel_virtual_used = kernel_module.virt_base;
     boot_info.elf_physical_ptr = kernel_module.phys_base;
     boot_info.fb = fb;
     boot_info.mem_map = mem_map;
     boot_info.kernel_pml4 = &page_tables[0];
-    boot_info.kernel_stack = kernel_stack;
+    boot_info.kernel_stack = kstack_end;
 
     // transition to kernel page table
     asm volatile("movq %0, %%cr3" ::"r" (boot_info.kernel_pml4) : "memory");
 
-    ((LoaderFunction) kernel_module.entry_addr)(&boot_info, kstack);
+    ((LoaderFunction) kernel_module.entry_addr)(&boot_info, kstack_end);
     return 0;
 }
