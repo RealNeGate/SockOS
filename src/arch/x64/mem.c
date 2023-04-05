@@ -230,6 +230,7 @@ PageInfo get_page_info(PageTable* pml4_table, uint64_t vaddr) {
     if (!result.present) {
         return result;
     }
+
     result.paddr = pte_entry & (uint64_t)0x8ffffffffffff000ull;
     result.write    = (pte_entry >> 1) & 1;
     result.user     = (pte_entry >> 2) & 1;
