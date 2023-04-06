@@ -170,7 +170,7 @@ Threadgroup* threadgroup_spawn(const uint8_t* program, size_t program_size, Thre
     size_t num_pages = (image_size + 0xFFF) / 4096;
     char* dst = alloc_physical_pages(num_pages);
     if (dst == NULL) {
-        // no memory? lmao
+        // no memory? lmao, just buy more ram
         return NULL;
     }
 
