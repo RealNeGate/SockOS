@@ -28,7 +28,7 @@ do {                          \
 #define KERNEL_BUFFER_SIZE (16 * 1024 * 1024)
 #define MEM_MAP_LIMIT (1024)
 
-typedef void (*LoaderFunction)(BootInfo* info, uint8_t* stack);
+typedef void (*LoaderFunction)(BootInfo* info, uint8_t* stack, uint64_t tss_lo, uint64_t tss_hi);
 
 typedef struct {
     size_t capacity;
@@ -58,13 +58,13 @@ static void map_pages(PageTableContext* ctx, uint64_t virt_addr, uint64_t phys_a
         panic("Bad addresses for mapping %X -> %X\n", virt_addr, phys_addr);
     }
 
-    // Generate the page table mapping
-    uint64_t pml4_index  = (virt_addr >> 39) & 0x1FF; // 512GB
-    uint64_t pdpte_index = (virt_addr >> 30) & 0x1FF; // 1GB
-    uint64_t pde_index   = (virt_addr >> 21) & 0x1FF; // 2MB
-    uint64_t pte_index   = (virt_addr >> 12) & 0x1FF; // 4KB
-
     for (size_t i = 0; i < page_count; i++) {
+        // Generate the page table mapping
+        uint64_t pml4_index  = (virt_addr >> 39) & 0x1FF; // 512GB
+        uint64_t pdpte_index = (virt_addr >> 30) & 0x1FF; // 1GB
+        uint64_t pde_index   = (virt_addr >> 21) & 0x1FF; // 2MB
+        uint64_t pte_index   = (virt_addr >> 12) & 0x1FF; // 4KB
+
         // 512GB
         PageTable* table_l3;
         if (address_space->entries[pml4_index] == 0) {
@@ -121,20 +121,6 @@ static void map_pages(PageTableContext* ctx, uint64_t virt_addr, uint64_t phys_a
         table_l1->entries[pte_index] = (phys_addr & 0xFFFFFFFFF000) | 3;
         phys_addr += PAGE_SIZE;
         virt_addr += PAGE_SIZE;
-
-        pte_index++;
-        if (pte_index >= 512) {
-            pte_index = 0;
-            pde_index++;
-            if (pde_index >= 512) {
-                pde_index = 0;
-                pdpte_index++;
-                if (pdpte_index >= 512) {
-                    pdpte_index = 0;
-                    pml4_index++;
-                }
-            }
-        }
     }
 }
 
@@ -459,6 +445,25 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         }
     }
 
+    uintptr_t tss_ptr = (uintptr_t) &boot_info.tss[0];
+
+    uint64_t tss[2] = {
+        //  access    limit
+        //    VV        VV
+        0x0000890000000068 | ((tss_ptr & 0xFFFFFF) << 16) | (((tss_ptr >> 24) & 0xF) << 56),
+        (tss_ptr >> 32ull),
+    };
+
+    // set IST1, when an interrupt happens we'll be using this as the kernel
+    // stack.
+    boot_info.tss[0x24 / 4] = ((uintptr_t) kstack_end);
+    boot_info.tss[0x28 / 4] = ((uintptr_t) kstack_end) >> 32;
+
+    #if 0
+    printf("TSS descriptor:\n");
+    memdump(tss, 16);
+    #endif
+
     printf("Jumping to the kernel: %X\n", kernel_module.entry_addr);
     boot_info.kernel_virtual_used = kernel_module.virt_base;
     boot_info.elf_physical_ptr = kernel_module.phys_base;
@@ -470,6 +475,6 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     // transition to kernel page table
     asm volatile("movq %0, %%cr3" ::"r" (boot_info.kernel_pml4) : "memory");
 
-    ((LoaderFunction) kernel_module.entry_addr)(&boot_info, kstack_end);
+    ((LoaderFunction) kernel_module.entry_addr)(&boot_info, kstack_end, tss[0], tss[1]);
     return 0;
 }

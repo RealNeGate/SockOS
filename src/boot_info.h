@@ -15,6 +15,14 @@ typedef struct {
     uint64_t entries[512];
 } PageTable;
 
+enum {
+    KERNEL_CS  = 0x08,
+    KERNEL_DS  = 0x10,
+    USER_CS    = 0x18,
+    USER_DS    = 0x20,
+    TSS        = 0x28,
+};
+
 typedef enum {
     MEM_REGION_USABLE,
     MEM_REGION_RESERVED,
@@ -45,17 +53,21 @@ typedef struct {
 // This is all the crap we throw into the loader
 typedef struct {
     PageTable* kernel_pml4; // identity mapped
-    void*      rsdp;
+    uint8_t* kernel_stack;
 
+    void* rsdp;
     MemMap mem_map;
 
     uintptr_t elf_physical_ptr;
-    uint8_t* kernel_stack;
 
     // the kernel virtual memory is allocated
     // with a simple bump allocator
     size_t kernel_virtual_used;
     Framebuffer fb;
+
+    // This is initialized by the kernel but put into
+    // place by the boot EFI
+    uint32_t tss[26];
 } BootInfo;
 
 // loader.asm & irq.asm needs these to be here

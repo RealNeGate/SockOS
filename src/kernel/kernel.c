@@ -4,7 +4,7 @@
 #include <elf.h>
 #include "font.h"
 
-BootInfo boot_info;
+BootInfo* boot_info;
 static uint16_t cursor;
 
 static void put_char(int ch);
@@ -94,8 +94,8 @@ static void put_char(int ch) {
 }
 
 static void draw_sprite(uint32_t color, int ch) {
-    int columns = (boot_info.fb.width - 16) / 16;
-    int rows = (boot_info.fb.height - 16) / 16;
+    int columns = (boot_info->fb.width - 16) / 16;
+    int rows = (boot_info->fb.height - 16) / 16;
 
     int x = (cursor % columns) * 16;
     int y = (cursor / columns) * 16;
@@ -105,7 +105,7 @@ static void draw_sprite(uint32_t color, int ch) {
     for (size_t yy = 0; yy < 16; yy++) {
         for (size_t xx = 0; xx < 16; xx++) {
             if (bitmap[yy / 2] & (1 << (xx / 2))) {
-                boot_info.fb.pixels[(8 + x + xx) + ((8 + y + yy) * boot_info.fb.stride)] = color;
+                boot_info->fb.pixels[(8 + x + xx) + ((8 + y + yy) * boot_info->fb.stride)] = color;
             }
         }
     }
@@ -218,7 +218,7 @@ static void kprintf(char *fmt, ...) {
 
 void foobar(void) {
     for (size_t i = 500; i < 1000; i++) {
-        boot_info.fb.pixels[i] = 0xFF00FFFF;
+        boot_info->fb.pixels[i] = 0xFF00FFFF;
     }
 }
 
@@ -255,46 +255,24 @@ extern                              const uint8_t incbin_ ## name ## _end[]
 INCBIN(test_program, "test.elf");
 
 void kmain(BootInfo* restrict info) {
-    boot_info = *info;
+    boot_info = info;
 	kprintf("Beginning kernel boot...\n");
 
     // Draw fancy background
-    uint64_t gradient_x = (boot_info.fb.width + 255) / 256;
-    uint64_t gradient_y = (boot_info.fb.height + 255) / 256;
+    uint64_t gradient_x = (boot_info->fb.width + 255) / 256;
+    uint64_t gradient_y = (boot_info->fb.height + 255) / 256;
 
-    for (size_t j = 0; j < boot_info.fb.height; j++) {
+    for (size_t j = 0; j < boot_info->fb.height; j++) {
         uint32_t g = ((j / gradient_y) / 2) + 0x7F;
 
-        for (size_t i = 0; i < boot_info.fb.width; i++) {
+        for (size_t i = 0; i < boot_info->fb.width; i++) {
             uint32_t b = ((i / gradient_x) / 2) + 0x7F;
 
-            boot_info.fb.pixels[i + (j * boot_info.fb.stride)] = 0xFF000000 | (g << 16) | (b << 8);
+            boot_info->fb.pixels[i + (j * boot_info->fb.stride)] = 0xFF000000 | (g << 16) | (b << 8);
         }
     }
 
-    MemMap mem_map = info->mem_map;
-    FOREACH_N(i, 0, mem_map.nregions) {
-        MemRegion region = mem_map.regions[i];
-        if(region.type == MEM_REGION_USABLE) {
-            continue;
-        }
-
-        uint64_t vaddr = region.base;
-        PageInfo page = get_page_info(info->kernel_pml4, vaddr);
-        if(!page.present) {
-            kprintf("%p -> <not mapped>\n", vaddr);
-        } else {
-            char flags[8] = {'r', '-', 'x', 's', '-', '-', 0};
-            if(page.write)    flags[1] = 'w';
-            if(page.nex)      flags[2] = '-';
-            if(page.user)     flags[3] = 'u';
-            if(page.accessed) flags[4] = 'a';
-            if(page.dirty)    flags[5] = 'd';
-            kprintf("%p -> %p [%s]\n", vaddr, page.paddr, flags);
-        }
-    }
-
-    init_physical_page_alloc(&mem_map);
+    init_physical_page_alloc(&info->mem_map);
 
     #if 0
     kprintf("%p\n", alloc_physical_page());
@@ -311,11 +289,7 @@ void kmain(BootInfo* restrict info) {
     kprintf("%p\n", alloc_physical_page());
     #endif
 
-    /*MemRegion* mine = &info->mem_regions[largest_mem_region];
-    kprintf("%x - %x", mine->base, mine->base + (mine->pages * 4096) - 1);
-    kprintf("%x", sizeof(BitmapAllocPage));*/
-
-    parse_acpi(boot_info.rsdp);
+    parse_acpi(boot_info->rsdp);
 
     // interrupts
     threads_init();

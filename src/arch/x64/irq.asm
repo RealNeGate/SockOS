@@ -36,6 +36,7 @@ isr%1:
 %endmacro
 
 DEFINE_INT 3
+DEFINE_INT 6
 DEFINE_ERR 8
 DEFINE_INT 9
 DEFINE_ERR 13
@@ -78,7 +79,8 @@ asm_int_handler:
 
     ; switch to kernel PML4
     mov rsi, cr3
-    mov rax, [boot_info + 0]
+    mov rax, [boot_info]
+    mov rax, [rax + 0]
     mov cr3, rax
 
     ; fxsave needs to be aligned to 16bytes

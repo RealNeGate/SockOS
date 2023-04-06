@@ -121,12 +121,12 @@ static void identity_map_kernel_region(PageTable* address_space, void* p, size_t
 
     // relocate higher half addresses to the ELF in physical memory
     if (x >= 0xFFFFFFFF80000000ull) {
-        uintptr_t delta = 0xFFFFFFFF80000000ull - boot_info.elf_physical_ptr;
+        uintptr_t delta = 0xFFFFFFFF80000000ull - boot_info->elf_physical_ptr;
         x -= delta;
     }
 
     kprintf("identity map %p => %p (%d)\n", (uintptr_t) p, x, size);
-    memmap__view(address_space, x, ((uintptr_t) p) & ~0xFFF, size);
+    memmap__view(address_space, x, ((uintptr_t) p) & ~0xFFF, size, PAGE_WRITE);
 }
 
 // this is the trusted ELF loader for priveleged programs, normal apps will probably
@@ -143,7 +143,9 @@ Threadgroup* threadgroup_spawn(const uint8_t* program, size_t program_size, Thre
     extern void asm_int_handler(void);
     identity_map_kernel_region(group->address_space, &asm_int_handler, 4096);
     identity_map_kernel_region(group->address_space, (void*) &_idt[0], sizeof(_idt));
-    identity_map_kernel_region(group->address_space, boot_info.kernel_stack, KERNEL_STACK_SIZE);
+    identity_map_kernel_region(group->address_space, boot_info->kernel_stack, KERNEL_STACK_SIZE);
+    identity_map_kernel_region(group->address_space, boot_info, sizeof(BootInfo));
+    identity_map_kernel_region(group->address_space, &boot_info, sizeof(BootInfo*));
 
     ////////////////////////////////
     // find program bounds
@@ -172,11 +174,14 @@ Threadgroup* threadgroup_spawn(const uint8_t* program, size_t program_size, Thre
         return NULL;
     }
 
-    memmap__view(group->address_space, (uintptr_t) dst, image_base, (image_size + 0xFFF) / 4096);
+    memmap__view(group->address_space, (uintptr_t) dst, image_base, image_size, PAGE_USER | PAGE_WRITE);
 
     ////////////////////////////////
     // map segments
     ////////////////////////////////
+    size_t segment_header_bounds = elf_header->e_phoff + elf_header->e_phnum*segment_size;
+    kassert(segment_header_bounds < program_size, "segments do not fit into file");
+
     FOREACH_N(i, 0, elf_header->e_phnum) {
         Elf64_Phdr* segment = (Elf64_Phdr*) (segments + i*segment_size);
         if (segment->p_type != PT_LOAD) continue;
@@ -186,10 +191,12 @@ Threadgroup* threadgroup_spawn(const uint8_t* program, size_t program_size, Thre
         kassert((segment->p_align & (segment->p_align - 1)) == 0, "alignment is not a power-of-two");
 
         uintptr_t vaddr = segment->p_vaddr;
-        const uint8_t* src = program + segment->p_offset;
 
         // map file contents
         if (segment->p_filesz) {
+            kassert(segment->p_offset + segment->p_filesz < program_size, "segment contents out of bounds");
+
+            const uint8_t* src = program + segment->p_offset;
             memcpy(dst + vaddr, src, segment->p_filesz);
         }
 
@@ -201,9 +208,9 @@ Threadgroup* threadgroup_spawn(const uint8_t* program, size_t program_size, Thre
 
     // tiny i know
     void* physical_stack = alloc_physical_page();
-    memmap__view(group->address_space, (uintptr_t) physical_stack, 0xA0000000, 4096);
+    memmap__view(group->address_space, (uintptr_t) physical_stack, 0xA0000000, 4096, PAGE_USER | PAGE_WRITE);
 
-    *root_thread = thread_create(group, (ThreadEntryFn*) (image_base + elf_header->e_entry), 0xA0000000, 4096, false);
+    *root_thread = thread_create(group, (ThreadEntryFn*) (image_base + elf_header->e_entry), 0xA0000000, 4096, true);
     return group;
 }
 

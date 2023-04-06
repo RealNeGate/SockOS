@@ -86,28 +86,14 @@ static volatile void* mmio_reg(volatile void* base, ptrdiff_t offset) {
     return ((volatile char*)base) + offset;
 }
 
-#define SET_INTERRUPT(num) do {                         \
+#define SET_INTERRUPT(num, has_error) do {              \
     extern void isr ## num();                           \
     uintptr_t callback_addr = (uintptr_t) &isr ## num;  \
     _idt[num] = (IDTEntry){                             \
         .offset_1 = callback_addr & 0xFFFF,             \
         .selector = 0x08,                               \
-        .ist = 0,                                       \
-        .type_attr = 0x8E,                              \
-        .offset_2 = (callback_addr >> 16) & 0xFFFF,     \
-        .offset_3 = (callback_addr >> 32) & 0xFFFFFFFF, \
-        .reserved = 0,                                  \
-    };                                                  \
-} while (0)
-
-#define SET_EXCEPTION(num) do {                         \
-    extern void isr ## num();                           \
-    uintptr_t callback_addr = (uintptr_t) &isr ## num;  \
-    _idt[num] = (IDTEntry){                             \
-        .offset_1 = callback_addr & 0xFFFF,             \
-        .selector = 0x08,                               \
-        .ist = 0,                                       \
-        .type_attr = 0x8F,                              \
+        .ist = 1,                                       \
+        .type_attr = (has_error) ? 0x8F : 0x8E,         \
         .offset_2 = (callback_addr >> 16) & 0xFFFF,     \
         .offset_3 = (callback_addr >> 32) & 0xFFFFFFFF, \
         .reserved = 0,                                  \
@@ -116,28 +102,28 @@ static volatile void* mmio_reg(volatile void* base, ptrdiff_t offset) {
 
 void irq_startup(void) {
     FOREACH_N(i, 0, 256) _idt[i] = (IDTEntry){ 0 };
-    SET_INTERRUPT(3);
-    SET_EXCEPTION(8);
-    SET_INTERRUPT(9);
-    SET_EXCEPTION(13);
-    SET_EXCEPTION(14);
-
-    SET_INTERRUPT(32);
-    SET_INTERRUPT(33);
-    SET_INTERRUPT(34);
-    SET_INTERRUPT(35);
-    SET_INTERRUPT(36);
-    SET_INTERRUPT(37);
-    SET_INTERRUPT(38);
-    SET_INTERRUPT(39);
-    SET_INTERRUPT(40);
-    SET_INTERRUPT(41);
-    SET_INTERRUPT(42);
-    SET_INTERRUPT(43);
-    SET_INTERRUPT(44);
-    SET_INTERRUPT(45);
-    SET_INTERRUPT(46);
-    SET_INTERRUPT(47);
+    SET_INTERRUPT(3,  false);
+    SET_INTERRUPT(6,  false);
+    SET_INTERRUPT(8,  true);
+    SET_INTERRUPT(9,  false);
+    SET_INTERRUPT(13, true);
+    SET_INTERRUPT(14, true);
+    SET_INTERRUPT(32, false);
+    SET_INTERRUPT(33, false);
+    SET_INTERRUPT(34, false);
+    SET_INTERRUPT(35, false);
+    SET_INTERRUPT(36, false);
+    SET_INTERRUPT(37, false);
+    SET_INTERRUPT(38, false);
+    SET_INTERRUPT(39, false);
+    SET_INTERRUPT(40, false);
+    SET_INTERRUPT(41, false);
+    SET_INTERRUPT(42, false);
+    SET_INTERRUPT(43, false);
+    SET_INTERRUPT(44, false);
+    SET_INTERRUPT(45, false);
+    SET_INTERRUPT(46, false);
+    SET_INTERRUPT(47, false);
 
     irq_disable_pic();
 
@@ -152,7 +138,7 @@ void irq_startup(void) {
 
         // get the address (it's above the 63-12 bits) and identity map it
         apic = (void*) (x & ~0xFFF);
-        if (memmap__view(boot_info.kernel_pml4, (uintptr_t) apic, (uintptr_t) apic, PAGE_SIZE)) {
+        if (memmap__view(boot_info->kernel_pml4, (uintptr_t) apic, (uintptr_t) apic, PAGE_SIZE, PAGE_WRITE)) {
             kprintf("Could not map view of local ACPI!!!\n");
             return;
         }
@@ -178,21 +164,17 @@ void irq_startup(void) {
 }
 
 PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space) {
-    kprintf("int %d: %x\n", state->interrupt_num, state->error);
-    kprintf("  rip=%p rsp=%p\n  ", state->rip, state->rsp);
+    kprintf("int %d: %x (%p)\n", state->interrupt_num, state->error);
+    kprintf("  rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
 
-    #if 0
-    uint8_t* mem = (uint8_t*) state->rip;
-    for (int i = -16; i <= 16; i++) {
-        kprintf("%x ", mem[i]);
-    }
-    kprintf("\n");
-    #endif
+    if (state->interrupt_num == 14) {
+        uint64_t x = x86_get_cr2();
+        uint64_t y = memmap__probe(old_address_space, x);
 
-    // APIC interrupts require an EOI signal to be sent before
-    // another one can come in, it's a little write only register
-    // in the LAPIC.
-    if (state->interrupt_num == 32) {
+        kprintf("  cr2=%p (translated %p)\n", x, y);
+        kprintf("  cr3=%p\n", old_address_space);
+        return old_address_space;
+    } else if (state->interrupt_num == 32) {
         Thread* next = threads_try_switch();
         kassert(next, "threads_try_switch failed to decide");
 
@@ -209,7 +191,9 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space) {
             threads_current = next;
         }
 
-        // acknowledge timer
+        // APIC interrupts require an EOI signal to be sent before
+        // another one can come in, it's a little write only register
+        // in the LAPIC.
         APIC(0xB0) = 0;
 
         return next->parent->address_space;
@@ -219,13 +203,18 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space) {
 }
 
 CPUState new_thread_state(void* entrypoint, uintptr_t stack, size_t stack_size, bool is_user) {
-    // the stack will grow downwards
-    uintptr_t stack_top = stack + stack_size;
-    kprintf("stack_top=%p\n", stack_top);
-
-    // the other registers are zeroed by default
-    return (CPUState){
-        .rip = (uintptr_t) entrypoint, .rsp = stack_top,
-        .flags = 0x200, .cs = is_user ? 0x18 : 0x08, .ss = is_user ? 0x20 : 0x10,
+    // the stack will grow downwards.
+    // the other registers are zeroed by default.
+    CPUState s = {
+        .rip = (uintptr_t) entrypoint, .rsp = stack + stack_size,
+        .flags = 0x200, .cs = 0x08, .ss = 0x10,
     };
+
+    if (is_user) {
+        // |3 is for adding the requested privelege level (RPL) to the selectors
+        s.cs = USER_CS | 3;
+        s.ss = USER_DS | 3;
+    }
+
+    return s;
 }

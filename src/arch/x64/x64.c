@@ -10,6 +10,18 @@ typedef struct CPUState {
     uint64_t rip, cs, flags, rsp, ss;
 } CPUState;
 
+static inline uint64_t x86_get_cr2(void) {
+    uint64_t result;
+    asm volatile ("movq %%cr2, %q0" : "=a" (result));
+    return result;
+}
+
+static inline PageTable* x86_get_cr3(void) {
+    uint64_t result;
+    asm volatile ("movq %%cr3, %q0" : "=a" (result));
+    return (PageTable*) result;
+}
+
 // IO Ports on x86
 static inline uint8_t io_in8(uint16_t port) {
     uint8_t value;
