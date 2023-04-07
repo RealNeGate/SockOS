@@ -11,6 +11,7 @@ static void put_char(int ch);
 static void put_string(const char* str);
 static void put_number(uint64_t x, uint8_t base);
 static void kprintf(char *fmt, ...);
+static void kernel_halt(void);
 
 #define kassert(cond, ...) ((cond) ? 0 : (kprintf("%s:%d: assertion failed!\n  %s\n  ", __FILE__, __LINE__, #cond), kprintf(__VA_ARGS__), __builtin_trap()))
 #define panic(...) (kprintf("%s:%d: panic!\n", __FILE__, __LINE__), kprintf(__VA_ARGS__), __builtin_trap())
@@ -29,6 +30,7 @@ static void kprintf(char *fmt, ...);
 #include "arch/x64/acpi.c"
 #include "arch/x64/mem.c"
 #include "arch/x64/irq.c"
+#include "arch/x64/syscall.c"
 #endif
 
 // components which depend on architecture stuff
@@ -243,6 +245,14 @@ extern __attribute__((aligned(16))) const uint8_t incbin_ ## name ## _start[]; \
 extern                              const uint8_t incbin_ ## name ## _end[]
 
 INCBIN(test_program, "test2.elf");
+
+static void kernel_halt(void) {
+    // TODO(NeGate): we should add some key to spawn a shell once we have that
+    kprintf("No tasks running...\n");
+
+    // wait forever
+    halt();
+}
 
 void kmain(BootInfo* restrict info) {
     boot_info = info;

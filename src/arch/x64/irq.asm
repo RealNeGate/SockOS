@@ -8,7 +8,8 @@ global asm_int_handler
 global syscall_handler
 
 extern irq_int_handler
-extern do_syscall
+extern syscall_table_count
+extern syscall_table
 extern boot_info
 
 section .text
@@ -127,6 +128,10 @@ asm_int_handler:
 ; RCX - return address
 ; R11 - original RFLAGS
 syscall_handler:
+    ; early out on >256 syscall numbers
+    cmp rax, [syscall_table_count]
+    jae .bad_syscall
+
     ; disable interrupts
     cli
 
@@ -165,19 +170,25 @@ syscall_handler:
     push r14
     push r15
 
+    ; call into syscall table
+    lea rcx, syscall_table
+    mov rcx, [rcx + rax*8]
+    test rcx, rcx
+    jz .no_syscall
+.has_syscall:
     ; switch to kernel PML4
     mov rsi, cr3
-    mov rax, [boot_info]
-    mov rax, [rax + 0]
-    mov cr3, rax
+    mov rdx, [boot_info]
+    mov rdx, [rdx + 0]
+    mov cr3, rdx
 
-    ; run C syscall stuff
+    ; run C syscall stuff & preserve old address space (in callee saved reg)
     mov rdi, rsp
-    call do_syscall
+    call rcx
 
-    ; switch to whichever address space we returned
+    ; switch to new address space
     mov cr3, rax
-
+.no_syscall:
     pop r15
     pop r14
     pop r13
@@ -206,3 +217,35 @@ syscall_handler:
     ; we're using the 64bit sysret
     db 0x48
     sysret
+.bad_syscall:
+    mov rax, -1
+    ; we're using the 64bit sysret
+    db 0x48
+    sysret
+
+; RDI - CPUState*
+; RSI - PageTable*
+do_context_switch:
+    ; switch to new address space
+    mov cr3, rax
+
+    ; use CPUState as the stack
+    mov rsp, rdi
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rbp
+    pop rbx
+    pop rdx
+    pop rcx
+    pop rax
+
+    add rsp, 16 ; pop interrupt_num and error code
+    iretq

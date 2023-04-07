@@ -1,6 +1,4 @@
 
-#include "x64.c"
-
 #define PIC1_COMMAND 0x20
 #define PIC1_DATA    0x21
 #define PIC2_COMMAND 0xA0
@@ -47,6 +45,7 @@ volatile uint32_t* apic;
 
 // in irq.asm
 extern void syscall_handler(void);
+extern void do_context_switch(CPUState* state, PageTable* address_space);
 
 // this is where all interrupts get pointed to, from there it's redirected to irq_int_handler
 extern void isr_handler(void);
@@ -56,6 +55,8 @@ extern void irq_disable(void);
 extern void isr3(void);
 
 volatile IDTEntry _idt[256];
+
+CPUState new_thread_state(void* entrypoint, uintptr_t stack, size_t stack_size, bool is_user);
 
 static void irq_disable_pic(void) {
     // set ICW1
@@ -200,7 +201,11 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space) {
         return old_address_space;
     } else if (state->interrupt_num == 32) {
         Thread* next = threads_try_switch();
-        kassert(next, "threads_try_switch failed to decide");
+        if (next == NULL) {
+            // return to kernel halting thread
+            *state = new_thread_state(kernel_halt, (uintptr_t) boot_info->main_cpu.kernel_stack, KERNEL_STACK_SIZE, false);
+            return boot_info->kernel_pml4;
+        }
 
         // do thread context switch, if we changed
         if (threads_current != next) {

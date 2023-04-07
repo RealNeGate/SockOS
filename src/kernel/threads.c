@@ -17,18 +17,37 @@ struct Thread {
 
     CPUState state;
 
-    // TODO(NeGate): we're missing quite a bit here
-    // * priorities
-    // * scheduling statuses
+    // scheduling
+    Thread* prev_in_schedule;
+    Thread* next_in_schedule;
 };
 
+_Atomic int threads_lock;
 Thread* threads_current = NULL;
+Thread* threads_first_in_schedule = NULL;
+
+void spin_lock(_Atomic(int)* lock);
+void spin_unlock(_Atomic(int)* lock);
+
+Threadgroup* threadgroup_create(void);
+void threadgroup_kill(Threadgroup* group);
+
+Thread* thread_create(Threadgroup* group, ThreadEntryFn* entrypoint, uintptr_t stack, size_t stack_size, bool is_user);
+void thread_kill(Thread* thread);
+
 Thread* threads_try_switch(void);
 
 #else
 
-static uint64_t threads_count;
-static Thread threads[256];
+void spin_lock(_Atomic(int)* lock) {
+    // we shouldn't be spin locking...
+    int old = 0;
+    while (atomic_compare_exchange_strong(lock, &old, 1)) {}
+}
+
+void spin_unlock(_Atomic(int)* lock) {
+    atomic_exchange(lock, 0);
+}
 
 void threads_init(void) {
 }
@@ -43,18 +62,23 @@ Threadgroup* threadgroup_create(void) {
     return group;
 }
 
-void threadgroup_lock(Threadgroup* group) {
-    // we shouldn't be spin locking...
-    int old = 0;
-    while (atomic_compare_exchange_strong(&group->lock, &old, 1)) {}
-}
+void threadgroup_kill(Threadgroup* group) {
+    // kill all it's threads
+    spin_lock(&group->lock);
+    for (Thread* t = group->first_in_group; t != NULL; t = t->next_in_group) {
+        // we don't want to have thread_kill handle removing from the group because we're
+        // potentially doing a lot of removals and we can do that with two NULL pointer stores
+        // later.
+        t->parent = NULL;
+        thread_kill(t);
+    }
 
-void threadgroup_unlock(Threadgroup* group) {
-    atomic_exchange(&group->lock, 0);
+    group->first_in_group = group->last_in_group = NULL;
+    spin_unlock(&group->lock);
 }
 
 Thread* thread_create(Threadgroup* group, ThreadEntryFn* entrypoint, uintptr_t stack, size_t stack_size, bool is_user) {
-    Thread* new_thread = &threads[threads_count++];
+    Thread* new_thread = alloc_physical_page();
     *new_thread = (Thread){
         .parent = group,
 
@@ -64,7 +88,7 @@ Thread* thread_create(Threadgroup* group, ThreadEntryFn* entrypoint, uintptr_t s
 
     // attach to threadgroup
     if (group != NULL) {
-        threadgroup_lock(group);
+        spin_lock(&group->lock);
         if (group->first_in_group == NULL) {
             group->first_in_group = new_thread;
         }
@@ -78,42 +102,69 @@ Thread* thread_create(Threadgroup* group, ThreadEntryFn* entrypoint, uintptr_t s
         }
 
         group->last_in_group = new_thread;
-        threadgroup_unlock(group);
+        spin_unlock(&group->lock);
+    }
+
+    // put into schedule
+    if (threads_first_in_schedule != NULL) {
+        threads_first_in_schedule = new_thread;
+    } else {
+        new_thread->next_in_schedule = threads_first_in_schedule;
+        threads_first_in_schedule->prev_in_group = new_thread;
+        threads_first_in_schedule = new_thread;
     }
 
     return new_thread;
 }
 
-void threads_kill(Thread* thread) {
+void thread_kill(Thread* thread) {
+    free_physical_page(thread);
+
+    // remove from schedule
+    spin_lock(&threads_lock);
+    if (thread->prev_in_schedule != NULL) {
+        thread->prev_in_schedule->next_in_schedule = thread->next_in_schedule;
+    } else {
+        threads_first_in_schedule = thread->next_in_schedule;
+    }
+    spin_lock(&threads_lock);
+
+    // remove from group
     Threadgroup* group = thread->parent;
-    threadgroup_lock(group);
+    if (group != NULL) {
+        spin_lock(&group->lock);
 
-    // remove
-    Thread* prev = thread->prev_in_group;
-    Thread* next = thread->next_in_group;
-    if (prev == NULL) {
-        group->first_in_group = next;
-    } else {
-        prev->next_in_group = next;
+        Thread* prev = thread->prev_in_group;
+        Thread* next = thread->next_in_group;
+        if (prev == NULL) {
+            group->first_in_group = next;
+        } else {
+            prev->next_in_group = next;
+        }
+
+        if (next == NULL) {
+            group->last_in_group = prev;
+        } else {
+            next->prev_in_group = prev;
+        }
+
+        // unlock threadgroup
+        spin_unlock(&group->lock);
     }
-
-    if (next == NULL) {
-        group->last_in_group = prev;
-    } else {
-        next->prev_in_group = prev;
-    }
-
-    // unlock threadgroup
-    threadgroup_unlock(group);
 }
 
 Thread* threads_try_switch(void) {
+    // first task to run
     if (threads_current == NULL) {
-        return &threads[0];
+        return threads_first_in_schedule;
     }
 
-    int id = ((threads_current - threads) + 1) % threads_count;
-    return &threads[id];
+    // run next task... until we run out, then return to the start
+    if (threads_current->next_in_schedule == NULL) {
+        return threads_first_in_schedule;
+    }
+
+    return threads_current->next_in_schedule;
 }
 
 static void identity_map_kernel_region(PageTable* address_space, void* p, size_t size) {
