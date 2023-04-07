@@ -217,10 +217,6 @@ static PageTable* get_or_alloc_pt(PageTable* parent, size_t index, int depth, Pa
     return new_pt;
 }
 
-static inline void __native_flush_tlb_single(unsigned long addr) {
-    asm volatile("invlpg (%0)" ::"r" (addr) : "memory");
-}
-
 // Identity map
 static Result memmap__view(PageTable* address_space, uintptr_t phys_addr, uintptr_t virt_addr, size_t size, PageFlags flags) {
     size_t page_count = (size + PAGE_SIZE - 1) / PAGE_SIZE;
@@ -236,7 +232,7 @@ static Result memmap__view(PageTable* address_space, uintptr_t phys_addr, uintpt
         size_t pte_index = (virt_addr >> 12) & 0x1FF; // 4KiB
 
         table_l1->entries[pte_index] = (phys_addr & 0xFFFFFFFFF000) | flags | PAGE_PRESENT;
-        __native_flush_tlb_single(virt_addr);
+        x86_invalidate_page(virt_addr);
 
         virt_addr += PAGE_SIZE, phys_addr += PAGE_SIZE;
     }

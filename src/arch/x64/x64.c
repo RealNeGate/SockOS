@@ -12,6 +12,10 @@ typedef struct CPUState {
     u64 rip, cs, flags, rsp, ss;
 } CPUState;
 
+static inline void x86_invalidate_page(unsigned long addr) {
+    asm volatile("invlpg (%0)" ::"r" (addr) : "memory");
+}
+
 static inline u64 x86_get_cr2(void) {
     u64 result;
     asm volatile ("movq %%cr2, %q0" : "=a" (result));

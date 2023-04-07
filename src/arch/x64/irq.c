@@ -174,10 +174,10 @@ void irq_startup(void) {
         __writemsr(IA32_EFER, x | 1);
         // the location where syscall will throw the user to
         __writemsr(IA32_LSTAR, (uintptr_t) &syscall_handler);
-        // syscall's code segment
-        _Static_assert(KERNEL_CS + 8  == KERNEL_DS, "the data segment is implied to be 8 byte ahead... fix it");
-        _Static_assert(0x10      + 16 == USER_CS,  "SYSRET expectations");
-        _Static_assert(0x10      + 8  == USER_DS,  "SYSRET expectations");
+        // syscall and sysret segments
+        _Static_assert(KERNEL_CS + 8  == KERNEL_DS, "SYSCALL expectations");
+        _Static_assert(0x10      + 16 == USER_CS,   "SYSRET expectations");
+        _Static_assert(0x10      + 8  == USER_DS,   "SYSRET expectations");
         __writemsr(IA32_STAR, ((u64)KERNEL_CS << 32ull) | (0x10ull << 48ull));
 
         // we're storing the per_cpu info here, syscall will use this
@@ -198,7 +198,7 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space) {
 
         kprintf("  cr2=%p (translated %p)\n", x, y);
         kprintf("  cr3=%p\n", old_address_space);
-       
+
         // TODO: Only do this for kernel shit.. Signal for userspace fails
         // return to kernel halting thread
         *state = new_thread_state(kernel_halt, (uintptr_t) boot_info->main_cpu.kernel_stack, KERNEL_STACK_SIZE, false);
