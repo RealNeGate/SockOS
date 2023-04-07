@@ -1,6 +1,8 @@
 #pragma once
 
 #include <stdint.h>
+#include <cpuid.h>
+#include <common.h>
 
 typedef struct CPUState {
     // uint8_t  fxsave[512 + 16];
@@ -91,4 +93,33 @@ static inline void halt() {
     for(;;) {
         x86_hlt();
     }
+}
+
+static bool has_cpu_support(void) {
+	uint32_t eax, ebx, ecx, edx;
+	__get_cpuid(0x80000000, &eax, &ebx, &ecx, &edx);
+	// Do we have at least the constant TSC page?
+	if (eax < 0x80000007) {
+		return false;
+	}
+
+	return true;
+}
+
+static void cpuid_regcpy(char *buf, uint32_t eax, uint32_t ebx, uint32_t ecx, uint32_t edx) {
+	memcpy(buf + 0,  (char *)&eax, 4);
+	memcpy(buf + 4,  (char *)&ebx, 4);
+	memcpy(buf + 8,  (char *)&ecx, 4);
+	memcpy(buf + 12, (char *)&edx, 4);
+}
+
+static void get_cpu_str(char *str) {
+	uint32_t eax, ebx, ecx, edx;
+	__get_cpuid(0x80000002, &eax, &ebx, &ecx, &edx);
+	cpuid_regcpy(str, eax, ebx, ecx, edx);
+	__get_cpuid(0x80000003, &eax, &ebx, &ecx, &edx);
+	cpuid_regcpy(str+16, eax, ebx, ecx, edx);
+	__get_cpuid(0x80000004, &eax, &ebx, &ecx, &edx);
+	cpuid_regcpy(str+32, eax, ebx, ecx, edx);
+	return;
 }

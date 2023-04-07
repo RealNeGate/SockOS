@@ -1,44 +1,65 @@
 typedef struct __attribute__((packed)) {
-    char     signature[8];
-    uint8_t  checksum;
-    char     oem_id[6];
-    uint8_t  revision;
-    uint32_t rsdt_addr;
+    char signature[8];
+    u8   checksum;
+    char oem_id[6];
+    u8   revision;
+    u32  rsdt_addr;
 } ACPI_RSDP_Desc;
 
 typedef struct __attribute__((packed)) {
     ACPI_RSDP_Desc rsdp_head;
-    uint32_t length;
-    uint64_t xsdt_addr;
-    uint8_t  extended_checksum;
-    uint8_t  reserved[3];
+    u32            length;
+    u64            xsdt_addr;
+    u8             extended_checksum;
+    u8             reserved[3];
 } ACPI_RSDP_Desc_V2;
 
 typedef struct __attribute__((packed)) {
-    char     signature[4];
-    uint32_t length;
-    uint8_t  revision;
-    uint8_t  checksum;
-    char     oem_id[6];
-    char     oem_table_id[8];
-    uint32_t oem_revision;
-    uint32_t creator_id;
-    uint32_t creator_revision;
+    char signature[4];
+    u32  length;
+    u8   revision;
+    u8   checksum;
+    char oem_id[6];
+    char oem_table_id[8];
+    u32  oem_revision;
+    u32  creator_id;
+    u32  creator_revision;
 } ACPI_SDT_Header;
 
 typedef struct __attribute__((packed)) {
     ACPI_SDT_Header header;
-    uint64_t other_headers[];
+    u64             other_headers[];
 } ACPI_XSDT_Header;
 
 typedef struct __attribute__((packed)) {
-    uint32_t lapic_addr;
-    uint32_t flags;
+    u8  address_space_id;
+    u8  register_bit_width;
+    u8  register_bit_offset;
+    u8  reserved;
+    u64 address;
+} ACPI_HPET_Addr;
+
+typedef struct __attribute__((packed)) {
+	u8  hardware_rev_id;
+    u8  comparator_count: 5;
+    u8  counter_size: 1;
+    u8  reserved: 1;
+    u8  legacy_replacement: 1;
+    u16 pci_vendor_id;
+    ACPI_HPET_Addr address;
+    u8  hpet_number;
+    u16 minimum_tick;
+    u8 page_protection;
+} ACPI_HPET_Header;
+
+typedef struct __attribute__((packed)) {
+    u32 lapic_addr;
+    u32 flags;
 } ACPI_APIC_Header;
 
 typedef struct __attribute__((packed)) {
-    uint8_t type;
-    uint8_t length;
+    u8 type;
+    u8 length;
 } ACPI_APIC_Entry;
 
 typedef enum {
@@ -76,27 +97,29 @@ void parse_acpi(void *rsdp) {
     uint64_t apic_addr = 0;
 
     uint8_t apic_magic[] = {'A', 'P', 'I', 'C' };
+    uint8_t hpet_magic[] = {'H', 'P', 'E', 'T' };
     uint64_t remaining_length = xhead->header.length - sizeof(xhead->header);
     int entries = remaining_length / 8;
     for (int i = 0; i < entries; i++) {
         ACPI_SDT_Header *head = (ACPI_SDT_Header *)xhead->other_headers[i];
 
-        if (!memeq(head->signature, apic_magic, sizeof(apic_magic))) {
-            continue;
-        }
+        if (memeq(head->signature, apic_magic, sizeof(apic_magic))) {
+            char *buf_ptr = (char *)head + sizeof(ACPI_SDT_Header);
+            ACPI_APIC_Header *ahead = (ACPI_APIC_Header *)buf_ptr;
+            apic_addr = ahead->lapic_addr;
 
-        char *buf_ptr = (char *)head + sizeof(ACPI_SDT_Header);
-        ACPI_APIC_Header *ahead = (ACPI_APIC_Header *)buf_ptr;
-        apic_addr = ahead->lapic_addr;
-
-        buf_ptr += sizeof(ACPI_APIC_Header);
-        while (buf_ptr < (char *)(head + sizeof(ACPI_APIC_Header))) {
-            ACPI_APIC_Entry *entry = (ACPI_APIC_Entry *)buf_ptr;
-            if (entry->type == APIC_ENTRY_LAPIC) {
-                core_count += 1;
+            buf_ptr += sizeof(ACPI_APIC_Header);
+            while (buf_ptr < (char *)(head + sizeof(ACPI_APIC_Header))) {
+                ACPI_APIC_Entry *entry = (ACPI_APIC_Entry *)buf_ptr;
+                if (entry->type == APIC_ENTRY_LAPIC) {
+                    core_count += 1;
+                }
+                buf_ptr += entry->length;
             }
-            buf_ptr += entry->length;
-        }
+        } else if (memeq(head->signature, hpet_magic, sizeof(hpet_magic))) {
+
+		}
+
     }
     if (core_count == 0) {
         panic("Invalid core count from ACPI!\n");
