@@ -21,8 +21,8 @@ static void kernel_halt(void);
 #include "print.c"
 
 #ifdef __x86_64__
-#include "arch/x64/acpi.c"
 #include "arch/x64/mem.c"
+#include "arch/x64/acpi.c"
 #include "arch/x64/irq.c"
 #include "arch/x64/syscall.c"
 #endif

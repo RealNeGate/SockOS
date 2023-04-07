@@ -176,7 +176,8 @@ static void identity_map_kernel_region(PageTable* address_space, void* p, size_t
         x -= delta;
     }
 
-    memmap__view(address_space, x, ((uintptr_t) p) & ~0xFFF, size, PAGE_WRITE);
+    uintptr_t base = ((uintptr_t) p) & ~0xFFF;
+    memmap__view(address_space, x, base, size + 4096, PAGE_WRITE);
 }
 
 // this is the trusted ELF loader for priveleged programs, normal apps will probably
@@ -190,11 +191,14 @@ Threadgroup* threadgroup_spawn(const u8* program, size_t program_size, Thread** 
     // identity map essential kernel stuff
     //   * IRQ handler
     extern void asm_int_handler(void);
+    extern void syscall_handler(void);
     identity_map_kernel_region(group->address_space, &asm_int_handler, 4096);
+    identity_map_kernel_region(group->address_space, &syscall_handler, 4096);
     identity_map_kernel_region(group->address_space, (void*) &_idt[0], sizeof(_idt));
     identity_map_kernel_region(group->address_space, boot_info->main_cpu.kernel_stack, KERNEL_STACK_SIZE);
     identity_map_kernel_region(group->address_space, boot_info, sizeof(BootInfo));
     identity_map_kernel_region(group->address_space, &boot_info, sizeof(BootInfo*));
+    identity_map_kernel_region(group->address_space, &syscall_table[0], sizeof(syscall_table));
 
     ////////////////////////////////
     // find program bounds

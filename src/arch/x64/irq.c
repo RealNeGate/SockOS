@@ -198,7 +198,11 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space) {
 
         kprintf("  cr2=%p (translated %p)\n", x, y);
         kprintf("  cr3=%p\n", old_address_space);
-        return old_address_space;
+       
+        // TODO: Only do this for kernel shit.. Signal for userspace fails
+        // return to kernel halting thread
+        *state = new_thread_state(kernel_halt, (uintptr_t) boot_info->main_cpu.kernel_stack, KERNEL_STACK_SIZE, false);
+        return boot_info->kernel_pml4;
     } else if (state->interrupt_num == 32) {
         Thread* next = threads_try_switch();
         if (next == NULL) {
