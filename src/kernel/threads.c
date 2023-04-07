@@ -125,7 +125,6 @@ static void identity_map_kernel_region(PageTable* address_space, void* p, size_t
         x -= delta;
     }
 
-    kprintf("identity map %p => %p (%d)\n", (uintptr_t) p, x, size);
     memmap__view(address_space, x, ((uintptr_t) p) & ~0xFFF, size, PAGE_WRITE);
 }
 
@@ -133,7 +132,6 @@ static void identity_map_kernel_region(PageTable* address_space, void* p, size_t
 // be loaded via a shared object.
 Threadgroup* threadgroup_spawn(const uint8_t* program, size_t program_size, Thread** root_thread) {
     Threadgroup* group = threadgroup_create();
-    kprintf("address=%p\n", group->address_space);
 
     Elf64_Ehdr* elf_header = (Elf64_Ehdr*) program;
     uintptr_t image_base = 0xC0000000;
@@ -143,7 +141,7 @@ Threadgroup* threadgroup_spawn(const uint8_t* program, size_t program_size, Thre
     extern void asm_int_handler(void);
     identity_map_kernel_region(group->address_space, &asm_int_handler, 4096);
     identity_map_kernel_region(group->address_space, (void*) &_idt[0], sizeof(_idt));
-    identity_map_kernel_region(group->address_space, boot_info->kernel_stack, KERNEL_STACK_SIZE);
+    identity_map_kernel_region(group->address_space, boot_info->main_cpu.kernel_stack, KERNEL_STACK_SIZE);
     identity_map_kernel_region(group->address_space, boot_info, sizeof(BootInfo));
     identity_map_kernel_region(group->address_space, &boot_info, sizeof(BootInfo*));
 
@@ -194,7 +192,7 @@ Threadgroup* threadgroup_spawn(const uint8_t* program, size_t program_size, Thre
 
         // map file contents
         if (segment->p_filesz) {
-            kassert(segment->p_offset + segment->p_filesz < program_size, "segment contents out of bounds");
+            kassert(segment->p_offset + segment->p_filesz <= program_size, "segment contents out of bounds (%x + %x < %x)", segment->p_offset, segment->p_filesz, program_size);
 
             const uint8_t* src = program + segment->p_offset;
             memcpy(dst + vaddr, src, segment->p_filesz);

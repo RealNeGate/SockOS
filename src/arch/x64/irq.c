@@ -10,6 +10,12 @@ enum {
     IA32_APIC_BASE = 0x1B,
     IA32_APIC_BASE_MSR_BSP = 0x100, // Processor is a BSP
 
+    // syscall related MSRs
+    IA32_EFER  = 0xC0000080,
+    IA32_STAR  = 0xC0000081,
+    IA32_LSTAR = 0xC0000082,
+    IA32_KERNEL_GS_BASE = 0xC0000102,
+
     // LAPIC interrupts
     INTR_LAPIC_TIMER      = 0xF0,
     INTR_LAPIC_SPURIOUS   = 0xF1,
@@ -38,6 +44,9 @@ volatile IDTEntry _idt[256];
 
 volatile uint32_t* apic;
 #define APIC(reg_num) apic[(reg_num) >> 2]
+
+// in irq.asm
+extern void syscall_handler(void);
 
 // this is where all interrupts get pointed to, from there it's redirected to irq_int_handler
 extern void isr_handler(void);
@@ -93,7 +102,7 @@ static volatile void* mmio_reg(volatile void* base, ptrdiff_t offset) {
         .offset_1 = callback_addr & 0xFFFF,             \
         .selector = 0x08,                               \
         .ist = 1,                                       \
-        .type_attr = (has_error) ? 0x8F : 0x8E,         \
+        .type_attr = 0x8E,                              \
         .offset_2 = (callback_addr >> 16) & 0xFFFF,     \
         .offset_3 = (callback_addr >> 32) & 0xFFFFFFFF, \
         .reserved = 0,                                  \
@@ -155,16 +164,31 @@ void irq_startup(void) {
         //   timer divide reg
         APIC(0x3E0) = 0b1011;
         //   initial timer count
-        APIC(0x380) = 100000;
+        APIC(0x380) = 1000000;
     }
 
-    // asm volatile ("1: jmp 1b");
+    // enable syscall/sysret
+    {
+        uint64_t x = __readmsr(IA32_EFER);
+        __writemsr(IA32_EFER, x | 1);
+        // the location where syscall will throw the user to
+        __writemsr(IA32_LSTAR, (uintptr_t) &syscall_handler);
+        // syscall's code segment
+        _Static_assert(KERNEL_CS + 8  == KERNEL_DS, "the data segment is implied to be 8 byte ahead... fix it");
+        _Static_assert(0x10      + 16 == USER_CS,  "SYSRET expectations");
+        _Static_assert(0x10      + 8  == USER_DS,  "SYSRET expectations");
+        __writemsr(IA32_STAR, ((uint64_t)KERNEL_CS << 32ull) | (0x10ull << 48ull));
+
+        // we're storing the per_cpu info here, syscall will use this
+        __writemsr(IA32_KERNEL_GS_BASE, (uintptr_t) &boot_info->main_cpu);
+    }
+
     IDT idt = { .limit = sizeof(_idt) - 1, .base = (uintptr_t)_idt };
     irq_enable(&idt);
 }
 
 PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space) {
-    kprintf("int %d: %x (%p)\n", state->interrupt_num, state->error);
+    kprintf("int %d: error=%x\n", state->interrupt_num, state->error);
     kprintf("  rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
 
     if (state->interrupt_num == 14) {
@@ -180,7 +204,7 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space) {
 
         // do thread context switch, if we changed
         if (threads_current != next) {
-            kprintf("switch: %p\n", next);
+            // kprintf("switch: %p\n", next);
 
             // if we're switching, save old thread state
             if (threads_current != NULL) {
@@ -200,6 +224,12 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space) {
     } else {
         return old_address_space;
     }
+}
+
+PageTable* do_syscall(CPUState* state, PageTable* old_address_space) {
+    kprintf("syscall%d(0x%x, 0x%x, 0x%x, 0x%x)\n", state->rax, state->rdi, state->rsi, state->rdx, state->r10);
+    // kprintf("  rip=%p, rsp=%p\n", state->rcx, state->rsp);
+    return old_address_space;
 }
 
 CPUState new_thread_state(void* entrypoint, uintptr_t stack, size_t stack_size, bool is_user) {

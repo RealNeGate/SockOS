@@ -18,8 +18,8 @@ typedef struct {
 enum {
     KERNEL_CS  = 0x08,
     KERNEL_DS  = 0x10,
-    USER_CS    = 0x18,
-    USER_DS    = 0x20,
+    USER_DS    = 0x18,
+    USER_CS    = 0x20,
     TSS        = 0x28,
 };
 
@@ -50,10 +50,18 @@ typedef struct {
     MemRegion* regions;
 } MemMap;
 
+typedef struct {
+    // used for interrupts
+    uint8_t* kernel_stack;
+    uint8_t* kernel_stack_top;
+
+    uint8_t* user_stack_scratch;
+} PerCPU;
+
 // This is all the crap we throw into the loader
 typedef struct {
     PageTable* kernel_pml4; // identity mapped
-    uint8_t* kernel_stack;
+    PerCPU main_cpu;
 
     void* rsdp;
     MemMap mem_map;
@@ -72,3 +80,6 @@ typedef struct {
 
 // loader.asm & irq.asm needs these to be here
 _Static_assert(offsetof(BootInfo, kernel_pml4) == 0, "the loader is sad");
+
+_Static_assert(offsetof(PerCPU, kernel_stack_top) == 8, "the irq.asm is sad");
+_Static_assert(offsetof(PerCPU, user_stack_scratch) == 16, "the irq.asm is sad");

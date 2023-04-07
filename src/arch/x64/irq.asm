@@ -5,8 +5,10 @@ global irq_enable
 global irq_disable
 global IDT_Descriptor
 global asm_int_handler
+global syscall_handler
 
 extern irq_int_handler
+extern do_syscall
 extern boot_info
 
 section .text
@@ -60,6 +62,7 @@ DEFINE_INT 47
 DEFINE_INT 112
 asm_int_handler:
     cld
+    cli
 
     push rax
     push rcx
@@ -102,8 +105,6 @@ asm_int_handler:
     ; switch to whichever address space we returned
     mov cr3, rax
 
-    cli
-
     pop r15
     pop r14
     pop r13
@@ -122,3 +123,86 @@ asm_int_handler:
 
     add rsp, 16 ; pop interrupt_num and error code
     iretq
+
+; RCX - return address
+; R11 - original RFLAGS
+syscall_handler:
+    ; disable interrupts
+    cli
+
+    ; preserve old stack, use kernel stack
+    swapgs
+
+    ; save user stack, switch to kernel stack
+    mov gs:[32], rsp
+    mov rsp, gs:[8]
+
+    ; ss, rsp, flags, cs, rip
+    push 0x23         ; ss
+    push qword gs:[32]; user rsp
+    push r11          ; rflags
+    push 0x1B         ; cs
+    push rcx          ; rip
+
+    ; error & interrupt num
+    push 0
+    push 0
+
+    ; save registers
+    push rax
+    push rcx
+    push rdx
+    push rbx
+    push rbp
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+
+    ; switch to kernel PML4
+    mov rsi, cr3
+    mov rax, [boot_info]
+    mov rax, [rax + 0]
+    mov cr3, rax
+
+    ; run C syscall stuff
+    mov rdi, rsp
+    call do_syscall
+
+    ; switch to whichever address space we returned
+    mov cr3, rax
+
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rbp
+    pop rbx
+    pop rdx
+    pop rcx
+    pop rax
+
+    add rsp, 56 ; pop the rest of the CPU state
+
+    ; enable interrupts
+    or r11, 0x200
+
+    ; give the user back his GS and stack
+    mov rsp, gs:[32]
+    swapgs
+
+    ; we're using the 64bit sysret
+    db 0x48
+    sysret

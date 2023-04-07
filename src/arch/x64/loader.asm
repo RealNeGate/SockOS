@@ -56,15 +56,15 @@ gdt64:
     db 0
     dw 0xCF92
     db 0
-.user_code_segment: equ $ - gdt64
-    dd 0xFFFF
-    db 0
-    dw 0xAFFA
-    db 0
 .user_data_segment: equ $ - gdt64
     dd 0xFFFF
     db 0
     dw 0xCFF2
+    db 0
+.user_code_segment: equ $ - gdt64
+    dd 0xFFFF
+    db 0
+    dw 0xAFFA
     db 0
 .tss: equ $ - gdt64
     dq 0x00000000

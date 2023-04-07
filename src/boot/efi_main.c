@@ -446,7 +446,6 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     }
 
     uintptr_t tss_ptr = (uintptr_t) &boot_info.tss[0];
-
     uint64_t tss[2] = {
         //  access    limit
         //    VV        VV
@@ -470,7 +469,8 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     boot_info.fb = fb;
     boot_info.mem_map = mem_map;
     boot_info.kernel_pml4 = &page_tables[0];
-    boot_info.kernel_stack = kstack_base;
+    boot_info.main_cpu.kernel_stack = kstack_base;
+    boot_info.main_cpu.kernel_stack_top = kstack_end;
 
     // transition to kernel page table
     asm volatile("movq %0, %%cr3" ::"r" (boot_info.kernel_pml4) : "memory");

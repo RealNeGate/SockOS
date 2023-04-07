@@ -222,16 +222,6 @@ void foobar(void) {
     }
 }
 
-static int test_thread_a(void* arg) {
-    for (;;) put_char('A');
-    return 0;
-}
-
-static int test_thread_b(void* arg) {
-    for (;;) put_char('B');
-    return 0;
-}
-
 #define STR2(x) #x
 #define STR(x) STR2(x)
 
@@ -252,7 +242,7 @@ __asm__(".section .rodata\n" \
 extern __attribute__((aligned(16))) const uint8_t incbin_ ## name ## _start[]; \
 extern                              const uint8_t incbin_ ## name ## _end[]
 
-INCBIN(test_program, "test.elf");
+INCBIN(test_program, "test2.elf");
 
 void kmain(BootInfo* restrict info) {
     boot_info = info;
@@ -296,7 +286,5 @@ void kmain(BootInfo* restrict info) {
 
     // Threadgroup* toy_process;
     threadgroup_spawn(incbin_test_program_start, incbin_test_program_end - incbin_test_program_start, NULL);
-
     irq_startup();
-    for(;;) {}
 }

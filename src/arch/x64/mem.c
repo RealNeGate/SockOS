@@ -161,7 +161,10 @@ static void* alloc_physical_pages(size_t num_pages) {
                 if (p->used[index2 / 64] & mask) goto bad_region;
             }
 
-            mark_bitmap_alloc_page(p, index);
+            // mark pages
+            FOREACH_N(j, 0, num_pages) {
+                mark_bitmap_alloc_page(p, index + j);
+            }
 
             // zero pages here to avoid problems everywhere else
             char* result = ((char*) p) + ((index+1) * PAGE_SIZE);
