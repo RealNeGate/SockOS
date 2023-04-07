@@ -20,17 +20,17 @@ typedef struct BitmapAllocPage BitmapAllocPage;
 typedef struct BitmapAllocPageHeader {
     BitmapAllocPage* next;
     // we just track the popcount
-    uint32_t popcount, cap;
+    u32 popcount, cap;
 } BitmapAllocPageHeader;
 
 enum {
-    BITMAP_ALLOC_WORD_CAP = (PAGE_SIZE - sizeof(BitmapAllocPageHeader)) / sizeof(uint64_t),
+    BITMAP_ALLOC_WORD_CAP = (PAGE_SIZE - sizeof(BitmapAllocPageHeader)) / sizeof(u64),
     BITMAP_ALLOC_PAGES_COVERED = BITMAP_ALLOC_WORD_CAP * 64,
 };
 
 struct BitmapAllocPage {
     BitmapAllocPageHeader header;
-    uint64_t used[BITMAP_ALLOC_WORD_CAP];
+    u64 used[BITMAP_ALLOC_WORD_CAP];
 };
 _Static_assert(sizeof(BitmapAllocPage) == 4096, "BitmapAllocPage must be a page big");
 
@@ -156,7 +156,7 @@ static void* alloc_physical_pages(size_t num_pages) {
             // check for sequential pages
             FOREACH_N(j, 1, num_pages) {
                 size_t index2 = index + j;
-                uint64_t mask = (1u << (index2 % 64));
+                u64 mask = (1u << (index2 % 64));
 
                 if (p->used[index2 / 64] & mask) goto bad_region;
             }
@@ -185,13 +185,13 @@ static void free_physical_page(const void* ptr) {
     kassert(p != NULL, "attempt to free non-allocated page");
 
     size_t page_index = (((char*) ptr - (char*) p) / PAGE_SIZE) - 1;
-    uint64_t mask = 1ull << (page_index % 64);
+    u64 mask = 1ull << (page_index % 64);
 
     kassert(p->used[page_index / 64] & mask, "double free?");
     p->used[page_index / 64] &= ~mask;
 }
 
-static uint64_t canonical_addr(uint64_t ptr) {
+static u64 canonical_addr(u64 ptr) {
     return (ptr >> 48) != 0 ? ptr | (0xFFFull << 48) : ptr;
 }
 
@@ -213,7 +213,7 @@ static PageTable* get_or_alloc_pt(PageTable* parent, size_t index, int depth, Pa
 
     PageTable* new_pt = alloc_physical_page();
     kassert(((uintptr_t) new_pt & 0xFFF) == 0, "page tables must be 4KiB aligned");
-    parent->entries[index] = ((uint64_t) new_pt) | flags | PAGE_PRESENT;
+    parent->entries[index] = ((u64) new_pt) | flags | PAGE_PRESENT;
     return new_pt;
 }
 
@@ -244,13 +244,13 @@ static Result memmap__view(PageTable* address_space, uintptr_t phys_addr, uintpt
     return RESULT_SUCCESS;
 }
 
-static void memdump(uint64_t *buffer, size_t size) {
+static void memdump(u64 *buffer, size_t size) {
     int scale = 16;
     int max_pixel = boot_info->fb.width * boot_info->fb.height;
     int width = boot_info->fb.width;
 
     for (int i = 0; i < size; i++) {
-        uint32_t color = 0xFF000000 | ((buffer[i] > 0) ? buffer[i] : 0xFF050505);
+        u32 color = 0xFF000000 | ((buffer[i] > 0) ? buffer[i] : 0xFF050505);
 
         for (int y = 0; y < scale; y++) {
             for (int x = 0; x < scale; x++) {
@@ -266,7 +266,7 @@ static void memdump(uint64_t *buffer, size_t size) {
     }
 }
 
-static uint64_t memmap__probe(PageTable* address_space, uintptr_t virt) {
+static u64 memmap__probe(PageTable* address_space, uintptr_t virt) {
     size_t l[4] = {
         (virt >> 39) & 0x1FF,
         (virt >> 30) & 0x1FF,

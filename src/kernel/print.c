@@ -3,18 +3,18 @@
 static void kprintf(char *fmt, ...);
 static void put_char(int ch);
 static void put_string(const char* str);
-static void put_number(uint64_t x, uint8_t base);
+static void put_number(u64 x, u8 base);
 
 #define kassert(cond, ...) ((cond) ? 0 : (kprintf("%s:%d: assertion failed!\n  %s\n  ", __FILE__, __LINE__, #cond), kprintf(__VA_ARGS__), __builtin_trap()))
 #define panic(...) (kprintf("%s:%d: panic!\n", __FILE__, __LINE__), kprintf(__VA_ARGS__), __builtin_trap())
 
-static int itoa(uint64_t i, uint8_t base, uint8_t *buf) {
+static int itoa(u64 i, u8 base, u8 *buf) {
     static const char bchars[] = "0123456789ABCDEF";
 
     int      pos   = 0;
     int      o_pos = 0;
     int      top   = 0;
-    uint8_t tbuf[64];
+    u8 tbuf[64];
 
     if (i == 0 || base > 16) {
         buf[0] = '0';
@@ -37,8 +37,8 @@ static int itoa(uint64_t i, uint8_t base, uint8_t *buf) {
     return o_pos + 1;
 }
 
-static void put_number(uint64_t number, uint8_t base) {
-    uint8_t buffer[65];
+static void put_number(u64 number, u8 base) {
+    u8 buffer[65];
     itoa(number, base, buffer);
     buffer[64] = 0;
 
@@ -54,7 +54,7 @@ static void put_string(const char* str) {
     for (; *str; str++) io_out8(0x3f8, *str);
 }
 
-static void put_buffer(const uint8_t* buf, int size) {
+static void put_buffer(const u8* buf, int size) {
     if (size >= 0) {
         for (int i = 0; i < size; i++) io_out8(0x3f8, buf[i]);
     } else {
@@ -66,14 +66,14 @@ static void put_char(int ch) {
     io_out8(0x3f8, ch);
 }
 
-static void draw_sprite(uint32_t color, int ch) {
+static void draw_sprite(u32 color, int ch) {
     int columns = (boot_info->fb.width - 16) / 16;
     int rows = (boot_info->fb.height - 16) / 16;
 
     int x = (cursor % columns) * 16;
     int y = (cursor / columns) * 16;
 
-    const uint8_t* bitmap = FONT[(int)ch];
+    const u8* bitmap = FONT[(int)ch];
 
     for (size_t yy = 0; yy < 16; yy++) {
         for (size_t xx = 0; xx < 16; xx++) {
@@ -91,8 +91,8 @@ static void kprintf(char *fmt, ...) {
     __builtin_va_list args;
     __builtin_va_start(args, fmt);
 
-    uint8_t obuf[_PRINT_BUFFER_LEN];
-    uint32_t min_len = 0;
+    u8 obuf[_PRINT_BUFFER_LEN];
+    u32 min_len = 0;
     for (char *c = fmt; *c != 0; c++) {
         if (*c != '%') {
             int i = 0;
@@ -113,7 +113,7 @@ static void kprintf(char *fmt, ...) {
             continue;
         }
 
-        int64_t precision = -1;
+        i64 precision = -1;
         consume_moar:
         c++;
         switch (*c) {
@@ -123,7 +123,7 @@ static void kprintf(char *fmt, ...) {
                     continue;
                 }
 
-                precision = __builtin_va_arg(args, int64_t);
+                precision = __builtin_va_arg(args, i64);
                 goto consume_moar;
             } break;
             case '0': {
@@ -132,17 +132,17 @@ static void kprintf(char *fmt, ...) {
                 goto consume_moar;
             } break;
             case 's': {
-                uint8_t *s = __builtin_va_arg(args, uint8_t *);
+                u8 *s = __builtin_va_arg(args, u8 *);
                 put_buffer(s, precision);
             } break;
             case 'd': {
-                int64_t i = __builtin_va_arg(args, int64_t);
+                i64 i = __builtin_va_arg(args, i64);
                 put_number(i, 10);
             } break;
             case 'x': {
-                uint64_t i = __builtin_va_arg(args, uint64_t);
+                u64 i = __builtin_va_arg(args, u64);
 
-                uint8_t tbuf[64];
+                u8 tbuf[64];
                 int sz = itoa(i, 16, tbuf);
 
                 int pad_sz = min_len - (sz - 1);
@@ -155,8 +155,8 @@ static void kprintf(char *fmt, ...) {
                 min_len = 0;
             } break;
             case 'p': {
-                uint64_t i = __builtin_va_arg(args, uint64_t);
-                uint8_t tbuf[64];
+                u64 i = __builtin_va_arg(args, u64);
+                u8 tbuf[64];
                 int sz = itoa(i, 16, tbuf);
                 int pad_sz = 16 - (sz - 1);
                 put_char('0');
@@ -169,9 +169,9 @@ static void kprintf(char *fmt, ...) {
                 min_len = 0;
             } break;
             case 'b': {
-                uint64_t i = __builtin_va_arg(args, uint64_t);
+                u64 i = __builtin_va_arg(args, u64);
 
-                uint8_t tbuf[64];
+                u8 tbuf[64];
                 int sz = itoa(i, 2, tbuf);
 
                 int pad_sz = min_len - (sz - 1);

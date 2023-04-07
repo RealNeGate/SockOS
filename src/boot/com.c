@@ -26,16 +26,16 @@
 
 #define COM_DEFAULT_BAUD 115200
 
-static uint16_t com_port = PORT_COM1;
+static u16 com_port = PORT_COM1;
 
-static inline void com_set_port(uint16_t port) {
+static inline void com_set_port(u16 port) {
     com_port = port;
 }
 
-static inline bool com_init(uint32_t baud) {
-    uint16_t divisor = COM_DEFAULT_BAUD / baud;
-    uint8_t divisor_lo = (uint8_t)(divisor & 0xff);
-    uint8_t divisor_hi = (uint8_t)((divisor>>8) & 0xff);
+static inline bool com_init(u32 baud) {
+    u16 divisor = COM_DEFAULT_BAUD / baud;
+    u8 divisor_lo = (u8)(divisor & 0xff);
+    u8 divisor_hi = (u8)((divisor>>8) & 0xff);
     io_out8(com_port+COM_PO_IER, 0x00); // Disable all interrupts
     io_out8(com_port+COM_PO_LCR, 0x80); // Enable DLAB to set baud rate divisor
     io_out8(com_port+COM_PO_BAUD_LO, divisor_lo);
@@ -61,12 +61,12 @@ static inline bool com_write_ready() {
     return (io_in8(com_port+COM_PO_MSR) & 0x20) == 0x20;
 }
 
-static inline uint8_t com_read8() {
+static inline u8 com_read8() {
     while(!com_read_ready()) {}
     return io_in8(com_port);
 }
 
-static inline void com_write8(uint8_t ch) {
+static inline void com_write8(u8 ch) {
     while(!com_write_ready()) {}
     return io_out8(com_port, ch);
 }

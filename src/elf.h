@@ -80,14 +80,14 @@
 #define R_X86_64_PLT32    4
 #define R_X86_64_RELATIVE 8
 
-typedef uint64_t Elf64_Addr;
-typedef uint16_t Elf64_Half;
-typedef uint64_t Elf64_Off;
-typedef int32_t  Elf64_Sword;
-typedef int64_t  Elf64_Sxword;
-typedef uint32_t Elf64_Word;
-typedef uint64_t Elf64_Lword;
-typedef uint64_t Elf64_Xword;
+typedef u64 Elf64_Addr;
+typedef u16 Elf64_Half;
+typedef u64 Elf64_Off;
+typedef i32  Elf64_Sword;
+typedef i64  Elf64_Sxword;
+typedef u32 Elf64_Word;
+typedef u64 Elf64_Lword;
+typedef u64 Elf64_Xword;
 
 /* Macros for accessing the fields of st_info. */
 #define ELF64_ST_BIND(info) ((info) >> 4)

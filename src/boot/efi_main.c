@@ -28,7 +28,7 @@ do {                          \
 #define KERNEL_BUFFER_SIZE (16 * 1024 * 1024)
 #define MEM_MAP_LIMIT (1024)
 
-typedef void (*LoaderFunction)(BootInfo* info, uint8_t* stack, uint64_t tss_lo, uint64_t tss_hi);
+typedef void (*LoaderFunction)(BootInfo* info, u8* stack, u64 tss_lo, u64 tss_hi);
 
 typedef struct {
     size_t capacity;
@@ -52,7 +52,7 @@ inline static size_t align_up(size_t a, size_t b) {
     return a + (b - (a % b)) % b;
 }
 
-static void map_pages(PageTableContext* ctx, uint64_t virt_addr, uint64_t phys_addr, uint64_t page_count) {
+static void map_pages(PageTableContext* ctx, u64 virt_addr, u64 phys_addr, u64 page_count) {
     PageTable* address_space = &ctx->tables[0];
     if ((phys_addr | virt_addr) & 0xFFFull) {
         panic("Bad addresses for mapping %X -> %X\n", virt_addr, phys_addr);
@@ -60,10 +60,10 @@ static void map_pages(PageTableContext* ctx, uint64_t virt_addr, uint64_t phys_a
 
     for (size_t i = 0; i < page_count; i++) {
         // Generate the page table mapping
-        uint64_t pml4_index  = (virt_addr >> 39) & 0x1FF; // 512GB
-        uint64_t pdpte_index = (virt_addr >> 30) & 0x1FF; // 1GB
-        uint64_t pde_index   = (virt_addr >> 21) & 0x1FF; // 2MB
-        uint64_t pte_index   = (virt_addr >> 12) & 0x1FF; // 4KB
+        u64 pml4_index  = (virt_addr >> 39) & 0x1FF; // 512GB
+        u64 pdpte_index = (virt_addr >> 30) & 0x1FF; // 1GB
+        u64 pde_index   = (virt_addr >> 21) & 0x1FF; // 2MB
+        u64 pte_index   = (virt_addr >> 12) & 0x1FF; // 4KB
 
         // 512GB
         PageTable* table_l3;
@@ -76,7 +76,7 @@ static void map_pages(PageTableContext* ctx, uint64_t virt_addr, uint64_t phys_a
             table_l3 = &ctx->tables[ctx->used++];
             memset(table_l3, 0, sizeof(PageTable));
 
-            address_space->entries[pml4_index] = ((uint64_t)table_l3) | 3;
+            address_space->entries[pml4_index] = ((u64)table_l3) | 3;
         } else {
             // Used the bits 51:12 as the table address
             table_l3 = (PageTable*)(address_space->entries[pml4_index] & 0xFFFFFFFFF000);
@@ -93,7 +93,7 @@ static void map_pages(PageTableContext* ctx, uint64_t virt_addr, uint64_t phys_a
             table_l2 = &ctx->tables[ctx->used++];
             memset(table_l2, 0, sizeof(PageTable));
 
-            table_l3->entries[pdpte_index] = ((uint64_t)table_l2) | 3;
+            table_l3->entries[pdpte_index] = ((u64)table_l2) | 3;
         } else {
             // Used the bits 51:12 as the table address
             table_l2 = (PageTable*)(table_l3->entries[pdpte_index] & 0xFFFFFFFFF000);
@@ -110,7 +110,7 @@ static void map_pages(PageTableContext* ctx, uint64_t virt_addr, uint64_t phys_a
             table_l1 = &ctx->tables[ctx->used++];
             memset(table_l1, 0, sizeof(PageTable));
 
-            table_l2->entries[pde_index] = ((uint64_t)table_l1) | 3;
+            table_l2->entries[pde_index] = ((u64)table_l1) | 3;
         } else {
             // Used the bits 51:12 as the table address
             table_l1 = (PageTable*)(table_l2->entries[pde_index] & 0xFFFFFFFFF000);
@@ -124,11 +124,11 @@ static void map_pages(PageTableContext* ctx, uint64_t virt_addr, uint64_t phys_a
     }
 }
 
-static void map_pages_id(PageTableContext* ctx, uint64_t addr, uint64_t page_count) {
+static void map_pages_id(PageTableContext* ctx, u64 addr, u64 page_count) {
     map_pages(ctx, addr, addr, page_count);
 }
 
-static void mem_map_mark(MemMap* mem_map, uint64_t base, uint64_t npages, uint64_t type) {
+static void mem_map_mark(MemMap* mem_map, u64 base, u64 npages, u64 type) {
     for(int i = 0; i != mem_map->nregions; ++i) {
         MemRegion* region = &mem_map->regions[i];
         size_t region_size = region->pages * 4096;
@@ -142,7 +142,7 @@ static void mem_map_mark(MemMap* mem_map, uint64_t base, uint64_t npages, uint64
             region->type = type;
             return;
         }
-        uint64_t old_type = region->type;
+        u64 old_type = region->type;
         // If the specified base isn't on the start of the region
         // we split the memory region into two regions
         if(base > region->base) {
@@ -197,15 +197,15 @@ static void mem_map_mark(MemMap* mem_map, uint64_t base, uint64_t npages, uint64
     for(; i < mem_map->nregions; ++i) {
         MemRegion prev_region = mem_map->regions[i-1];
         MemRegion next_region = mem_map->regions[i];
-        uint64_t prev_end = prev_region.base + prev_region.pages * 0x1000;
-        uint64_t next_start = next_region.base;
+        u64 prev_end = prev_region.base + prev_region.pages * 0x1000;
+        u64 next_start = next_region.base;
         if(prev_end <= base && base < next_start) {
             break;
         }
     }
     if(i == mem_map->nregions) {
         MemRegion last_region = mem_map->regions[mem_map->nregions-1];
-        uint64_t last_region_end = last_region.base + last_region.pages * 0x1000;
+        u64 last_region_end = last_region.base + last_region.pages * 0x1000;
         if(base < last_region_end) {
             panic("Specified region spans region boundary or there's no space in mem_map\n");
         }
@@ -249,16 +249,16 @@ static void mem_map_merge_contiguous_ranges(MemMap* mem_map) {
 static bool mem_map_verify(MemMap* mem_map) {
     for(int i = 0; i != mem_map->nregions; ++i) {
         MemRegion* region = &mem_map->regions[i];
-        uint64_t region_start = region->base;
-        uint64_t region_end = region->base + region->pages * 0x1000;
+        u64 region_start = region->base;
+        u64 region_end = region->base + region->pages * 0x1000;
         // Check region for overlapping ranges
         for(int j = 0; j != mem_map->nregions; ++j) {
             if(i == j) {
                 continue;
             }
             MemRegion* cmp_region = &mem_map->regions[j];
-            uint64_t cmp_region_start = cmp_region->base;
-            uint64_t cmp_region_end = cmp_region->base + cmp_region->pages * 0x1000;
+            u64 cmp_region_start = cmp_region->base;
+            u64 cmp_region_end = cmp_region->base + cmp_region->pages * 0x1000;
             if(cmp_region_start <= region_start && region_start < cmp_region_end) {
                 return false;
             }
@@ -291,11 +291,11 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         fb.width  = graphics_output_protocol->Mode->Info->HorizontalResolution;
         fb.height = graphics_output_protocol->Mode->Info->VerticalResolution;
         fb.stride = graphics_output_protocol->Mode->Info->PixelsPerScanline;
-        fb.pixels = (uint32_t*)graphics_output_protocol->Mode->FrameBufferBase;
+        fb.pixels = (u32*)graphics_output_protocol->Mode->FrameBufferBase;
     }
     term_set_framebuffer(fb);
     term_set_wrap(true);
-    printf("Framebuffer at %X\n", (uint64_t) fb.pixels);
+    printf("Framebuffer at %X\n", (u64) fb.pixels);
 
     // Load the kernel from disk
     char* kernel_buffer;
@@ -329,7 +329,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         }
 
         EFI_FILE* kernel_file;
-        status = fs_root->Open(fs_root, &kernel_file, (int16_t*)L"kernel.elf", EFI_FILE_MODE_READ, 0);
+        status = fs_root->Open(fs_root, &kernel_file, (i16*)L"kernel.elf", EFI_FILE_MODE_READ, 0);
         if (status != 0) {
             panic("Failed to open kernel.elf!\nStatus: %X\n", status);
         }
@@ -342,7 +342,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         }
 
         // Verify ELF magic number
-        if (memcmp(kernel_buffer, (uint8_t[]) { 0x7F, 'E', 'L', 'F' }, 4) != 0) {
+        if (memcmp(kernel_buffer, (u8[]) { 0x7F, 'E', 'L', 'F' }, 4) != 0) {
             panic("kernel.elf is not a valid ELF file!\n");
         }
 
@@ -359,7 +359,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 
     // Create the stack for the kernel
     void* kstack_base = efi_alloc(st, KERNEL_STACK_SIZE);
-    void* kstack_end  = (uint8_t*) kstack_base + KERNEL_STACK_SIZE;
+    void* kstack_end  = (u8*) kstack_base + KERNEL_STACK_SIZE;
     printf("Kernel stack: %X .. %X\n", kstack_base, kstack_end);
 
     // Allocate space for our page tables before we exit UEFI
@@ -375,12 +375,12 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     };
 
     // Grab the ACPI table info
-    uint64_t rsdp = 0;
+    u64 rsdp = 0;
     EFI_CONFIGURATION_TABLE *tables = st->ConfigurationTables;
     EFI_GUID acpi_guid = EFI_ACPI_20_TABLE_GUID;
     for (int i = 0; i < st->NumberOfTableEntries; i++) {
         if (!memcmp(&acpi_guid, &tables[i].VendorGuid, sizeof(EFI_GUID))) {
-            rsdp = (uint64_t)tables[i].VendorTable;
+            rsdp = (u64)tables[i].VendorTable;
             break;
         }
     }
@@ -393,14 +393,14 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     printf("Beginning EFI handoff...\n");
 
     // Load latest memory map
-    size_t fb_size_pages = PAGE_4K(fb.width * fb.height * sizeof(uint32_t));
+    size_t fb_size_pages = PAGE_4K(fb.width * fb.height * sizeof(u32));
     size_t map_key;
     MemMap mem_map = efi_get_mem_map(st, &map_key, MEM_MAP_LIMIT);
     // TODO(flysand): there seems to be a bug in mem_map_mark, if we switch around the two lines below
     // the function refuses to remap the kernel memory region. Gotta investigate that when I'm not sleepy
     mem_map_mark(&mem_map, kernel_module.phys_base, PAGE_4K(kernel_module.size), MEM_REGION_KERNEL);
-    mem_map_mark(&mem_map, (uint64_t) kstack_base, PAGE_4K(KERNEL_STACK_SIZE), MEM_REGION_KSTACK);
-    mem_map_mark(&mem_map, (uint64_t) fb.pixels, fb_size_pages, MEM_REGION_FRAMEBUFFER);
+    mem_map_mark(&mem_map, (u64) kstack_base, PAGE_4K(KERNEL_STACK_SIZE), MEM_REGION_KSTACK);
+    mem_map_mark(&mem_map, (u64) fb.pixels, fb_size_pages, MEM_REGION_FRAMEBUFFER);
     mem_map_merge_contiguous_ranges(&mem_map);
     if(!mem_map_verify(&mem_map)) {
         panic("MemMap contains overlapping ranges");
@@ -438,7 +438,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         }
     }
 
-    // memset(framebuffer, 0, framebuffer_stride * framebuffer_height * sizeof(uint32_t));
+    // memset(framebuffer, 0, framebuffer_stride * framebuffer_height * sizeof(u32));
     for (size_t j = 0; j < 50; j++) {
         for (size_t i = 0; i < 50; i++) {
             fb.pixels[i + (j * fb.stride)] = 0xFFFF7F1F;
@@ -446,7 +446,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     }
 
     uintptr_t tss_ptr = (uintptr_t) &boot_info.tss[0];
-    uint64_t tss[2] = {
+    u64 tss[2] = {
         //  access    limit
         //    VV        VV
         0x0000890000000068 | ((tss_ptr & 0xFFFFFF) << 16) | (((tss_ptr >> 24) & 0xF) << 56),

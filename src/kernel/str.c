@@ -1,5 +1,5 @@
 void* memset(void* buffer, int c, size_t n) {
-    uint8_t* buf = (uint8_t*)buffer;
+    u8* buf = (u8*)buffer;
     for (size_t i = 0; i < n; i++) {
         buf[i] = c;
     }
@@ -7,8 +7,8 @@ void* memset(void* buffer, int c, size_t n) {
 }
 
 void* memcpy(void* dest, const void* src, size_t n) {
-    uint8_t* d = (uint8_t*)dest;
-    uint8_t* s = (uint8_t*)src;
+    u8* d = (u8*)dest;
+    u8* s = (u8*)src;
     for (size_t i = 0; i < n; i++) {
         d[i] = s[i];
     }
@@ -16,8 +16,8 @@ void* memcpy(void* dest, const void* src, size_t n) {
 }
 
 int memcmp(const void* a, const void* b, size_t n) {
-    uint8_t* aa = (uint8_t*)a;
-    uint8_t* bb = (uint8_t*)b;
+    u8* aa = (u8*)a;
+    u8* bb = (u8*)b;
 
     for (size_t i = 0; i < n; i++) {
         if (aa[i] != bb[i]) return aa[i] - bb[i];
@@ -27,8 +27,8 @@ int memcmp(const void* a, const void* b, size_t n) {
 }
 
 bool memeq(const void* a, const void* b, size_t n) {
-    uint8_t* aa = (uint8_t*)a;
-    uint8_t* bb = (uint8_t*)b;
+    u8* aa = (u8*)a;
+    u8* bb = (u8*)b;
 
     for (size_t i = 0; i < n; i++) {
         if (aa[i] != bb[i]) return false;

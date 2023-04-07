@@ -74,7 +74,7 @@ typedef enum {
 
 void parse_acpi(void *rsdp) {
     ACPI_RSDP_Desc_V2 *header = (ACPI_RSDP_Desc_V2 *)rsdp;
-    uint8_t rsdp_magic[] = {'R', 'S', 'D', ' ', 'P', 'T', 'R', ' ' };
+    u8 rsdp_magic[] = {'R', 'S', 'D', ' ', 'P', 'T', 'R', ' ' };
     if (!memeq(header->rsdp_head.signature, rsdp_magic, sizeof(rsdp_magic))) {
         panic("Invalid ACPI header! Got: %.*s || %.*s\n",
             sizeof(rsdp_magic), rsdp_magic,
@@ -84,7 +84,7 @@ void parse_acpi(void *rsdp) {
     }
 
     ACPI_XSDT_Header *xhead = (ACPI_XSDT_Header *)header->xsdt_addr;
-    uint8_t xsdt_magic[] = {'X', 'S', 'D', 'T' };
+    u8 xsdt_magic[] = {'X', 'S', 'D', 'T' };
     if (!memeq(xhead->header.signature, xsdt_magic, sizeof(xsdt_magic))) {
         panic("Invalid XSDT header! Got: %.*s || %.*s\n",
             sizeof(xsdt_magic), xsdt_magic,
@@ -94,11 +94,11 @@ void parse_acpi(void *rsdp) {
     }
 
     int core_count = 0;
-    uint64_t apic_addr = 0;
+    u64 apic_addr = 0;
 
-    uint8_t apic_magic[] = {'A', 'P', 'I', 'C' };
-    uint8_t hpet_magic[] = {'H', 'P', 'E', 'T' };
-    uint64_t remaining_length = xhead->header.length - sizeof(xhead->header);
+    u8 apic_magic[] = {'A', 'P', 'I', 'C' };
+    u8 hpet_magic[] = {'H', 'P', 'E', 'T' };
+    u64 remaining_length = xhead->header.length - sizeof(xhead->header);
     int entries = remaining_length / 8;
     for (int i = 0; i < entries; i++) {
         ACPI_SDT_Header *head = (ACPI_SDT_Header *)xhead->other_headers[i];

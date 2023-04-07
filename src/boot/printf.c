@@ -10,7 +10,7 @@ static inline void writes(char* str) {
     }
 }
 
-static inline void writex32(uint32_t num, size_t width) {
+static inline void writex32(u32 num, size_t width) {
     const char hex[] = "0123456789abcdef";
     char buf[16] = {0};
     int idx = sizeof buf - 1;
@@ -18,7 +18,7 @@ static inline void writex32(uint32_t num, size_t width) {
         if(i == width) {
             break;
         }
-        uint8_t digit = num % 16;
+        u8 digit = num % 16;
         num /= 16;
         buf[--idx] = hex[digit];
     }
@@ -28,7 +28,7 @@ static inline void writex32(uint32_t num, size_t width) {
     writes(str);
 }
 
-static inline void writex64(uint64_t num, size_t width) {
+static inline void writex64(u64 num, size_t width) {
     const char hex[] = "0123456789abcdef";
     char buf[32] = {0};
     int idx = sizeof buf - 1;
@@ -36,7 +36,7 @@ static inline void writex64(uint64_t num, size_t width) {
         if(i == width) {
             break;
         }
-        uint8_t digit = num % 16;
+        u8 digit = num % 16;
         num /= 16;
         buf[--idx] = hex[digit];
     }
@@ -46,7 +46,7 @@ static inline void writex64(uint64_t num, size_t width) {
     writes(str);
 }
 
-static inline void writed64(int64_t dec) {
+static inline void writed64(i64 dec) {
     if(dec < 0) {
         writec('-');
         dec = -dec;
@@ -62,7 +62,7 @@ static inline void writed64(int64_t dec) {
     writes(str);
 }
 
-static inline void writeu64(uint64_t dec) {
+static inline void writeu64(u64 dec) {
     char buf[32];
     int idx = sizeof buf - 1;
     do {
@@ -91,42 +91,42 @@ static inline void vprintf(char* fmt, va_list args) {
                     if(width == 0xff) {
                         width = 8;
                     }
-                    uint32_t arg = va_arg(args, uint32_t);
+                    u32 arg = va_arg(args, u32);
                     writex32(arg, width);
                 } break;
                 case 'X': {
                     if(width == 0xff) {
                         width = 16;
                     }
-                    uint64_t arg = va_arg(args, uint64_t);
+                    u64 arg = va_arg(args, u64);
                     writex64(arg, width);
                 } break;
                 case 'd': {
                     if(width == 0xff) {
                         width = 1;
                     }
-                    int32_t arg = va_arg(args, int32_t);
-                    writed64((int64_t)arg);
+                    i32 arg = va_arg(args, i32);
+                    writed64((i64)arg);
                 } break;
                 case 'D': {
                     if(width == 0xff) {
                         width = 1;
                     }
-                    int64_t arg = va_arg(args, int64_t);
+                    i64 arg = va_arg(args, i64);
                     writed64(arg);
                 } break;
                 case 'u': {
                     if(width == 0xff) {
                         width = 32;
                     }
-                    uint32_t arg = va_arg(args, uint32_t);
-                    writeu64((uint64_t)arg);
+                    u32 arg = va_arg(args, u32);
+                    writeu64((u64)arg);
                 } break;
                 case 'U': {
                     if(width == 0xff) {
                         width = 32;
                     }
-                    uint64_t arg = va_arg(args, uint64_t);
+                    u64 arg = va_arg(args, u64);
                     writeu64(arg);
                 } break;
                 case 'c': {
@@ -155,7 +155,7 @@ static bool isprint(char c) {
 }
 
 static void memdump(void* addr, size_t count) {
-    uint8_t* bytes = addr;
+    u8* bytes = addr;
     size_t row_size = 8;
     size_t nrows = (count + row_size - 1) / row_size;
     size_t last_row_size = (count % row_size == 0) ? row_size : (count % row_size);
@@ -166,8 +166,8 @@ static void memdump(void* addr, size_t count) {
                 printf("     ");
             }
             else {
-                uint8_t byte = bytes[i];
-                printf("%2x ", (uint32_t)byte);
+                u8 byte = bytes[i];
+                printf("%2x ", (u32)byte);
             }
         }
         printf("| ");

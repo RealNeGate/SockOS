@@ -10,12 +10,12 @@
 #define TERM_FONT_CHAR_SZ_Y 16
 
 Framebuffer term_fb;
-uint64_t term_cur_x;
-uint64_t term_cur_y;
-uint64_t term_cnt_x;
-uint64_t term_cnt_y;
-uint32_t term_color_bg;
-uint32_t term_color_fg;
+u64 term_cur_x;
+u64 term_cur_y;
+u64 term_cnt_x;
+u64 term_cnt_y;
+u32 term_color_bg;
+u32 term_color_fg;
 bool term_wrap;
 
 static void term_set_framebuffer(Framebuffer fb) {
@@ -32,7 +32,7 @@ static void term_set_wrap(bool wrap) {
     term_wrap = wrap;
 }
 
-static void term_colors(uint32_t bg, uint32_t fg) {
+static void term_colors(u32 bg, u32 fg) {
     term_color_bg = bg;
     term_color_fg = fg;
 }
@@ -41,10 +41,10 @@ static void term_print_char_at(int char_x, int char_y, char ch) {
     int offset_x = TERM_MARGIN_X + char_x * TERM_FONT_CHAR_SZ_X;
     int offset_y = TERM_MARGIN_Y + char_y * TERM_FONT_CHAR_SZ_Y;
     for(int y = 0; y != TERM_FONT_CHAR_SZ_Y; ++y) {
-        uint8_t byte = term_font[16 * (uint8_t) ch + y];
+        u8 byte = term_font[16 * (u8) ch + y];
         for(int x = 0; x != 8; ++x) {
             bool is_fg = (byte >> x) & 1;
-            uint32_t color;
+            u32 color;
             if(is_fg) {
                 color = term_color_fg;
             }
@@ -64,7 +64,7 @@ static void term_print_char_at(int char_x, int char_y, char ch) {
         // Fill in 9'th row
         {
             int x = 8;
-            uint32_t color = term_color_bg;
+            u32 color = term_color_bg;
             int pixel_x = offset_x + x;
             int pixel_y = offset_y + y;
             if(pixel_x > term_fb.width) {
@@ -97,7 +97,7 @@ static void term_scroll_down1() {
                 int src_y = y;
                 int dst_y = y + next_row_stride;
                 term_fb.pixels[x + dst_y * term_fb.stride] = term_color_bg;
-            }   
+            }
         }
         // Put cursor on the line above
         term_cur_y -= 1;

@@ -1,9 +1,11 @@
+#include <common.h>
+
 #define KERNEL_VIRTUAL_BASE 0xC0000000
 
 typedef struct {
-    uint32_t  width, height;
-    uint32_t  stride; // in pixels
-    uint32_t* pixels;
+    u32  width, height;
+    u32  stride; // in pixels
+    u32* pixels;
 } Framebuffer;
 
 enum {
@@ -12,7 +14,7 @@ enum {
 };
 
 typedef struct {
-    uint64_t entries[512];
+    u64 entries[512];
 } PageTable;
 
 enum {
@@ -39,9 +41,9 @@ typedef enum {
 } MemRegionType;
 
 typedef struct {
-    uint64_t type;
-    uint64_t base;
-    uint64_t pages;
+    u64 type;
+    u64 base;
+    u64 pages;
 } MemRegion;
 
 typedef struct {
@@ -52,10 +54,10 @@ typedef struct {
 
 typedef struct {
     // used for interrupts
-    uint8_t* kernel_stack;
-    uint8_t* kernel_stack_top;
+    u8* kernel_stack;
+    u8* kernel_stack_top;
 
-    uint8_t* user_stack_scratch;
+    u8* user_stack_scratch;
 } PerCPU;
 
 // This is all the crap we throw into the loader
@@ -75,7 +77,7 @@ typedef struct {
 
     // This is initialized by the kernel but put into
     // place by the boot EFI
-    uint32_t tss[26];
+    u32 tss[26];
 } BootInfo;
 
 // loader.asm & irq.asm needs these to be here

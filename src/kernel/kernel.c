@@ -5,7 +5,7 @@
 #include "font.h"
 
 BootInfo* boot_info;
-static uint16_t cursor;
+static u16 cursor;
 
 static void kernel_halt(void);
 
@@ -55,8 +55,8 @@ __asm__(".section .rodata\n" \
     "incbin_" STR(name) "_end:\n" \
     ".byte 0\n" \
 ); \
-extern __attribute__((aligned(16))) const uint8_t incbin_ ## name ## _start[]; \
-extern                              const uint8_t incbin_ ## name ## _end[]
+extern __attribute__((aligned(16))) const u8 incbin_ ## name ## _start[]; \
+extern                              const u8 incbin_ ## name ## _end[]
 
 INCBIN(test_program, "test2.elf");
 
@@ -73,14 +73,14 @@ void kmain(BootInfo* restrict info) {
 	kprintf("Beginning kernel boot...\n");
 
     // Draw fancy background
-    uint64_t gradient_x = (boot_info->fb.width + 255) / 256;
-    uint64_t gradient_y = (boot_info->fb.height + 255) / 256;
+    u64 gradient_x = (boot_info->fb.width + 255) / 256;
+    u64 gradient_y = (boot_info->fb.height + 255) / 256;
 
     for (size_t j = 0; j < boot_info->fb.height; j++) {
-        uint32_t g = ((j / gradient_y) / 2) + 0x7F;
+        u32 g = ((j / gradient_y) / 2) + 0x7F;
 
         for (size_t i = 0; i < boot_info->fb.width; i++) {
-            uint32_t b = ((i / gradient_x) / 2) + 0x7F;
+            u32 b = ((i / gradient_x) / 2) + 0x7F;
 
             boot_info->fb.pixels[i + (j * boot_info->fb.stride)] = 0xFF000000 | (g << 16) | (b << 8);
         }

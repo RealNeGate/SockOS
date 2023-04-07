@@ -181,7 +181,7 @@ static void identity_map_kernel_region(PageTable* address_space, void* p, size_t
 
 // this is the trusted ELF loader for priveleged programs, normal apps will probably
 // be loaded via a shared object.
-Threadgroup* threadgroup_spawn(const uint8_t* program, size_t program_size, Thread** root_thread) {
+Threadgroup* threadgroup_spawn(const u8* program, size_t program_size, Thread** root_thread) {
     Threadgroup* group = threadgroup_create();
 
     Elf64_Ehdr* elf_header = (Elf64_Ehdr*) program;
@@ -201,7 +201,7 @@ Threadgroup* threadgroup_spawn(const uint8_t* program, size_t program_size, Thre
     ////////////////////////////////
     uintptr_t image_size = 0;
 
-    const uint8_t* segments = program + elf_header->e_phoff;
+    const u8* segments = program + elf_header->e_phoff;
     size_t segment_size = elf_header->e_phentsize;
     FOREACH_N(i, 0, elf_header->e_phnum) {
         Elf64_Phdr* segment = (Elf64_Phdr*) (segments + i*segment_size);
@@ -245,7 +245,7 @@ Threadgroup* threadgroup_spawn(const uint8_t* program, size_t program_size, Thre
         if (segment->p_filesz) {
             kassert(segment->p_offset + segment->p_filesz <= program_size, "segment contents out of bounds (%x + %x < %x)", segment->p_offset, segment->p_filesz, program_size);
 
-            const uint8_t* src = program + segment->p_offset;
+            const u8* src = program + segment->p_offset;
             memcpy(dst + vaddr, src, segment->p_filesz);
         }
 

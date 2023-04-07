@@ -22,25 +22,25 @@ enum {
 };
 
 typedef struct __attribute__((packed)) IDTEntry {
-    uint16_t offset_1;  // offset bits 0..15
-    uint16_t selector;  // a code segment selector in GDT or LDT
-    uint8_t  ist;       // bits 0..2 holds Interrupt Stack Table offset, rest of bits zero.
-    uint8_t  type_attr; // type and attributes
-    uint16_t offset_2;  // offset bits 16..31
-    uint32_t offset_3;  // offset bits 32..63
-    uint32_t reserved;  // reserved
+    u16 offset_1;  // offset bits 0..15
+    u16 selector;  // a code segment selector in GDT or LDT
+    u8  ist;       // bits 0..2 holds Interrupt Stack Table offset, rest of bits zero.
+    u8  type_attr; // type and attributes
+    u16 offset_2;  // offset bits 16..31
+    u32 offset_3;  // offset bits 32..63
+    u32 reserved;  // reserved
 } IDTEntry;
 _Static_assert(sizeof(IDTEntry) == 16, "expected sizeof(IDTEntry) to be 16 bytes");
 
 typedef struct __attribute__((packed)) {
-    uint16_t limit;
-    uint64_t base;
+    u16 limit;
+    u64 base;
 } IDT;
 _Static_assert(sizeof(IDT) == 10, "expected sizeof(IDT) to be 10 bytes");
 
 volatile IDTEntry _idt[256];
 
-volatile uint32_t* apic;
+volatile u32* apic;
 #define APIC(reg_num) apic[(reg_num) >> 2]
 
 // in irq.asm
@@ -139,7 +139,7 @@ void irq_startup(void) {
 
     // Enable APIC
     if (1) {
-        uint64_t x = __readmsr(IA32_APIC_BASE);
+        u64 x = __readmsr(IA32_APIC_BASE);
         x |= (1u << 11u); // enable APIC
         __writemsr(IA32_APIC_BASE, x);
         if (x & IA32_APIC_BASE_MSR_BSP) {
@@ -170,7 +170,7 @@ void irq_startup(void) {
 
     // enable syscall/sysret
     {
-        uint64_t x = __readmsr(IA32_EFER);
+        u64 x = __readmsr(IA32_EFER);
         __writemsr(IA32_EFER, x | 1);
         // the location where syscall will throw the user to
         __writemsr(IA32_LSTAR, (uintptr_t) &syscall_handler);
@@ -178,7 +178,7 @@ void irq_startup(void) {
         _Static_assert(KERNEL_CS + 8  == KERNEL_DS, "the data segment is implied to be 8 byte ahead... fix it");
         _Static_assert(0x10      + 16 == USER_CS,  "SYSRET expectations");
         _Static_assert(0x10      + 8  == USER_DS,  "SYSRET expectations");
-        __writemsr(IA32_STAR, ((uint64_t)KERNEL_CS << 32ull) | (0x10ull << 48ull));
+        __writemsr(IA32_STAR, ((u64)KERNEL_CS << 32ull) | (0x10ull << 48ull));
 
         // we're storing the per_cpu info here, syscall will use this
         __writemsr(IA32_KERNEL_GS_BASE, (uintptr_t) &boot_info->main_cpu);
@@ -193,8 +193,8 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space) {
     kprintf("  rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
 
     if (state->interrupt_num == 14) {
-        uint64_t x = x86_get_cr2();
-        uint64_t y = memmap__probe(old_address_space, x);
+        u64 x = x86_get_cr2();
+        u64 y = memmap__probe(old_address_space, x);
 
         kprintf("  cr2=%p (translated %p)\n", x, y);
         kprintf("  cr3=%p\n", old_address_space);
