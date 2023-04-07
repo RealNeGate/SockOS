@@ -11,6 +11,5 @@ bin/
 .ninja_log
 run4coder.bat
 project.4coder
-push.cmd
-my.cache
 build.ninja
+*.map
