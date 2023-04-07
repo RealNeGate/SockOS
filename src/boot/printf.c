@@ -10,12 +10,15 @@ static inline void writes(char* str) {
     }
 }
 
-static inline void writex32(uint32_t num) {
+static inline void writex32(u32 num, size_t width) {
     const char hex[] = "0123456789abcdef";
-    char buf[16];
+    char buf[16] = {0};
     int idx = sizeof buf - 1;
     for(int i = 0; i != 8; ++i) {
-        uint8_t digit = num % 16;
+        if(i == width) {
+            break;
+        }
+        u8 digit = num % 16;
         num /= 16;
         buf[--idx] = hex[digit];
     }
@@ -25,12 +28,15 @@ static inline void writex32(uint32_t num) {
     writes(str);
 }
 
-static inline void writex64(uint64_t num) {
+static inline void writex64(u64 num, size_t width) {
     const char hex[] = "0123456789abcdef";
-    char buf[32];
+    char buf[32] = {0};
     int idx = sizeof buf - 1;
     for(int i = 0; i != 16; ++i) {
-        uint8_t digit = num % 16;
+        if(i == width) {
+            break;
+        }
+        u8 digit = num % 16;
         num /= 16;
         buf[--idx] = hex[digit];
     }
@@ -40,7 +46,7 @@ static inline void writex64(uint64_t num) {
     writes(str);
 }
 
-static inline void writed64(int64_t dec) {
+static inline void writed64(i64 dec) {
     if(dec < 0) {
         writec('-');
         dec = -dec;
@@ -56,7 +62,7 @@ static inline void writed64(int64_t dec) {
     writes(str);
 }
 
-static inline void writeu64(uint64_t dec) {
+static inline void writeu64(u64 dec) {
     char buf[32];
     int idx = sizeof buf - 1;
     do {
@@ -75,36 +81,59 @@ static inline void vprintf(char* fmt, va_list args) {
         }
         else {
             fmt += 1;
+            size_t width = 0xff;
+            if('0' <= *fmt && *fmt <= '9') {
+                width = *fmt - '0';
+                fmt += 1;
+            }
             switch(*fmt) {
                 case 'x': {
-                    uint32_t arg = va_arg(args, uint32_t);
-                    writex32(arg);
+                    if(width == 0xff) {
+                        width = 8;
+                    }
+                    u32 arg = va_arg(args, u32);
+                    writex32(arg, width);
                 } break;
                 case 'X': {
-                    uint64_t arg = va_arg(args, uint64_t);
-                    writex64(arg);
+                    if(width == 0xff) {
+                        width = 16;
+                    }
+                    u64 arg = va_arg(args, u64);
+                    writex64(arg, width);
                 } break;
                 case 'd': {
-                    int32_t arg = va_arg(args, int32_t);
-                    writed64((int64_t)arg);
+                    if(width == 0xff) {
+                        width = 1;
+                    }
+                    i32 arg = va_arg(args, i32);
+                    writed64((i64)arg);
                 } break;
                 case 'D': {
-                    int64_t arg = va_arg(args, int64_t);
+                    if(width == 0xff) {
+                        width = 1;
+                    }
+                    i64 arg = va_arg(args, i64);
                     writed64(arg);
                 } break;
                 case 'u': {
-                    uint32_t arg = va_arg(args, uint32_t);
-                    writeu64((uint64_t)arg);
+                    if(width == 0xff) {
+                        width = 32;
+                    }
+                    u32 arg = va_arg(args, u32);
+                    writeu64((u64)arg);
                 } break;
                 case 'U': {
-                    uint64_t arg = va_arg(args, uint64_t);
+                    if(width == 0xff) {
+                        width = 32;
+                    }
+                    u64 arg = va_arg(args, u64);
                     writeu64(arg);
                 } break;
                 case 'c': {
                     char ch = va_arg(args, int);
                     writec(ch);
                 } break;
-                case 'S': {
+                case 's': {
                     char* str = va_arg(args, char*);
                     writes(str);
                 } break;
@@ -119,4 +148,43 @@ static void printf(char* fmt, ...) {
     va_start(args, fmt);
     vprintf(fmt, args);
     va_end(args);
+}
+
+static bool isprint(char c) {
+    return 0x20 <= c && c < 0x7f;
+}
+
+static void memdump(void* addr, size_t count) {
+    u8* bytes = addr;
+    size_t row_size = 8;
+    size_t nrows = (count + row_size - 1) / row_size;
+    size_t last_row_size = (count % row_size == 0) ? row_size : (count % row_size);
+    for(size_t row = 0; row < nrows; ++row) {
+        for(size_t col = 0; col != row_size; ++col) {
+            size_t i = col + row*row_size;
+            if(row == nrows-1 && col >= last_row_size) {
+                printf("     ");
+            }
+            else {
+                u8 byte = bytes[i];
+                printf("%2x ", (u32)byte);
+            }
+        }
+        printf("| ");
+        for(size_t col = 0; col != row_size; ++col) {
+            size_t i = col + row*row_size;
+            if(row == nrows-1 && col >= last_row_size) {
+                printf(".");
+            }
+            else {
+                if(isprint(bytes[i])) {
+                    printf("%c", bytes[i]);
+                }
+                else {
+                    printf(".");
+                }
+            }
+        }
+        writec('\n');
+    }
 }
