@@ -23,6 +23,7 @@ static void kernel_halt(void);
 #ifdef __x86_64__
 #include "arch/x64/mem.c"
 #include "arch/x64/acpi.c"
+#include "arch/x64/multicore.c"
 #include "arch/x64/irq.c"
 #include "arch/x64/syscall.c"
 #endif
@@ -100,7 +101,8 @@ void kmain(BootInfo* restrict info) {
     init_physical_page_alloc(&boot_info->mem_map);
     parse_acpi(boot_info);
     kprintf("ACPI processed...\n");
-    kprintf("%d cores | TSC freq %d MHz\n", boot_info->core_count, boot_info->tsc_freq);
+    kprintf("Found %d cores | TSC freq %d MHz\n", boot_info->core_count, boot_info->tsc_freq);
+    boot_cores(boot_info);
 
     Env* toy = env_create();
     Thread* mine = env_load_elf(toy, incbin_test_program_start, incbin_test_program_end - incbin_test_program_start);

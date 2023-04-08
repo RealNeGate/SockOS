@@ -47,6 +47,7 @@ pub fn build(b: *std.Build) void {
     kernel.addIncludePath("src");
     kernel.addCSourceFile("src/kernel/kernel.c", &kernel_cflags);
     kernel.addAssemblyFile("src/arch/x64/loader.s");
+    kernel.addAssemblyFile("src/arch/x64/bootstrap.s");
     kernel.addAssemblyFile("src/arch/x64/irq.s");
     kernel.install();
 
@@ -60,6 +61,7 @@ pub fn build(b: *std.Build) void {
         "-drive", "format=raw,file=fat:rw:bin",
         "-no-reboot", "-s",
         "-d", "int", "-D", "qemu.log",
+        "-m", "256M",
         "-smp", "cores=4,threads=1,sockets=1"
     };
 

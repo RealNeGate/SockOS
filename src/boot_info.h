@@ -60,13 +60,19 @@ typedef struct {
     u8* user_stack_scratch;
 } PerCPU;
 
+typedef struct {
+    u32 core_id;
+    u32 lapic_id;
+} CPU_Info;
+
 // This is all the crap we throw into the loader
 typedef struct {
     PageTable* kernel_pml4; // identity mapped
     PerCPU main_cpu;
 
+    u64 lapic_base;
     u64 tsc_freq;
-    u32 core_ids[256];
+    CPU_Info cores[256];
     i32 core_count;
 
     void* rsdp;
