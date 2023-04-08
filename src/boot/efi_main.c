@@ -13,7 +13,7 @@
 #define panic(fmt, ...)       \
 do {                          \
     printf(fmt, __VA_ARGS__); \
-    halt();                   \
+    for (;;) {}               \
 } while (false);
 
 #include "efi.h"
@@ -24,6 +24,8 @@ do {                          \
 #define PAGE_4K(x) (((x) + 0xFFF) / 0x1000)
 #define PAGE_2M(x) (((x) + 0x1FFFFF) / 0x200000)
 #define PAGE_1G(x) (((x) + 0x3FFFFFFF) / 0x40000000)
+
+#define KERNEL_FILENAME L"kernel.so"
 
 #define KERNEL_BUFFER_SIZE (16 * 1024 * 1024)
 #define MEM_MAP_LIMIT (1024)
@@ -267,10 +269,8 @@ static bool mem_map_verify(MemMap* mem_map) {
     return true;
 }
 
-EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
-    EFI_STATUS status;
-
-    status = st->ConOut->ClearScreen(st->ConOut);
+EFI_STATUS EfiMain(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
+    EFI_STATUS status = st->ConOut->ClearScreen(st->ConOut);
 
     if(!com_init(COM_DEFAULT_BAUD)) {
         efi_println(st, L"Failed to initialize COM1 port output");
@@ -329,9 +329,9 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         }
 
         EFI_FILE* kernel_file;
-        status = fs_root->Open(fs_root, &kernel_file, (i16*)L"kernel.elf", EFI_FILE_MODE_READ, 0);
+        status = fs_root->Open(fs_root, &kernel_file, (i16*)KERNEL_FILENAME, EFI_FILE_MODE_READ, 0);
         if (status != 0) {
-            panic("Failed to open kernel.elf!\nStatus: %X\n", status);
+            panic("Failed to open kernel file!\nStatus: %X\n", status);
         }
 
         // Kernel buffer is right after the loader region
@@ -343,9 +343,10 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 
         // Verify ELF magic number
         if (memcmp(kernel_buffer, (u8[]) { 0x7F, 'E', 'L', 'F' }, 4) != 0) {
-            panic("kernel.elf is not a valid ELF file!\n");
+            panic("Kernel is not a valid ELF file!\n");
         }
 
+        kernel_file->Close(kernel_file);
         printf("Loaded the kernel at: %X\n", kernel_buffer);
     }
 

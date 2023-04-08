@@ -31,7 +31,6 @@ static void kernel_halt(void);
 #define IMPL
 #include "threads.c"
 
-
 void foobar(void) {
     for (size_t i = 500; i < 1000; i++) {
         boot_info->fb.pixels[i] = 0xFF00FFFF;
@@ -96,10 +95,9 @@ void kmain(BootInfo* restrict info) {
     init_physical_page_alloc(&info->mem_map);
     parse_acpi(boot_info->rsdp);
 
-    // interrupts
-    threads_init();
-
     // Threadgroup* toy_process;
-    threadgroup_spawn(incbin_test_program_start, incbin_test_program_end - incbin_test_program_start, NULL);
+    env_load_elf(incbin_test_program_start, incbin_test_program_end - incbin_test_program_start, NULL);
+
+    // interrupts
     irq_startup();
 }

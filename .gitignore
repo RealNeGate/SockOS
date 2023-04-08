@@ -1,6 +1,8 @@
 bin/
 .vs/
 .vscode/
+zig-out/
+zig-cache/
 
 *.log
 *.o

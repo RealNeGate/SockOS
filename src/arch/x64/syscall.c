@@ -1,9 +1,9 @@
 
 static PageTable* SYS_exit_group(CPUState* state, PageTable* old_address_space) {
-    Threadgroup* group = threads_current->parent;
+    Environment* group = threads_current->parent;
     kprintf("SYS_exit_group(%p, %d)\n", group, state->rdi);
 
-    threadgroup_kill(group);
+    env_kill(group);
     asm volatile("int $32"); // context switch interrupt
 
     // Thread* next = threads_try_switch();

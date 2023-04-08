@@ -6,14 +6,14 @@ typedef struct {
     _Atomic int lock;
     PageTable* address_space;
 
-    Thread* first_in_group;
-    Thread* last_in_group;
-} Threadgroup;
+    Thread* first_in_env;
+    Thread* last_in_env;
+} Environment;
 
 struct Thread {
-    Threadgroup* parent;
-    Thread* prev_in_group;
-    Thread* next_in_group;
+    Environment* parent;
+    Thread* prev_in_env;
+    Thread* next_in_env;
 
     CPUState state;
 
@@ -29,10 +29,10 @@ Thread* threads_first_in_schedule = NULL;
 void spin_lock(_Atomic(int)* lock);
 void spin_unlock(_Atomic(int)* lock);
 
-Threadgroup* threadgroup_create(void);
-void threadgroup_kill(Threadgroup* group);
+Environment* env_create(void);
+void env_kill(Environment* env);
 
-Thread* thread_create(Threadgroup* group, ThreadEntryFn* entrypoint, uintptr_t stack, size_t stack_size, bool is_user);
+Thread* thread_create(Environment* env, ThreadEntryFn* entrypoint, uintptr_t stack, size_t stack_size, bool is_user);
 void thread_kill(Thread* thread);
 
 Thread* threads_try_switch(void);
@@ -49,60 +49,83 @@ void spin_unlock(_Atomic(int)* lock) {
     atomic_exchange(lock, 0);
 }
 
-void threads_init(void) {
+static void identity_map_kernel_region(PageTable* address_space, void* p, size_t size) {
+    uintptr_t x = (((uintptr_t) p) & ~0xFFF);
+
+    // relocate higher half addresses to the ELF in physical memory
+    if (x >= 0xFFFFFFFF80000000ull) {
+        uintptr_t delta = 0xFFFFFFFF80000000ull - boot_info->elf_physical_ptr;
+        x -= delta;
+    }
+
+    uintptr_t base = ((uintptr_t) p) & ~0xFFF;
+    memmap__view(address_space, x, base, size + 4096, PAGE_WRITE);
 }
 
-// groups can have address spaces, threads merely inherit theirs.
+// envs can have address spaces, threads merely inherit theirs.
 //
 // from here, the kernel may load an app into memory with the user-land loader
 // and we have executables.
-Threadgroup* threadgroup_create(void) {
-    Threadgroup* group = alloc_physical_page();
-    group->address_space = alloc_physical_page();
-    return group;
+Environment* env_create(void) {
+    Environment* env = alloc_physical_page();
+    env->address_space = alloc_physical_page();
+
+    // identity map essential kernel stuff
+    //   * IRQ handler
+    extern void asm_int_handler(void);
+    extern void syscall_handler(void);
+    identity_map_kernel_region(env->address_space, &asm_int_handler, 4096);
+    identity_map_kernel_region(env->address_space, &syscall_handler, 4096);
+    identity_map_kernel_region(env->address_space, (void*) &_idt[0], sizeof(_idt));
+    identity_map_kernel_region(env->address_space, boot_info->main_cpu.kernel_stack, KERNEL_STACK_SIZE);
+    identity_map_kernel_region(env->address_space, boot_info, sizeof(BootInfo));
+    identity_map_kernel_region(env->address_space, &boot_info, sizeof(BootInfo*));
+    identity_map_kernel_region(env->address_space, &syscall_table[0], sizeof(syscall_table));
+
+    return env;
 }
 
-void threadgroup_kill(Threadgroup* group) {
+void env_kill(Environment* env) {
     // kill all it's threads
-    spin_lock(&group->lock);
-    for (Thread* t = group->first_in_group; t != NULL; t = t->next_in_group) {
-        // we don't want to have thread_kill handle removing from the group because we're
+    spin_lock(&env->lock);
+    for (Thread* t = env->first_in_env; t != NULL; t = t->next_in_env) {
+        // we don't want to have thread_kill handle removing from the env because we're
         // potentially doing a lot of removals and we can do that with two NULL pointer stores
         // later.
         t->parent = NULL;
         thread_kill(t);
     }
 
-    group->first_in_group = group->last_in_group = NULL;
-    spin_unlock(&group->lock);
+    env->first_in_env = env->last_in_env = NULL;
+    spin_unlock(&env->lock);
 }
 
-Thread* thread_create(Threadgroup* group, ThreadEntryFn* entrypoint, uintptr_t stack, size_t stack_size, bool is_user) {
+Thread* thread_create(Environment* env, ThreadEntryFn* entrypoint, uintptr_t stack, size_t stack_size, bool is_user) {
     Thread* new_thread = alloc_physical_page();
     *new_thread = (Thread){
-        .parent = group,
+        .parent = env,
 
         // initial cpu state (CPU specific)
         .state = new_thread_state(entrypoint, stack, stack_size, is_user)
     };
 
-    // attach to threadgroup
-    if (group != NULL) {
-        spin_lock(&group->lock);
-        if (group->first_in_group == NULL) {
-            group->first_in_group = new_thread;
+    // attach to env
+    if (env != NULL) {
+        spin_lock(&env->lock);
+        if (env->first_in_env == NULL) {
+            env->first_in_env = new_thread;
         }
 
         // attach thread to end
-        Thread* last = group->last_in_group;
-        group->last_in_group = new_thread;
+        Thread* last = env->last_in_env;
+        env->last_in_env = new_thread;
         if (last != NULL) {
-            new_thread->prev_in_group = last;
-            last->next_in_group = new_thread;
+            new_thread->prev_in_env = last;
+            last->next_in_env = new_thread;
         }
 
-        group->last_in_group = new_thread;
-        spin_unlock(&group->lock);
+        env->last_in_env = new_thread;
+        spin_unlock(&env->lock);
     }
 
     // put into schedule
@@ -110,7 +133,7 @@ Thread* thread_create(Threadgroup* group, ThreadEntryFn* entrypoint, uintptr_t s
         threads_first_in_schedule = new_thread;
     } else {
         new_thread->next_in_schedule = threads_first_in_schedule;
-        threads_first_in_schedule->prev_in_group = new_thread;
+        threads_first_in_schedule->prev_in_env = new_thread;
         threads_first_in_schedule = new_thread;
     }
 
@@ -129,27 +152,27 @@ void thread_kill(Thread* thread) {
     }
     spin_lock(&threads_lock);
 
-    // remove from group
-    Threadgroup* group = thread->parent;
-    if (group != NULL) {
-        spin_lock(&group->lock);
+    // remove from env
+    Environment* env = thread->parent;
+    if (env != NULL) {
+        spin_lock(&env->lock);
 
-        Thread* prev = thread->prev_in_group;
-        Thread* next = thread->next_in_group;
+        Thread* prev = thread->prev_in_env;
+        Thread* next = thread->next_in_env;
         if (prev == NULL) {
-            group->first_in_group = next;
+            env->first_in_env = next;
         } else {
-            prev->next_in_group = next;
+            prev->next_in_env = next;
         }
 
         if (next == NULL) {
-            group->last_in_group = prev;
+            env->last_in_env = prev;
         } else {
-            next->prev_in_group = prev;
+            next->prev_in_env = prev;
         }
 
-        // unlock threadgroup
-        spin_unlock(&group->lock);
+        // unlock env
+        spin_unlock(&env->lock);
     }
 }
 
@@ -167,38 +190,13 @@ Thread* threads_try_switch(void) {
     return threads_current->next_in_schedule;
 }
 
-static void identity_map_kernel_region(PageTable* address_space, void* p, size_t size) {
-    uintptr_t x = (((uintptr_t) p) & ~0xFFF);
-
-    // relocate higher half addresses to the ELF in physical memory
-    if (x >= 0xFFFFFFFF80000000ull) {
-        uintptr_t delta = 0xFFFFFFFF80000000ull - boot_info->elf_physical_ptr;
-        x -= delta;
-    }
-
-    uintptr_t base = ((uintptr_t) p) & ~0xFFF;
-    memmap__view(address_space, x, base, size + 4096, PAGE_WRITE);
-}
-
 // this is the trusted ELF loader for priveleged programs, normal apps will probably
 // be loaded via a shared object.
-Threadgroup* threadgroup_spawn(const u8* program, size_t program_size, Thread** root_thread) {
-    Threadgroup* group = threadgroup_create();
+Environment* env_load_elf(const u8* program, size_t program_size, Thread** root_thread) {
+    Environment* env = env_create();
 
     Elf64_Ehdr* elf_header = (Elf64_Ehdr*) program;
     uintptr_t image_base = 0xC0000000;
-
-    // identity map essential kernel stuff
-    //   * IRQ handler
-    extern void asm_int_handler(void);
-    extern void syscall_handler(void);
-    identity_map_kernel_region(group->address_space, &asm_int_handler, 4096);
-    identity_map_kernel_region(group->address_space, &syscall_handler, 4096);
-    identity_map_kernel_region(group->address_space, (void*) &_idt[0], sizeof(_idt));
-    identity_map_kernel_region(group->address_space, boot_info->main_cpu.kernel_stack, KERNEL_STACK_SIZE);
-    identity_map_kernel_region(group->address_space, boot_info, sizeof(BootInfo));
-    identity_map_kernel_region(group->address_space, &boot_info, sizeof(BootInfo*));
-    identity_map_kernel_region(group->address_space, &syscall_table[0], sizeof(syscall_table));
 
     ////////////////////////////////
     // find program bounds
@@ -227,7 +225,7 @@ Threadgroup* threadgroup_spawn(const u8* program, size_t program_size, Thread** 
         return NULL;
     }
 
-    memmap__view(group->address_space, (uintptr_t) dst, image_base, image_size, PAGE_USER | PAGE_WRITE);
+    memmap__view(env->address_space, (uintptr_t) dst, image_base, image_size, PAGE_USER | PAGE_WRITE);
 
     ////////////////////////////////
     // map segments
@@ -261,10 +259,10 @@ Threadgroup* threadgroup_spawn(const u8* program, size_t program_size, Thread** 
 
     // tiny i know
     void* physical_stack = alloc_physical_page();
-    memmap__view(group->address_space, (uintptr_t) physical_stack, 0xA0000000, 4096, PAGE_USER | PAGE_WRITE);
+    memmap__view(env->address_space, (uintptr_t) physical_stack, 0xA0000000, 4096, PAGE_USER | PAGE_WRITE);
 
-    *root_thread = thread_create(group, (ThreadEntryFn*) (image_base + elf_header->e_entry), 0xA0000000, 4096, true);
-    return group;
+    *root_thread = thread_create(env, (ThreadEntryFn*) (image_base + elf_header->e_entry), 0xA0000000, 4096, true);
+    return env;
 }
 
 #endif /* IMPL */

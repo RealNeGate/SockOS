@@ -184,7 +184,9 @@ void irq_startup(void) {
         __writemsr(IA32_KERNEL_GS_BASE, (uintptr_t) &boot_info->main_cpu);
     }
 
-    IDT idt = { .limit = sizeof(_idt) - 1, .base = (uintptr_t)_idt };
+    IDT idt;
+    idt.limit = sizeof(_idt) - 1;
+    idt.base = (uintptr_t)_idt;
     irq_enable(&idt);
 }
 
