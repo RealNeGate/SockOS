@@ -124,39 +124,46 @@ static char* mem_region_name(u64 type) {
     return "MEM_REGION_BAD_TYPE";
 }
 
-static MemMap efi_get_mem_map(EFI_SYSTEM_TABLE* st, size_t* efi_map_key, size_t nregions_limit) {
+#define MAX_REGIONS 1024
+static MemMap efi_get_mem_map(EFI_SYSTEM_TABLE* st, size_t* efi_map_key) {
     EFI_STATUS status;
     u8* efi_descs = NULL;
     size_t desc_size = 0;
     u32 desc_version = 0;
     size_t size = 0;
     size_t map_key = 0;
+
+    // Make the buffer for our return regions before we start mapping
+    MemRegion* regions = efi_alloc(st, MAX_REGIONS * sizeof(MemRegion));
+    if(regions == NULL) {
+        panic("Failed to allocate memory for MemMap");
+    }
+
     // Get the size of memory map and descriptor size
     status = st->BootServices->GetMemoryMap(&size, (void*) efi_descs, &map_key, &desc_size, &desc_version);
     if(status == 0) {
         panic("UEFI shouldn't've returned success here");
     }
-    // Note(flysand): EFI creates one memory descriptor for each allocation.
-    // we add 2 to nregions because below we make two more allocations which.
-    // we'll need to account for.
-    size_t nregions = size / desc_size + 2;
+
+    // Adding room for one more descriptor, 
+    // so we can squash in the descriptors after allocating the descriptors
+    size += desc_size;
+    size_t nregions = (size / desc_size);
     efi_descs = efi_alloc(st, size);
     if(efi_descs == NULL) {
         panic("Failed to allocate memory for EFI Memory Descriptors");
     }
-    MemRegion* regions = efi_alloc(st, nregions_limit * sizeof(MemRegion));
-    if(regions == NULL) {
-        panic("Failed to allocate memory for MemMap");
-    }
+
     // Get the memory descriptors
     status = st->BootServices->GetMemoryMap(&size, (void*) efi_descs, &map_key, &desc_size, &desc_version);
     if (status != 0) {
-        panic("Failed to get memory map!\nStatus: %x", status);
+        printf("Needed %D B for the memory map!\n", size);
+        panic("Failed to get memory map!\nStatus: %s\n", efi_errstr(status));
     }
     nregions = size / desc_size;
     // Load memory map into `regions`
     // printf("MemMap as returned by UEFI:\n");
-    for (int i = 0; i < nregions && i < nregions_limit; i++) {
+    for (int i = 0; i < nregions && i < MAX_REGIONS; i++) {
         EFI_MEMORY_DESCRIPTOR* desc = (EFI_MEMORY_DESCRIPTOR*)(efi_descs + (i * desc_size));
         u64 type = efi_cvt_mem_desc_type(desc->Type);
         u64 paddr = (u64) desc->PhysicalStart;
@@ -171,6 +178,6 @@ static MemMap efi_get_mem_map(EFI_SYSTEM_TABLE* st, size_t* efi_map_key, size_t 
     MemMap result;
     result.nregions = nregions;
     result.regions = regions;
-    result.cap = nregions_limit;
+    result.cap = MAX_REGIONS;
     return result;
 }

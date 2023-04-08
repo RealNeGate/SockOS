@@ -10,6 +10,23 @@
 #define EFI_FILE_MODE_READ             0x0000000000000001
 #define EFI_OPEN_PROTOCOL_GET_PROTOCOL 0x00000002
 
+#define EFI_ERRORS           \
+    X(EFI_NO_ERROR)          \
+    X(EFI_LOAD_ERROR)        \
+    X(EFI_INVALID_PARAMETER) \
+    X(EFI_UNSUPPORTED)       \
+    X(EFI_BAD_BUFFER_SIZE)   \
+    X(EFI_BUFFER_TOO_SMALL)  \
+    X(EFI_NOT_READY)         \
+    X(EFI_DEVICE_ERROR)      \
+    X(EFI_WRITE_PROTECTED)
+
+typedef enum {
+#define X(name) name,
+    EFI_ERRORS
+#undef X
+} EFI_Errors;
+
 typedef void*    EFI_HANDLE;
 typedef void*    EFI_EVENT;
 typedef size_t   EFI_STATUS;
@@ -569,3 +586,13 @@ typedef struct _EFI_FS_HANDLE {
     u64                                    Revision;
     EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_OPEN_VOLUME OpenVolume;
 } EFI_SIMPLE_FILE_SYSTEM_PROTOCOL;
+
+char *efi_errstr(int val) {
+    switch (val) {
+        #define X(error) \
+        case error:      \
+            return #error;
+            EFI_ERRORS
+        #undef X
+    }
+}

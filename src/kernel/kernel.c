@@ -97,8 +97,10 @@ void kmain(BootInfo* restrict info) {
     get_cpu_str(brand_str);
     kprintf("Booting %s\n", brand_str);
 
-    init_physical_page_alloc(&info->mem_map);
-    parse_acpi(boot_info->rsdp);
+    init_physical_page_alloc(&boot_info->mem_map);
+    parse_acpi(boot_info);
+    kprintf("ACPI processed...\n");
+    kprintf("%d cores | TSC freq %d MHz\n", boot_info->core_count, boot_info->tsc_freq);
 
     Env* toy = env_create();
     Thread* mine = env_load_elf(toy, incbin_test_program_start, incbin_test_program_end - incbin_test_program_start);

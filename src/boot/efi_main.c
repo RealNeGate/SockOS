@@ -18,7 +18,7 @@ do {                          \
 
 #include "efi.h"
 #include "efi_util.c"
-#include <elf.h>
+#include "elf.h"
 #include "elf_loader.c"
 
 #define PAGE_4K(x) (((x) + 0xFFF) / 0x1000)
@@ -28,7 +28,6 @@ do {                          \
 #define KERNEL_FILENAME L"kernel.so"
 
 #define KERNEL_BUFFER_SIZE (16 * 1024 * 1024)
-#define MEM_MAP_LIMIT (1024)
 
 typedef void (*LoaderFunction)(BootInfo* info, u8* stack, u64 tss_lo, u64 tss_hi);
 
@@ -367,7 +366,7 @@ EFI_STATUS EfiMain(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     printf("Kernel stack: %X .. %X\n", kstack_base, kstack_end);
 
     // Allocate space for our page tables before we exit UEFI
-    size_t page_tables_count = 4ull * 1024 * 1024 / 4096;
+    size_t page_tables_count = (16ull * 1024 * 1024) / 4096;
     printf("Allocating %X bytes for page tables\n", page_tables_count * 4096);
     PageTable* page_tables = efi_alloc_pages(st, page_tables_count);
     if (page_tables == NULL) {
@@ -393,13 +392,13 @@ EFI_STATUS EfiMain(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     }
 
     boot_info.rsdp = (void *)rsdp;
-    printf("RSDP: %X", rsdp);
+    printf("RSDP: %X\n", rsdp);
     printf("Beginning EFI handoff...\n");
 
     // Load latest memory map
     size_t fb_size_pages = PAGE_4K(fb.width * fb.height * sizeof(u32));
     size_t map_key;
-    MemMap mem_map = efi_get_mem_map(st, &map_key, MEM_MAP_LIMIT);
+    MemMap mem_map = efi_get_mem_map(st, &map_key);
     // TODO(flysand): there seems to be a bug in mem_map_mark, if we switch around the two lines below
     // the function refuses to remap the kernel memory region. Gotta investigate that when I'm not sleepy
     mem_map_mark(&mem_map, kernel_module.phys_base, PAGE_4K(kernel_module.size), MEM_REGION_KERNEL);

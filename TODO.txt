@@ -1,9 +1,0 @@
-* we current load all pages as executable... this is very bad
-
-
-
-
-First steps:
-  get the interrupts working
-  PS/2 keyboard & mouse
-  USB

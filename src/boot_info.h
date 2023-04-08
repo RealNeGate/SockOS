@@ -65,6 +65,10 @@ typedef struct {
     PageTable* kernel_pml4; // identity mapped
     PerCPU main_cpu;
 
+    u64 tsc_freq;
+    u32 core_ids[256];
+    i32 core_count;
+
     void* rsdp;
     MemMap mem_map;
 

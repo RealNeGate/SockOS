@@ -45,6 +45,8 @@ static bool elf_load(EFI_SYSTEM_TABLE* st, void* elf_base, ELF_Module *module) {
     if (phys_base == NULL) {
         panic("Failed to allocate space for kernel phys_base!\n");
     }
+    // zero our pages
+    memset(phys_base, 0, image_size);
     printf("Phys addr: %X..%X\n", phys_base, phys_base + image_size);
     // Copy the segments into memory at the respective addresses in physical memory
     u64 virt_base = min_vaddr;

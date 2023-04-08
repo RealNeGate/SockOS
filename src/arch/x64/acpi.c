@@ -84,7 +84,9 @@ typedef enum {
     APIC_ENTRY_LOCAL_X2APIC                      = 9,
 } APIC_Entry_Type;
 
-void parse_acpi(void *rsdp) {
+void parse_acpi(BootInfo *info) {
+    void *rsdp = info->rsdp;
+
     ACPI_RSDP_Desc_V2 *header = (ACPI_RSDP_Desc_V2 *)rsdp;
     u8 rsdp_magic[] = {'R', 'S', 'D', ' ', 'P', 'T', 'R', ' ' };
     if (!memeq(header->rsdp_head.signature, rsdp_magic, sizeof(rsdp_magic))) {
@@ -105,7 +107,7 @@ void parse_acpi(void *rsdp) {
              );
     }
 
-    int core_count = 0;
+    i32 core_count = 0;
     u64 tsc_freq = 0;
 
     u8 apic_magic[] = {'A', 'P', 'I', 'C' };
@@ -116,7 +118,7 @@ void parse_acpi(void *rsdp) {
         ACPI_SDT_Header *head = (ACPI_SDT_Header *)xhead->other_headers[i];
 
         char *buf_ptr = (char *)head + sizeof(ACPI_SDT_Header);
-        // Map the APIC list
+        // Map the APIC list and build the list of cores
         if (memeq(head->signature, apic_magic, sizeof(apic_magic))) {
             ACPI_APIC_Header *ahead = (ACPI_APIC_Header *)buf_ptr;
 
@@ -129,7 +131,7 @@ void parse_acpi(void *rsdp) {
                 buf_ptr += entry->length;
             }
 
-        // Map out the HPET
+        // Map out the HPET and get the TSC frequency
         } else if (memeq(head->signature, hpet_magic, sizeof(hpet_magic))) {
            ACPI_HPET_Header *hhead = (ACPI_HPET_Header *)buf_ptr;
            volatile u64 *hpet_reg = (u64 *)hhead->addr_struct.address;
@@ -167,6 +169,6 @@ void parse_acpi(void *rsdp) {
         panic("Invalid core count from ACPI!\n");
     }
 
-    kprintf("ACPI processed...\n");
-    kprintf("%d cores | TSC freq %d MHz\n", core_count, tsc_freq);
+    boot_info->core_count = core_count;
+    boot_info->tsc_freq = tsc_freq;
 }
