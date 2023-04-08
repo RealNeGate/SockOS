@@ -15,11 +15,7 @@ pub fn build(b: *std.Build) void {
 
     const efi = b.addExecutable(.{
             .name = "bootx64",
-            .target = .{
-                .cpu_arch = .x86_64,
-                .os_tag = .uefi,
-                .abi = .msvc,
-            },
+            .target = .{ .cpu_arch = .x86_64, .os_tag = .uefi, .abi = .msvc },
             .optimize = optimize,
         });
 
@@ -40,11 +36,7 @@ pub fn build(b: *std.Build) void {
 
     const kernel = b.addExecutable(.{
             .name = "kernel.so",
-            .target = .{
-                .cpu_arch = .x86_64,
-                .os_tag = .linux,
-                .abi = .gnu,
-            },
+            .target = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu },
             .optimize = optimize,
         });
 
@@ -57,4 +49,23 @@ pub fn build(b: *std.Build) void {
     kernel.addAssemblyFile("src/arch/x64/loader.s");
     kernel.addAssemblyFile("src/arch/x64/irq.s");
     kernel.install();
+
+    ////////////////////////////////
+    // Qemu testing
+    ////////////////////////////////
+    const qemu_cmd = &[_][]const u8{
+        "qemu-system-x86_64",
+        "-serial", "stdio",
+        "-bios", "OVMF.fd",
+        "-drive", "format=raw,file=fat:rw:bin",
+        "-no-reboot", "-s",
+        "-d", "int", "-D", "qemu.log",
+        "-smp", "cores=4,threads=1,sockets=1"
+    };
+
+    const run_cmd = b.addSystemCommand(qemu_cmd);
+    run_cmd.step.dependOn(b.getInstallStep());
+
+    const run_step = b.step("run", "Run with QEMU");
+    run_step.dependOn(&run_cmd.step);
 }

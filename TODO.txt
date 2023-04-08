@@ -5,7 +5,5 @@
 
 First steps:
   get the interrupts working
-  memory mapping API
-  threads/processes
   PS/2 keyboard & mouse
   USB

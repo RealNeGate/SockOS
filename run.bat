@@ -1,1 +1,0 @@
-qemu-system-x86_64 -serial stdio -bios OVMF.fd -drive format=raw,file=fat:rw:bin -no-reboot -s -d int -D qemu.log -smp cores=4,threads=1,sockets=1
