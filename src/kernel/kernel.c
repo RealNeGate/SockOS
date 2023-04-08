@@ -95,8 +95,8 @@ void kmain(BootInfo* restrict info) {
     init_physical_page_alloc(&info->mem_map);
     parse_acpi(boot_info->rsdp);
 
-    // Threadgroup* toy_process;
-    env_load_elf(incbin_test_program_start, incbin_test_program_end - incbin_test_program_start, NULL);
+    Env* toy = env_create();
+    Thread* mine = env_load_elf(toy, incbin_test_program_start, incbin_test_program_end - incbin_test_program_start);
 
     // interrupts
     irq_startup();

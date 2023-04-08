@@ -1,6 +1,6 @@
 
 static PageTable* SYS_exit_group(CPUState* state, PageTable* old_address_space) {
-    Environment* group = threads_current->parent;
+    Env* group = threads_current->parent;
     kprintf("SYS_exit_group(%p, %d)\n", group, state->rdi);
 
     env_kill(group);

@@ -8,10 +8,10 @@ typedef struct {
 
     Thread* first_in_env;
     Thread* last_in_env;
-} Environment;
+} Env;
 
 struct Thread {
-    Environment* parent;
+    Env* parent;
     Thread* prev_in_env;
     Thread* next_in_env;
 
@@ -29,10 +29,10 @@ Thread* threads_first_in_schedule = NULL;
 void spin_lock(_Atomic(int)* lock);
 void spin_unlock(_Atomic(int)* lock);
 
-Environment* env_create(void);
-void env_kill(Environment* env);
+Env* env_create(void);
+void env_kill(Env* env);
 
-Thread* thread_create(Environment* env, ThreadEntryFn* entrypoint, uintptr_t stack, size_t stack_size, bool is_user);
+Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t stack, size_t stack_size, bool is_user);
 void thread_kill(Thread* thread);
 
 Thread* threads_try_switch(void);
@@ -66,8 +66,8 @@ static void identity_map_kernel_region(PageTable* address_space, void* p, size_t
 //
 // from here, the kernel may load an app into memory with the user-land loader
 // and we have executables.
-Environment* env_create(void) {
-    Environment* env = alloc_physical_page();
+Env* env_create(void) {
+    Env* env = alloc_physical_page();
     env->address_space = alloc_physical_page();
 
     // identity map essential kernel stuff
@@ -85,7 +85,7 @@ Environment* env_create(void) {
     return env;
 }
 
-void env_kill(Environment* env) {
+void env_kill(Env* env) {
     // kill all it's threads
     spin_lock(&env->lock);
     for (Thread* t = env->first_in_env; t != NULL; t = t->next_in_env) {
@@ -100,7 +100,7 @@ void env_kill(Environment* env) {
     spin_unlock(&env->lock);
 }
 
-Thread* thread_create(Environment* env, ThreadEntryFn* entrypoint, uintptr_t stack, size_t stack_size, bool is_user) {
+Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t stack, size_t stack_size, bool is_user) {
     Thread* new_thread = alloc_physical_page();
     *new_thread = (Thread){
         .parent = env,
@@ -130,10 +130,10 @@ Thread* thread_create(Environment* env, ThreadEntryFn* entrypoint, uintptr_t sta
 
     // put into schedule
     if (threads_first_in_schedule != NULL) {
-        threads_first_in_schedule = new_thread;
-    } else {
         new_thread->next_in_schedule = threads_first_in_schedule;
         threads_first_in_schedule->prev_in_env = new_thread;
+        threads_first_in_schedule = new_thread;
+    } else {
         threads_first_in_schedule = new_thread;
     }
 
@@ -153,7 +153,7 @@ void thread_kill(Thread* thread) {
     spin_lock(&threads_lock);
 
     // remove from env
-    Environment* env = thread->parent;
+    Env* env = thread->parent;
     if (env != NULL) {
         spin_lock(&env->lock);
 
@@ -192,9 +192,7 @@ Thread* threads_try_switch(void) {
 
 // this is the trusted ELF loader for priveleged programs, normal apps will probably
 // be loaded via a shared object.
-Environment* env_load_elf(const u8* program, size_t program_size, Thread** root_thread) {
-    Environment* env = env_create();
-
+Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
     Elf64_Ehdr* elf_header = (Elf64_Ehdr*) program;
     uintptr_t image_base = 0xC0000000;
 
@@ -261,8 +259,7 @@ Environment* env_load_elf(const u8* program, size_t program_size, Thread** root_
     void* physical_stack = alloc_physical_page();
     memmap__view(env->address_space, (uintptr_t) physical_stack, 0xA0000000, 4096, PAGE_USER | PAGE_WRITE);
 
-    *root_thread = thread_create(env, (ThreadEntryFn*) (image_base + elf_header->e_entry), 0xA0000000, 4096, true);
-    return env;
+    return thread_create(env, (ThreadEntryFn*) (image_base + elf_header->e_entry), 0xA0000000, 4096, true);
 }
 
 #endif /* IMPL */
