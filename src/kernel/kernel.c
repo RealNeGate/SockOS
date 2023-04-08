@@ -31,10 +31,15 @@ static void kernel_halt(void);
 #define IMPL
 #include "threads.c"
 
-void foobar(void) {
+int foobar(void* arg) {
     for (size_t i = 500; i < 1000; i++) {
         boot_info->fb.pixels[i] = 0xFF00FFFF;
     }
+
+    // kill itself (then switch away)
+    thread_kill(threads_current);
+    asm ("int 32");
+    return 0;
 }
 
 #define STR2(x) #x

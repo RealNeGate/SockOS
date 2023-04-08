@@ -271,6 +271,7 @@ static bool mem_map_verify(MemMap* mem_map) {
 
 EFI_STATUS EfiMain(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     EFI_STATUS status = st->ConOut->ClearScreen(st->ConOut);
+    printf("[INFO] Booting\n");
 
     if(!com_init(COM_DEFAULT_BAUD)) {
         efi_println(st, L"Failed to initialize COM1 port output");
@@ -347,6 +348,8 @@ EFI_STATUS EfiMain(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         }
 
         kernel_file->Close(kernel_file);
+        fs_root->Close(fs_root);
+
         printf("Loaded the kernel at: %X\n", kernel_buffer);
     }
 
