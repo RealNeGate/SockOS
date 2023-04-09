@@ -8,7 +8,8 @@ uintptr_t smp_stack_base = 0;
 uintptr_t smp_lapic_addr = 0;
 
 void smp_main(PerCPU* cpu) {
-    kprintf("Hello: %x\n", cpu - boot_info->cores);
+    kprintf("Hello Mr. CPU!\n");
+    //kprintf("Hello: %x\n", cpu - boot_info->cores);
     // set up the GS, interrupts, and paging
 
     // add the idle task to the job queue
@@ -84,14 +85,11 @@ void boot_cores(void) {
 
         // sleep for a while
         powernap(200);
-        kprintf("Errors? %d\n", apic_get_errors());
 
         // Send a STARTUP IPI
         send_ipi(lapic_id, 0x4601);
 
         powernap(200);
-        kprintf("Errors? %d\n", apic_get_errors());
-        break;
     }
 
     powernap(1000000);
