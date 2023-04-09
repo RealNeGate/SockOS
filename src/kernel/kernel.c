@@ -90,7 +90,7 @@ void kmain(BootInfo* restrict info) {
     extern Buffer test2;
 
     Env* toy = env_create();
-    Thread* mine = env_load_elf(toy, test2.data, test2.length);
+    Thread* ours = env_load_elf(toy, test2.data, test2.length);
 
     // interrupts
     irq_startup(0);
