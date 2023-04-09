@@ -15,6 +15,8 @@ void smp_main(PerCPU* cpu) {
     // add the idle task to the job queue
 
     // boot the scheduler
+
+	halt();
 }
 
 u32 apic_get_errors(void) {
