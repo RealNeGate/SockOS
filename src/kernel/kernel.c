@@ -50,14 +50,9 @@ static void kernel_halt(void) {
     // TODO(NeGate): we should add some key to spawn a shell once we have that
     kprintf("No tasks running...\n");
 
-    // wait forever
-    halt();
 }
 
-void kmain(BootInfo* restrict info) {
-    boot_info = info;
-    kprintf("Beginning kernel boot...\n");
-
+static int kernel_init(void* arg) {
     // Draw fancy background
     u64 gradient_x = (boot_info->fb.width + 255) / 256;
     u64 gradient_y = (boot_info->fb.height + 255) / 256;
@@ -72,9 +67,18 @@ void kmain(BootInfo* restrict info) {
         }
     }
 
+    for (;;) {}
+    return 0;
+}
+
+void kmain(BootInfo* restrict info) {
+    boot_info = info;
+    kprintf("Beginning kernel boot...\n");
+
     if (!has_cpu_support()) {
         panic("Here's a nickel, kid. Buy yourself a computer.\n");
     }
+
     char brand_str[128] = {};
     get_cpu_str(brand_str);
     kprintf("Booting %s\n", brand_str);
@@ -85,13 +89,19 @@ void kmain(BootInfo* restrict info) {
 
     kprintf("ACPI processed...\n");
     kprintf("Found %d cores | TSC freq %d MHz\n", boot_info->core_count, boot_info->tsc_freq);
-    boot_cores();
+    // boot_cores();
 
-    extern Buffer test2;
+    // extern Buffer test2;
+    // Env* toy = env_create();
+    // Thread* mine = env_load_elf(toy, test2.data, test2.length);
 
-    Env* toy = env_create();
-    Thread* mine = env_load_elf(toy, test2.data, test2.length);
+    // we're switching into a proper kernel task such that we can sleep correctly
+    uintptr_t nustack = (uintptr_t) alloc_physical_pages(KERNEL_STACK_SIZE / PAGE_SIZE);
+    thread_create(NULL, kernel_init, nustack, KERNEL_STACK_SIZE, false);
 
-    // interrupts
     irq_startup(0);
+    irq_compute_apic_speed();
+
+    // jump into timer interrupt, we're going to run tasks now
+    asm volatile ("int 32");
 }

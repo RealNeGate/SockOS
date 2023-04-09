@@ -25,9 +25,6 @@ SECTIONS
     .text : {
         *(.text .text.*)
 
-        /* Move to the next memory page for .rodata */
-        . += CONSTANT(MAXPAGESIZE);
-
         bootstrap.o (.text.bootstrap_start)
     } :text
 

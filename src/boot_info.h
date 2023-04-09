@@ -68,6 +68,7 @@ typedef struct {
 
     u64 lapic_base;
     u64 tsc_freq;
+    u64 apic_tick_in_tsc;
 
     i32 core_count;
     PerCPU cores[256];
@@ -89,7 +90,5 @@ typedef struct {
 
 // loader.s & irq.s needs these to be here
 _Static_assert(offsetof(BootInfo, kernel_pml4) == 0, "the loader is sad");
-_Static_assert(offsetof(BootInfo, core_count) == 24, "the bootstrap.s is sad");
-
 _Static_assert(offsetof(PerCPU, kernel_stack_top) == 8, "the irq.s & bootstrap.s is sad");
 _Static_assert(offsetof(PerCPU, user_stack_scratch) == 16, "the irq.s is sad");

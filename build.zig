@@ -1,3 +1,4 @@
+const builtin = @import("builtin");
 const std = @import("std");
 const CrossTarget = std.zig.CrossTarget;
 const FileSource = std.Build.FileSource;

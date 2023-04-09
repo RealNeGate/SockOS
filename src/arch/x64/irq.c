@@ -11,6 +11,8 @@ enum {
     IA32_LSTAR = 0xC0000082,
     IA32_KERNEL_GS_BASE = 0xC0000102,
 
+    IA32_TSC_DEADLINE = 0x6E0,
+
     // LAPIC interrupts
     INTR_LAPIC_TIMER      = 0xF0,
     INTR_LAPIC_SPURIOUS   = 0xF1,
@@ -47,6 +49,11 @@ extern void isr_handler(void);
 extern void irq_enable(IDT* idt);
 extern void irq_disable(void);
 extern void isr3(void);
+
+static const char* interrupt_names[] = {
+    #define X(id, name) [id] = name,
+    #include "irq_list.h"
+};
 
 volatile IDTEntry _idt[256];
 
@@ -88,6 +95,10 @@ static void irq_set_pit(int hz) {
 // access MMIO registers
 static volatile void* mmio_reg(volatile void* base, ptrdiff_t offset) {
     return ((volatile char*)base) + offset;
+}
+
+static uint32_t tsc_to_apic_time(uint64_t t) {
+    return t;
 }
 
 #define SET_INTERRUPT(num, has_error) do {              \
@@ -156,12 +167,10 @@ void irq_startup(int core_id) {
         APIC(0xF0) |= 0x1FF;
 
         // 320h - LVT timer register
-        //   we just want a simple periodic timer on IRQ32
-        APIC(0x320) = 0x20000 | 32;
+        //   we just want a simple one-shot timer on IRQ32
+        APIC(0x320) = 0x00000 | 32;
         //   timer divide reg
         APIC(0x3E0) = 0b1011;
-        //   initial timer count
-        APIC(0x380) = 1000000;
     }
 
     IDT idt;
@@ -170,15 +179,27 @@ void irq_startup(int core_id) {
     irq_enable(&idt);
 }
 
-PageTable* irq_catch_on_fire(CPUState* state, PageTable* old_address_space, PerCPU* cpu) {
-    // TODO: Only do this for kernel shit.. Signal for userspace fails
-    // return to kernel halting thread
-    *state = new_thread_state(kernel_halt, (uintptr_t) cpu->kernel_stack, KERNEL_STACK_SIZE, false);
-    return boot_info->kernel_pml4;
+// hacky way to get APIC timer speed
+static volatile bool apic_tick_measuring;
+static u64 apic_tick_measure_start;
+void irq_compute_apic_speed(void) {
+    apic_tick_measuring = true;
+    apic_tick_measure_start = __rdtsc();
+    // wait for 1000 ticks
+    APIC(0x380) = 1000;
+
+    // wait for the interrupt
+    while (apic_tick_measuring) {
+        asm volatile ("pause");
+    }
+
+    kprintf("APIC timer: %d TSC ticks per APIC\n", boot_info->apic_tick_in_tsc);
 }
 
 PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU* cpu) {
-    kprintf("int %d: error=%x\n", state->interrupt_num, state->error);
+    uint64_t now = __rdtsc();
+
+    kprintf("int %d: error=%x (%s)\n", state->interrupt_num, state->error, interrupt_names[state->interrupt_num]);
     kprintf("  rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
 
     if (state->interrupt_num == 14) {
@@ -187,11 +208,23 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
 
         kprintf("  cr2=%p (translated %p)\n", x, y);
         kprintf("  cr3=%p\n", old_address_space);
-        return irq_catch_on_fire(state, old_address_space, cpu);
+
+        halt();
+        return old_address_space;
     } else if (state->interrupt_num == 32) {
-        Thread* next = threads_try_switch();
+        // we're timing for the apic speed, just return back to
+        // the user with the computed results
+        if (apic_tick_measuring) {
+            boot_info->apic_tick_in_tsc = (now - apic_tick_measure_start) / 1000;
+            apic_tick_measuring = false;
+            return old_address_space;
+        }
+
+        Thread* next = sched_try_switch();
         if (next == NULL) {
-            return irq_catch_on_fire(state, old_address_space, cpu);
+            kprintf("no tasks to do!\n");
+            halt();
+            return old_address_space;
         }
 
         // do thread context switch, if we changed
@@ -205,21 +238,17 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
             threads_current = next;
         }
 
-        // APIC interrupts require an EOI signal to be sent before
-        // another one can come in, it's a little write only register
-        // in the LAPIC.
+        // send EOI
         APIC(0xB0) = 0;
 
-        return next->parent->address_space;
+        // write next one-shot interrupt
+        uint64_t time_slice = 16*1000*boot_info->tsc_freq; // 16ms
+        APIC(0x380) = tsc_to_apic_time(time_slice);
+
+        return next->parent ? next->parent->address_space : boot_info->kernel_pml4;
     } else {
         return old_address_space;
     }
-}
-
-PageTable* do_syscall(CPUState* state, PageTable* old_address_space) {
-    kprintf("syscall%d(0x%x, 0x%x, 0x%x, 0x%x)\n", state->rax, state->rdi, state->rsi, state->rdx, state->r10);
-    // kprintf("  rip=%p, rsp=%p\n", state->rcx, state->rsp);
-    return old_address_space;
 }
 
 CPUState new_thread_state(void* entrypoint, uintptr_t stack, size_t stack_size, bool is_user) {

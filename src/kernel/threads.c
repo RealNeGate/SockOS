@@ -35,14 +35,16 @@ void env_kill(Env* env);
 Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t stack, size_t stack_size, bool is_user);
 void thread_kill(Thread* thread);
 
-Thread* threads_try_switch(void);
+Thread* sched_try_switch(void);
 
 #else
 
 void spin_lock(_Atomic(int)* lock) {
     // we shouldn't be spin locking...
     int old = 0;
-    while (atomic_compare_exchange_strong(lock, &old, 1)) {}
+    while (atomic_compare_exchange_strong(lock, &old, 1)) {
+        asm volatile ("pause");
+    }
 }
 
 void spin_unlock(_Atomic(int)* lock) {
@@ -178,7 +180,7 @@ void thread_kill(Thread* thread) {
     }
 }
 
-Thread* threads_try_switch(void) {
+Thread* sched_try_switch(void) {
     // first task to run
     if (threads_current == NULL) {
         return threads_first_in_schedule;
