@@ -77,10 +77,12 @@ Env* env_create(void) {
     identity_map_kernel_region(env->address_space, &asm_int_handler, 4096);
     identity_map_kernel_region(env->address_space, &syscall_handler, 4096);
     identity_map_kernel_region(env->address_space, (void*) &_idt[0], sizeof(_idt));
-    identity_map_kernel_region(env->address_space, boot_info->main_cpu.kernel_stack, KERNEL_STACK_SIZE);
     identity_map_kernel_region(env->address_space, boot_info, sizeof(BootInfo));
     identity_map_kernel_region(env->address_space, &boot_info, sizeof(BootInfo*));
     identity_map_kernel_region(env->address_space, &syscall_table[0], sizeof(syscall_table));
+
+    // TODO(NeGate): uhh... i think we wanna map all their kernel stacks?
+    identity_map_kernel_region(env->address_space, boot_info->cores[0].kernel_stack, KERNEL_STACK_SIZE);
 
     return env;
 }
@@ -194,11 +196,11 @@ Thread* threads_try_switch(void) {
 // be loaded via a shared object.
 Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
     Elf64_Ehdr* elf_header = (Elf64_Ehdr*) program;
-    uintptr_t image_base = 0xC0000000;
 
     ////////////////////////////////
     // find program bounds
     ////////////////////////////////
+    uintptr_t image_base = 0xC0000000;
     uintptr_t image_size = 0;
 
     const u8* segments = program + elf_header->e_phoff;

@@ -10,7 +10,7 @@ typedef struct {
 
 enum {
     PAGE_SIZE = 4096,
-    KERNEL_STACK_SIZE = 0x200000,
+    KERNEL_STACK_SIZE = 0x4000,
 };
 
 typedef struct {
@@ -58,22 +58,19 @@ typedef struct {
     u8* kernel_stack_top;
 
     u8* user_stack_scratch;
-} PerCPU;
 
-typedef struct {
-    u32 core_id;
-    u32 lapic_id;
-} CPU_Info;
+    u32 core_id, lapic_id;
+} PerCPU;
 
 // This is all the crap we throw into the loader
 typedef struct {
     PageTable* kernel_pml4; // identity mapped
-    PerCPU main_cpu;
 
     u64 lapic_base;
     u64 tsc_freq;
-    CPU_Info cores[256];
+
     i32 core_count;
+    PerCPU cores[256];
 
     void* rsdp;
     MemMap mem_map;
@@ -90,8 +87,9 @@ typedef struct {
     u32 tss[26];
 } BootInfo;
 
-// loader.asm & irq.asm needs these to be here
+// loader.s & irq.s needs these to be here
 _Static_assert(offsetof(BootInfo, kernel_pml4) == 0, "the loader is sad");
+_Static_assert(offsetof(BootInfo, core_count) == 24, "the bootstrap.s is sad");
 
-_Static_assert(offsetof(PerCPU, kernel_stack_top) == 8, "the irq.asm is sad");
-_Static_assert(offsetof(PerCPU, user_stack_scratch) == 16, "the irq.asm is sad");
+_Static_assert(offsetof(PerCPU, kernel_stack_top) == 8, "the irq.s & bootstrap.s is sad");
+_Static_assert(offsetof(PerCPU, user_stack_scratch) == 16, "the irq.s is sad");

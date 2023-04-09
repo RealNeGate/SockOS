@@ -415,7 +415,7 @@ EFI_STATUS EfiMain(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     }
 
     // Print memory map
-    {
+    if (0) {
         printf("Memory map (%d entries):\n", mem_map.nregions);
         for(int i = 0; i != mem_map.nregions; ++i) {
             MemRegion region = mem_map.regions[i];
@@ -432,11 +432,11 @@ EFI_STATUS EfiMain(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
             if(region.type != MEM_REGION_KERNEL) {
                 panic("Something bad is located at kernel's paddr");
             }
-            printf("Making a map %X -> %X (%X pages)\n", kernel_module.virt_base, region.base, region.pages);
+            // printf("Making a map %X -> %X (%X pages)\n", kernel_module.virt_base, region.base, region.pages);
             map_pages(&ctx, kernel_module.virt_base, region.base, region.pages);
         }
         else {
-            printf("Making a map %X -> %X (%X pages)\n", region.base, region.base, region.pages);
+            // printf("Making a map %X -> %X (%X pages)\n", region.base, region.base, region.pages);
             map_pages_id(&ctx, region.base, region.pages);
         }
     }
@@ -472,8 +472,8 @@ EFI_STATUS EfiMain(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     boot_info.fb = fb;
     boot_info.mem_map = mem_map;
     boot_info.kernel_pml4 = &page_tables[0];
-    boot_info.main_cpu.kernel_stack = kstack_base;
-    boot_info.main_cpu.kernel_stack_top = kstack_end;
+    boot_info.cores[0].kernel_stack = kstack_base;
+    boot_info.cores[0].kernel_stack_top = kstack_end;
 
     // transition to kernel page table
     #ifdef USE_INTRIN

@@ -58,12 +58,12 @@ static bool elf_load(EFI_SYSTEM_TABLE* st, void* elf_base, ELF_Module *module) {
             continue;
         }
         u64 base_offset = segment->p_vaddr - virt_base;
-        printf("  Segment offset: %X\n", base_offset);
+        // printf("  Segment offset: %X\n", base_offset);
         u8* dst_data = phys_base + base_offset;
         u8* src_data = elf + segment->p_offset;
         memcpy(dst_data, src_data, segment->p_filesz);
-        printf("Memory dump at %X:\n", dst_data);
-        memdump(dst_data, 16);
+        // printf("Memory dump at %X:\n", dst_data);
+        // memdump(dst_data, 16);
         // TODO(NeGate): set new memory protection rules
         #if 0
         DWORD new_protect = 0;
@@ -80,7 +80,7 @@ static bool elf_load(EFI_SYSTEM_TABLE* st, void* elf_base, ELF_Module *module) {
     // Find the RELA section and resolve the relocations
     u8* sections = elf + elf_header->e_shoff;
     size_t section_count = elf_header->e_shnum;
-    printf("Resolving relocations\n");
+    // printf("Resolving relocations\n");
     for (size_t i = 0; i < section_count; i++) {
         Elf64_Shdr* section = (Elf64_Shdr*) (sections + i * elf_header->e_shentsize);
         if (section->sh_type != SHT_RELA) {
@@ -96,7 +96,7 @@ static bool elf_load(EFI_SYSTEM_TABLE* st, void* elf_base, ELF_Module *module) {
                 size_t reloc_addend = rela->r_addend - virt_base;
                 u64 patch_address = (u64)(phys_base + reloc_offset);
                 u64 resolved_address = (u64)(virt_base + reloc_addend);
-                printf("  Reloc: [%X] = %X\n", patch_address, resolved_address);
+                // printf("  Reloc: [%X] = %X\n", patch_address, resolved_address);
                 *(u64*)patch_address = resolved_address;
             } else {
                 panic("Unable to handle unknown relocation type!\n\n");

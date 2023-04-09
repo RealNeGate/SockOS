@@ -3,7 +3,7 @@ void* memset(void* buffer, int c, size_t n) {
     for (size_t i = 0; i < n; i++) {
         buf[i] = c;
     }
-    return (void*)buf;
+    return buffer;
 }
 
 void* memcpy(void* dest, const void* src, size_t n) {
@@ -12,7 +12,7 @@ void* memcpy(void* dest, const void* src, size_t n) {
     for (size_t i = 0; i < n; i++) {
         d[i] = s[i];
     }
-    return (void*)dest;
+    return dest;
 }
 
 int memcmp(const void* a, const void* b, size_t n) {

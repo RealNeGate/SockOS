@@ -46,25 +46,6 @@ int foobar(void* arg) {
 #define STR2(x) #x
 #define STR(x) STR2(x)
 
-// this aligns start address to 16 and terminates byte array with explict 0
-// which is not really needed, feel free to change it to whatever you want/need
-#define INCBIN(name, file) \
-__asm__(".section .rodata\n" \
-    ".global incbin_" STR(name) "_start\n" \
-    ".balign 16\n" \
-    "incbin_" STR(name) "_start:\n" \
-    ".incbin \"" file "\"\n" \
-    \
-    ".global incbin_" STR(name) "_end\n" \
-    ".balign 1\n" \
-    "incbin_" STR(name) "_end:\n" \
-    ".byte 0\n" \
-); \
-extern __attribute__((aligned(16))) const u8 incbin_ ## name ## _start[]; \
-extern                              const u8 incbin_ ## name ## _end[]
-
-INCBIN(test_program, "test2.elf");
-
 static void kernel_halt(void) {
     // TODO(NeGate): we should add some key to spawn a shell once we have that
     kprintf("No tasks running...\n");
@@ -75,7 +56,7 @@ static void kernel_halt(void) {
 
 void kmain(BootInfo* restrict info) {
     boot_info = info;
-	kprintf("Beginning kernel boot...\n");
+    kprintf("Beginning kernel boot...\n");
 
     // Draw fancy background
     u64 gradient_x = (boot_info->fb.width + 255) / 256;
@@ -99,14 +80,18 @@ void kmain(BootInfo* restrict info) {
     kprintf("Booting %s\n", brand_str);
 
     init_physical_page_alloc(&boot_info->mem_map);
-    parse_acpi(boot_info);
+    parse_acpi();
+    enable_apic();
+
     kprintf("ACPI processed...\n");
     kprintf("Found %d cores | TSC freq %d MHz\n", boot_info->core_count, boot_info->tsc_freq);
-    boot_cores(boot_info);
+    boot_cores();
+
+    extern Buffer test2;
 
     Env* toy = env_create();
-    Thread* mine = env_load_elf(toy, incbin_test_program_start, incbin_test_program_end - incbin_test_program_start);
+    Thread* mine = env_load_elf(toy, test2.data, test2.length);
 
     // interrupts
-    irq_startup();
+    irq_startup(0);
 }

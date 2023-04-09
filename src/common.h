@@ -29,3 +29,10 @@ typedef int8_t              i8;
 #ifdef __CUIK__
 #define USE_INTRIN 1
 #endif
+
+// used for zig<->c embed communication... or as i like to call them
+// zigma to zigma communication.
+typedef struct {
+    size_t length;
+    const u8* data;
+} Buffer;

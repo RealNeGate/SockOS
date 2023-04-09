@@ -65,7 +65,7 @@ static void init_physical_page_alloc(MemMap* restrict mem_map) {
         }
 
         size_t total_pages = region->pages;
-        kprintf("Region start: %p (%d pages, %d pages max in freelist)\n", region->base, region->pages, BITMAP_ALLOC_PAGES_COVERED);
+        // kprintf("Region start: %p (%d pages, %d pages max in freelist)\n", region->base, region->pages, BITMAP_ALLOC_PAGES_COVERED);
 
         BitmapAllocPage* page = new_bitmap_alloc_page(region->base);
         append_bitmap_alloc_page(page);
@@ -73,7 +73,7 @@ static void init_physical_page_alloc(MemMap* restrict mem_map) {
         size_t used = 1;
         while (used + BITMAP_ALLOC_PAGES_COVERED + 1 < total_pages) {
             page->header.cap = BITMAP_ALLOC_PAGES_COVERED - 1;
-            kprintf("1: cap = %p\n", page->header.cap);
+            // kprintf("1: cap = %p\n", page->header.cap);
 
             // highest page is being used to store the next freelist start
             mark_bitmap_alloc_page(page, BITMAP_ALLOC_WORD_CAP - 1);
@@ -85,7 +85,7 @@ static void init_physical_page_alloc(MemMap* restrict mem_map) {
 
         // trim last page
         page->header.cap = total_pages - used;
-        kprintf("2: cap = %p\n", page->header.cap);
+        // kprintf("2: cap = %p\n", page->header.cap);
     }
 }
 

@@ -5,9 +5,6 @@
 #define PIC2_DATA    0xA1
 
 enum {
-    IA32_APIC_BASE = 0x1B,
-    IA32_APIC_BASE_MSR_BSP = 0x100, // Processor is a BSP
-
     // syscall related MSRs
     IA32_EFER  = 0xC0000080,
     IA32_STAR  = 0xC0000081,
@@ -39,9 +36,6 @@ typedef struct __attribute__((packed)) {
 _Static_assert(sizeof(IDT) == 10, "expected sizeof(IDT) to be 10 bytes");
 
 volatile IDTEntry _idt[256];
-
-volatile u32* apic;
-#define APIC(reg_num) apic[(reg_num) >> 2]
 
 // in irq.asm
 extern void syscall_handler(void);
@@ -110,63 +104,34 @@ static volatile void* mmio_reg(volatile void* base, ptrdiff_t offset) {
     };                                                  \
 } while (0)
 
-void irq_startup(void) {
-    FOREACH_N(i, 0, 256) _idt[i] = (IDTEntry){ 0 };
-    SET_INTERRUPT(3,  false);
-    SET_INTERRUPT(6,  false);
-    SET_INTERRUPT(8,  true);
-    SET_INTERRUPT(9,  false);
-    SET_INTERRUPT(13, true);
-    SET_INTERRUPT(14, true);
-    SET_INTERRUPT(32, false);
-    SET_INTERRUPT(33, false);
-    SET_INTERRUPT(34, false);
-    SET_INTERRUPT(35, false);
-    SET_INTERRUPT(36, false);
-    SET_INTERRUPT(37, false);
-    SET_INTERRUPT(38, false);
-    SET_INTERRUPT(39, false);
-    SET_INTERRUPT(40, false);
-    SET_INTERRUPT(41, false);
-    SET_INTERRUPT(42, false);
-    SET_INTERRUPT(43, false);
-    SET_INTERRUPT(44, false);
-    SET_INTERRUPT(45, false);
-    SET_INTERRUPT(46, false);
-    SET_INTERRUPT(47, false);
+void irq_startup(int core_id) {
+    if (core_id == 0) {
+        FOREACH_N(i, 0, 256) _idt[i] = (IDTEntry){ 0 };
+        SET_INTERRUPT(3,  false);
+        SET_INTERRUPT(6,  false);
+        SET_INTERRUPT(8,  true);
+        SET_INTERRUPT(9,  false);
+        SET_INTERRUPT(13, true);
+        SET_INTERRUPT(14, true);
+        SET_INTERRUPT(32, false);
+        SET_INTERRUPT(33, false);
+        SET_INTERRUPT(34, false);
+        SET_INTERRUPT(35, false);
+        SET_INTERRUPT(36, false);
+        SET_INTERRUPT(37, false);
+        SET_INTERRUPT(38, false);
+        SET_INTERRUPT(39, false);
+        SET_INTERRUPT(40, false);
+        SET_INTERRUPT(41, false);
+        SET_INTERRUPT(42, false);
+        SET_INTERRUPT(43, false);
+        SET_INTERRUPT(44, false);
+        SET_INTERRUPT(45, false);
+        SET_INTERRUPT(46, false);
+        SET_INTERRUPT(47, false);
+    }
 
     irq_disable_pic();
-
-    // Enable APIC
-    if (1) {
-        u64 x = __readmsr(IA32_APIC_BASE);
-        x |= (1u << 11u); // enable APIC
-        __writemsr(IA32_APIC_BASE, x);
-        if (x & IA32_APIC_BASE_MSR_BSP) {
-            kprintf("We're the main core\n");
-        }
-
-        // get the address (it's above the 63-12 bits) and identity map it
-        apic = (void*) (x & ~0xFFF);
-        if (memmap__view(boot_info->kernel_pml4, (uintptr_t) apic, (uintptr_t) apic, PAGE_SIZE, PAGE_WRITE)) {
-            kprintf("Could not map view of local ACPI!!!\n");
-            return;
-        }
-
-        kprintf("Found the APIC: 0x%x\n", apic);
-
-        // 0xF0 - Spurious Interrupt Vector Register
-        // Punting spurious interrupts (see PIC/CPU race condition, this is a fake interrupt)
-        APIC(0xF0) |= 0x1FF;
-
-        // 320h - LVT timer register
-        //   we just want a simple periodic timer on IRQ32
-        APIC(0x320) = 0x20000 | 32;
-        //   timer divide reg
-        APIC(0x3E0) = 0b1011;
-        //   initial timer count
-        APIC(0x380) = 1000000;
-    }
 
     // enable syscall/sysret
     {
@@ -181,7 +146,22 @@ void irq_startup(void) {
         __writemsr(IA32_STAR, ((u64)KERNEL_CS << 32ull) | (0x10ull << 48ull));
 
         // we're storing the per_cpu info here, syscall will use this
-        __writemsr(IA32_KERNEL_GS_BASE, (uintptr_t) &boot_info->main_cpu);
+        __writemsr(IA32_KERNEL_GS_BASE, (uintptr_t) &boot_info->cores[core_id]);
+    }
+
+    // Enable APIC timer
+    {
+        // 0xF0 - Spurious Interrupt Vector Register
+        // Punting spurious interrupts (see PIC/CPU race condition, this is a fake interrupt)
+        APIC(0xF0) |= 0x1FF;
+
+        // 320h - LVT timer register
+        //   we just want a simple periodic timer on IRQ32
+        APIC(0x320) = 0x20000 | 32;
+        //   timer divide reg
+        APIC(0x3E0) = 0b1011;
+        //   initial timer count
+        APIC(0x380) = 1000000;
     }
 
     IDT idt;
@@ -190,7 +170,14 @@ void irq_startup(void) {
     irq_enable(&idt);
 }
 
-PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space) {
+PageTable* irq_catch_on_fire(CPUState* state, PageTable* old_address_space, PerCPU* cpu) {
+    // TODO: Only do this for kernel shit.. Signal for userspace fails
+    // return to kernel halting thread
+    *state = new_thread_state(kernel_halt, (uintptr_t) cpu->kernel_stack, KERNEL_STACK_SIZE, false);
+    return boot_info->kernel_pml4;
+}
+
+PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU* cpu) {
     kprintf("int %d: error=%x\n", state->interrupt_num, state->error);
     kprintf("  rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
 
@@ -200,23 +187,15 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space) {
 
         kprintf("  cr2=%p (translated %p)\n", x, y);
         kprintf("  cr3=%p\n", old_address_space);
-
-        // TODO: Only do this for kernel shit.. Signal for userspace fails
-        // return to kernel halting thread
-        *state = new_thread_state(kernel_halt, (uintptr_t) boot_info->main_cpu.kernel_stack, KERNEL_STACK_SIZE, false);
-        return boot_info->kernel_pml4;
+        return irq_catch_on_fire(state, old_address_space, cpu);
     } else if (state->interrupt_num == 32) {
         Thread* next = threads_try_switch();
         if (next == NULL) {
-            // return to kernel halting thread
-            *state = new_thread_state(kernel_halt, (uintptr_t) boot_info->main_cpu.kernel_stack, KERNEL_STACK_SIZE, false);
-            return boot_info->kernel_pml4;
+            return irq_catch_on_fire(state, old_address_space, cpu);
         }
 
         // do thread context switch, if we changed
         if (threads_current != next) {
-            // kprintf("switch: %p\n", next);
-
             // if we're switching, save old thread state
             if (threads_current != NULL) {
                 threads_current->state = *state;

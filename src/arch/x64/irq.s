@@ -86,6 +86,9 @@ asm_int_handler:
     cld
     cli
 
+    // swap out user gs, use kernel gs now
+    swapgs
+
     push rax
     push rcx
     push rdx
@@ -116,6 +119,7 @@ asm_int_handler:
     // sub rsp,512 + 16
 
     mov rdi, rsp
+    mov rcx, gs
     call irq_int_handler
 
     // fxrstor also needs to be aligned to 16bytes
@@ -144,6 +148,9 @@ asm_int_handler:
     pop rax
 
     add rsp, 16 // pop interrupt_num and error code
+
+    // back to user gs
+    swapgs
     iretq
 
 // RCX - return address

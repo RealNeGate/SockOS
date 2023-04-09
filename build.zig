@@ -3,7 +3,8 @@ const CrossTarget = std.zig.CrossTarget;
 const FileSource = std.Build.FileSource;
 
 pub fn build(b: *std.Build) void {
-    const optimize = b.standardOptimizeOption(.{});
+    // const optimize = b.standardOptimizeOption(.{});
+    const optimize = std.builtin.Mode.Debug;
 
     ////////////////////////////////
     // Build EFI app
@@ -19,6 +20,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         });
 
+    efi.disable_sanitize_c = true;
     efi.setOutputDir("bin/efi/boot");
     efi.subsystem = .EfiApplication;
     efi.addIncludePath("src");
@@ -34,6 +36,14 @@ pub fn build(b: *std.Build) void {
         "-masm=intel"
     };
 
+    const embedded = b.addObject(.{
+            .name = "embed.o",
+            .root_source_file = .{ .path = "src/embed.zig" },
+            .target = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu },
+            .optimize = optimize,
+        });
+    embedded.addIncludePath(".");
+
     const kernel = b.addExecutable(.{
             .name = "kernel.so",
             .target = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu },
@@ -42,9 +52,11 @@ pub fn build(b: *std.Build) void {
 
     kernel.force_pic = true;
     kernel.pie = true;
+    kernel.disable_sanitize_c = true;
     kernel.setLinkerScriptPath(FileSource.relative("src/kernel/link"));
     kernel.setOutputDir("bin");
     kernel.addIncludePath("src");
+    kernel.addObject(embedded);
     kernel.addCSourceFile("src/kernel/kernel.c", &kernel_cflags);
     kernel.addAssemblyFile("src/arch/x64/loader.s");
     kernel.addAssemblyFile("src/arch/x64/bootstrap.s");

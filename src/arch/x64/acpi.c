@@ -1,3 +1,9 @@
+
+enum {
+    IA32_APIC_BASE = 0x1B,
+    IA32_APIC_BASE_MSR_BSP = 0x100, // Processor is a BSP
+};
+
 typedef struct __attribute__((packed)) {
     char signature[8];
     u8   checksum;
@@ -105,27 +111,29 @@ char *entry_to_string(int type) {
     return "(unknown)";
 }
 
-void parse_acpi(BootInfo *info) {
-    void *rsdp = info->rsdp;
+#define APIC(reg_num) ((volatile uint32_t*) boot_info->lapic_base)[(reg_num) >> 2]
+
+void parse_acpi(void) {
+    void *rsdp = boot_info->rsdp;
 
     ACPI_RSDP_Desc_V2 *header = (ACPI_RSDP_Desc_V2 *)rsdp;
     u8 rsdp_magic[] = {'R', 'S', 'D', ' ', 'P', 'T', 'R', ' ' };
     if (!memeq(header->rsdp_head.signature, rsdp_magic, sizeof(rsdp_magic))) {
         panic("Invalid ACPI header! Got: %.*s || %.*s\n",
-                sizeof(rsdp_magic), rsdp_magic,
-                sizeof(header->rsdp_head.signature),
-                header->rsdp_head.signature
-             );
+            sizeof(rsdp_magic), rsdp_magic,
+            sizeof(header->rsdp_head.signature),
+            header->rsdp_head.signature
+        );
     }
 
     ACPI_XSDT_Header *xhead = (ACPI_XSDT_Header *)header->xsdt_addr;
     u8 xsdt_magic[] = {'X', 'S', 'D', 'T' };
     if (!memeq(xhead->header.signature, xsdt_magic, sizeof(xsdt_magic))) {
         panic("Invalid XSDT header! Got: %.*s || %.*s\n",
-                sizeof(xsdt_magic), xsdt_magic,
-                sizeof(xhead->header.signature),
-                xhead->header.signature
-             );
+            sizeof(xsdt_magic), xsdt_magic,
+            sizeof(xhead->header.signature),
+            xhead->header.signature
+        );
     }
 
     i32 core_count = 0;
@@ -156,38 +164,38 @@ void parse_acpi(BootInfo *info) {
                 buf_ptr += entry->length;
             }
 
-        // Map out the HPET and get the TSC frequency
+            // Map out the HPET and get the TSC frequency
         } else if (memeq(head->signature, hpet_magic, sizeof(hpet_magic))) {
-           ACPI_HPET_Header *hhead = (ACPI_HPET_Header *)buf_ptr;
-           volatile u64 *hpet_reg = (u64 *)hhead->addr_struct.address;
-           memmap__view(boot_info->kernel_pml4, (uintptr_t)hpet_reg, (uintptr_t)hpet_reg, PAGE_SIZE, PAGE_WRITE);
-           u64 gen_cap_reg = hpet_reg[0];
-           ACPI_HPET_GenCap gen_cap = *((ACPI_HPET_GenCap *)&gen_cap_reg);
-           u64 hpet_period = gen_cap.clock_period_fs;
+            ACPI_HPET_Header *hhead = (ACPI_HPET_Header *)buf_ptr;
+            volatile u64 *hpet_reg = (u64 *)hhead->addr_struct.address;
+            memmap__view(boot_info->kernel_pml4, (uintptr_t)hpet_reg, (uintptr_t)hpet_reg, PAGE_SIZE, PAGE_WRITE);
+            u64 gen_cap_reg = hpet_reg[0];
+            ACPI_HPET_GenCap gen_cap = *((ACPI_HPET_GenCap *)&gen_cap_reg);
+            u64 hpet_period = gen_cap.clock_period_fs;
 
-           u64 us_delay = 20000;
-           asm ("cli");
+            u64 us_delay = 20000;
+            asm ("cli");
 
-           // reset / enable the HPET
-           hpet_reg[HPET_COUNTER] = 0;
-           hpet_reg[2] = 1;
+            // reset / enable the HPET
+            hpet_reg[HPET_COUNTER] = 0;
+            hpet_reg[2] = 1;
 
-           // Approximate the TSC freq by spin-sleeping for a period
-           u64 start = __rdtsc();
-           u64 hpet_start = hpet_reg[HPET_COUNTER];
-           u64 done_time = hpet_start + (us_delay * (1000000000 / hpet_period));
-           while (hpet_reg[HPET_COUNTER] < done_time) {
-               asm ("pause");
-           }
-           u64 end = __rdtsc();
+            // Approximate the TSC freq by spin-sleeping for a period
+            u64 start = __rdtsc();
+            u64 hpet_start = hpet_reg[HPET_COUNTER];
+            u64 done_time = hpet_start + (us_delay * (1000000000 / hpet_period));
+            while (hpet_reg[HPET_COUNTER] < done_time) {
+                asm ("pause");
+            }
+            u64 end = __rdtsc();
 
 
-           // disable the HPET
-           hpet_reg[2] = 0;
-           asm ("sti");
+            // disable the HPET
+            hpet_reg[2] = 0;
+            asm ("sti");
 
-           u64 ticks_per_time = end - start;
-           tsc_freq = (ticks_per_time / us_delay);
+            u64 ticks_per_time = end - start;
+            tsc_freq = (ticks_per_time / us_delay);
         }
     }
     if (core_count == 0) {
@@ -196,4 +204,22 @@ void parse_acpi(BootInfo *info) {
 
     boot_info->core_count = core_count;
     boot_info->tsc_freq = tsc_freq;
+
+    kassert(boot_info->lapic_base, "We don't have APIC?");
+    kprintf("Found the APIC: %p\n", boot_info->lapic_base);
+
+    if (memmap__view(boot_info->kernel_pml4, boot_info->lapic_base, boot_info->lapic_base, PAGE_SIZE, PAGE_WRITE)) {
+        kprintf("Could not map view of local ACPI!!!\n");
+        return;
+    }
+}
+
+// Enable APIC
+void enable_apic(void) {
+    u64 x = __readmsr(IA32_APIC_BASE);
+    x |= (1u << 11u); // enable APIC
+    __writemsr(IA32_APIC_BASE, x);
+    if (x & IA32_APIC_BASE_MSR_BSP) {
+        kprintf("We're the main core\n");
+    }
 }
