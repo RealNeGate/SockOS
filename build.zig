@@ -1,6 +1,17 @@
 const std = @import("std");
 const CrossTarget = std.zig.CrossTarget;
 const FileSource = std.Build.FileSource;
+const path = std.fs.path;
+
+fn nasm(b: *std.Build, obj: *std.build.CompileStep, comptime file: []const u8) []const u8 {
+    comptime var out_file = "zig-cache/" ++ path.basename(file) ++ ".o";
+    var cmd = b.addSystemCommand(&[_][]const u8{
+            "nasm", "-f", "elf64", file, "-o", out_file
+        });
+
+    obj.step.dependOn(&cmd.step);
+    return out_file;
+}
 
 pub fn build(b: *std.Build) void {
     // const optimize = b.standardOptimizeOption(.{});
@@ -59,8 +70,8 @@ pub fn build(b: *std.Build) void {
     kernel.addObject(embedded);
     kernel.addCSourceFile("src/kernel/kernel.c", &kernel_cflags);
     kernel.addAssemblyFile("src/arch/x64/loader.s");
-    kernel.addAssemblyFile("src/arch/x64/bootstrap.s");
     kernel.addAssemblyFile("src/arch/x64/irq.s");
+    kernel.addObjectFile(nasm(b, kernel, "src/arch/x64/bootstrap.s"));
     kernel.install();
 
     ////////////////////////////////
