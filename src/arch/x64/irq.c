@@ -97,8 +97,9 @@ static volatile void* mmio_reg(volatile void* base, ptrdiff_t offset) {
     return ((volatile char*)base) + offset;
 }
 
+// This is hacky bullshit. Find a better way to get frequency
 static uint32_t tsc_to_apic_time(uint64_t t) {
-    return t;
+    return t * 16;
 }
 
 #define SET_INTERRUPT(num, has_error) do {              \
@@ -179,23 +180,6 @@ void irq_startup(int core_id) {
     irq_enable(&idt);
 }
 
-// hacky way to get APIC timer speed
-static volatile bool apic_tick_measuring;
-static u64 apic_tick_measure_start;
-void irq_compute_apic_speed(void) {
-    apic_tick_measuring = true;
-    apic_tick_measure_start = __rdtsc();
-    // wait for 1000 ticks
-    APIC(0x380) = 1000;
-
-    // wait for the interrupt
-    while (apic_tick_measuring) {
-        asm volatile ("pause");
-    }
-
-    kprintf("APIC timer: %d TSC ticks per APIC\n", boot_info->apic_tick_in_tsc);
-}
-
 PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU* cpu) {
     uint64_t now = __rdtsc();
 
@@ -212,14 +196,6 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
         halt();
         return old_address_space;
     } else if (state->interrupt_num == 32) {
-        // we're timing for the apic speed, just return back to
-        // the user with the computed results
-        if (apic_tick_measuring) {
-            boot_info->apic_tick_in_tsc = (now - apic_tick_measure_start) / 1000;
-            apic_tick_measuring = false;
-            return old_address_space;
-        }
-
         Thread* next = sched_try_switch();
         if (next == NULL) {
             kprintf("no tasks to do!\n");

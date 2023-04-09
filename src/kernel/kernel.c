@@ -100,7 +100,6 @@ void kmain(BootInfo* restrict info) {
     thread_create(NULL, kernel_init, nustack, KERNEL_STACK_SIZE, false);
 
     irq_startup(0);
-    irq_compute_apic_speed();
 
     // jump into timer interrupt, we're going to run tasks now
     asm volatile ("int 32");
