@@ -8,7 +8,7 @@ uintptr_t smp_stack_base = 0;
 uintptr_t smp_lapic_addr = 0;
 
 void smp_main(PerCPU* cpu) {
-    kprintf("Hello: %d\n", cpu - boot_info->cores);
+    kprintf("Hello: %x\n", cpu - boot_info->cores);
     // set up the GS, interrupts, and paging
 
     // add the idle task to the job queue

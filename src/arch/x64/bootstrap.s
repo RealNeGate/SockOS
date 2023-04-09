@@ -1,5 +1,4 @@
 global bootstrap_start, bootstrap_entry, bootstrap_end, premain
-extern smp_main
 
 align 4096
 bootstrap_start:
@@ -105,5 +104,5 @@ premain:
     ; jump into C... finally!
     mov rsp, [rcx + 8] ; kernel_stack
 
-    call smp_main
+    call [data_start + bootstrap.smp_main]
 bootstrap_end:
