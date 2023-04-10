@@ -5,13 +5,7 @@ typedef struct Thread Thread;
 typedef struct Wait Wait;
 typedef struct Env Env;
 
-struct Wait {
-    _Atomic(Wait*) next;
-
-    u64 time; // in TSC
-    Thread* thread;
-    volatile atomic_flag one_shot;
-};
+#define SLICE 50000
 
 struct Env {
     _Atomic int lock;
@@ -30,17 +24,20 @@ struct Thread {
     Thread* prev_in_schedule;
     Thread* next_in_schedule;
 
+    // sleeping
+    Thread* next_deadline;
+    u64 wake_time;
+
     CPUState state;
 };
 
+#define IS_AWAKE(t) ((t).wake_time == 0)
+
 _Atomic int threads_lock;
+
 Thread* threads_current = NULL;
 Thread* threads_first_in_schedule = NULL;
-
-static struct {
-    _Atomic(Wait*) start;
-    _Atomic(Wait*) end;
-} timed_waits;
+int threads_awake_count;
 
 void spin_lock(_Atomic(int)* lock);
 void spin_unlock(_Atomic(int)* lock);
@@ -159,6 +156,7 @@ Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t stack, size
         threads_first_in_schedule = new_thread;
     }
 
+    threads_awake_count++;
     return new_thread;
 }
 
@@ -226,7 +224,51 @@ void sched_wait(Thread* t, u64 timeout) {
         w = w->next;
     }
 
+    threads_awake_count--;
     spin_unlock(&threads_lock);
+}
+
+// *next_wake is the micros until next timer interrupt
+Thread* sched_try_switch(Thread* curr, u64 now_time, u64* restrict next_wake) {
+    if (wake_count == 0) {
+        *next_wake = SLICE;
+        return NULL;
+    }
+
+    Thread* next = NULL;
+    int fract = SLICE / wake_count;
+
+    Thread* deadline = curr->next_deadline;
+    if (deadline && now_time >= deadline->wake_time) {
+        // we're going to wake up a sleeping thread
+        curr->next_deadline = deadline->next_deadline;
+        next = deadline;
+
+        deadline = deadline->next_deadline;
+
+        // the wake will be handed a slightly smaller time frame because
+        // it has to accomodate for adding a new task to the slice.
+        wake_count++;
+        fract = SLICE / wake_count;
+    } else {
+        // we're going into a new awake thread
+        next = curr->next_in_schedule;
+        while (next != NULL && !IS_AWAKE(*next)) {
+            next = next->next_in_schedule;
+        }
+    }
+
+    // we start with the assumption that a thread
+    // will take a clean fraction of the slice.
+    *next_wake = now_time + fract;
+
+    // we should wait on the shorter of these two
+    u64 next_deadline_time = deadline ? deadline->next_deadline : UINT64_MAX;
+    if (*next_wake > next_deadline_time) {
+        *next_wake = next_deadline_time;
+    }
+
+    return next;
 }
 
 Thread* sched_try_switch(void) {

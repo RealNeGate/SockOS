@@ -14,6 +14,17 @@ fn nasm(b: *std.Build, obj: *std.build.CompileStep, comptime file: []const u8) [
     return out_file;
 }
 
+// compiles simple userland app using cuik
+fn cuik_userland(b: *std.Build, obj: *std.build.CompileStep, comptime file: []const u8) []const u8 {
+    comptime var out_file = "zig-cache/" ++ path.basename(file) ++ ".elf";
+    var cmd = b.addSystemCommand(&[_][]const u8{
+            "cuik", file, "-based", "-target", "x64_linux_gnu", "-o", out_file
+        });
+
+    obj.step.dependOn(&cmd.step);
+    return out_file;
+}
+
 pub fn build(b: *std.Build) void {
     // const optimize = b.standardOptimizeOption(.{});
     const optimize = std.builtin.Mode.Debug;
@@ -55,6 +66,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         });
     embedded.addIncludePath(".");
+    // _ = cuik_userland(b, embedded, "userland/desktop.c");
 
     const kernel = b.addExecutable(.{
             .name = "kernel.so",
