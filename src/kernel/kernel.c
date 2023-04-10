@@ -110,15 +110,11 @@ void kmain(BootInfo* restrict info) {
     kprintf("Found %d cores | TSC freq %d MHz\n", boot_info->core_count, boot_info->tsc_freq);
 
     // we're switching into a proper kernel task such that we can sleep correctly
-    kprintf("creating thread for %p\n", draw_background);
     uintptr_t nutstack = (uintptr_t) alloc_physical_pages(KERNEL_STACK_SIZE / PAGE_SIZE);
     thread_create(NULL, draw_background, nutstack, KERNEL_STACK_SIZE, false);
 
-    kprintf("creating thread for %p\n", kernel_init);
     uintptr_t nustack = (uintptr_t) alloc_physical_pages(KERNEL_STACK_SIZE / PAGE_SIZE);
     thread_create(NULL, kernel_init, nustack, KERNEL_STACK_SIZE, false);
-
-
 
     irq_startup(0);
 

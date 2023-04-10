@@ -172,13 +172,17 @@ void irq_startup(int core_id) {
     irq_enable(&idt);
 }
 
+bool first_jump = true;
+
 PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU* cpu) {
     uint64_t now = __rdtsc();
 
     kprintf("int %d: error=%x (%s)\n", state->interrupt_num, state->error, interrupt_names[state->interrupt_num]);
     kprintf("  rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
 
-    if (state->interrupt_num == 14) {
+    if (state->interrupt_num == 8) {
+        halt();
+    } else if (state->interrupt_num == 14) {
         u64 x = x86_get_cr2();
         u64 y = memmap__probe(old_address_space, x);
 
@@ -197,16 +201,18 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
         }
 
         kprintf("switch %p -> %p (for %d ms)\n", now, next, next_wake / 1000);
+        kprintf("%x -> %x\n", state->rip, threads_current->state.rip);
 
         // do thread context switch, if we changed
-        if (threads_current != next) {
+        if (threads_current != next || first_jump) {
             // if we're switching, save old thread state
-            if (threads_current != NULL) {
+            if (threads_current != NULL && !first_jump) {
                 threads_current->state = *state;
             }
 
             *state = next->state;
             threads_current = next;
+            first_jump = false;
         }
 
         // send EOI

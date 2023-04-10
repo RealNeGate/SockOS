@@ -281,7 +281,6 @@ Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us) {
             return threads_current;
         }
         kassert(threads_current->next_in_schedule != NULL, "No scheduable next thread?\n");
-
         return threads_current->next_in_schedule;
     }
 
