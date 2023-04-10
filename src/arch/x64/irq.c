@@ -84,14 +84,6 @@ static void irq_disable_pic(void) {
     io_wait();
 }
 
-static void irq_set_pit(int hz) {
-    // http://www.osdever.net/bkerndev/Docs/pit.htm
-    int divisor = 1193180 / hz; // Calculate our divisor
-    io_out8(0x43, 0b00110100);
-    io_out8(0x40, divisor & 0xFF);
-    io_out8(0x40, (divisor & 0xFF00) >> 8);
-}
-
 // access MMIO registers
 static volatile void* mmio_reg(volatile void* base, ptrdiff_t offset) {
     return ((volatile char*)base) + offset;
@@ -99,7 +91,7 @@ static volatile void* mmio_reg(volatile void* base, ptrdiff_t offset) {
 
 // This is hacky bullshit. Find a better way to get frequency
 static uint32_t tsc_to_apic_time(uint64_t t) {
-    return t * 16;
+    return t / 4;
 }
 
 #define SET_INTERRUPT(num, has_error) do {              \
@@ -218,10 +210,11 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
         APIC(0xB0) = 0;
 
         // write next one-shot interrupt
-        uint64_t time_slice = 16*1000*boot_info->tsc_freq; // 16ms
+        u64 time_slice = 1*1000*boot_info->tsc_freq; // 1ms
         APIC(0x380) = tsc_to_apic_time(time_slice);
 
-        return next->parent ? next->parent->address_space : boot_info->kernel_pml4;
+        u64 *next_address = next->parent ? next->parent->address_space : boot_info->kernel_pml4;
+        return next_address;
     } else {
         return old_address_space;
     }

@@ -30,12 +30,16 @@ struct Thread {
     Thread* prev_in_schedule;
     Thread* next_in_schedule;
 
+    u64 deadline;
+    Thread* next_deadline;
+
     CPUState state;
 };
 
 _Atomic int threads_lock;
 Thread* threads_current = NULL;
 Thread* threads_first_in_schedule = NULL;
+Thread* first_deadline = NULL;
 
 static struct {
     _Atomic(Wait*) start;
@@ -218,15 +222,35 @@ void sched_wait(Thread* t, u64 timeout) {
     // insert sorted
     for (;;) {
         Wait* next = w->next;
+        if (w->next == NULL) {
+            w->next = new_w;
+            break;
+        }
+
         if (new_w->time < next->time) {
             new_w->next = next;
             w->next = new_w;
+            break;
         }
 
         w = w->next;
     }
 
     spin_unlock(&threads_lock);
+}
+
+Thread* sched_peek(void) {
+    // first task to run
+    if (threads_current == NULL) {
+        return threads_first_in_schedule;
+    }
+
+    // run next task... until we run out, then return to the start
+    if (threads_current->next_in_schedule == NULL) {
+        return threads_first_in_schedule;
+    }
+
+    return threads_current->next_in_schedule;
 }
 
 Thread* sched_try_switch(void) {

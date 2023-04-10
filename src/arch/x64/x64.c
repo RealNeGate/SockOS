@@ -108,3 +108,7 @@ static void get_cpu_str(char *str) {
     cpuid_regcpy(str+32, eax, ebx, ecx, edx);
     return;
 }
+
+static void thread_yield(void) {
+    asm volatile ("int 32");
+}
