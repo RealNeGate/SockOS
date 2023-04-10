@@ -175,8 +175,8 @@ void irq_startup(int core_id) {
 PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU* cpu) {
     uint64_t now = __rdtsc();
 
-    // kprintf("int %d: error=%x (%s)\n", state->interrupt_num, state->error, interrupt_names[state->interrupt_num]);
-    // kprintf("  rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
+    kprintf("int %d: error=%x (%s)\n", state->interrupt_num, state->error, interrupt_names[state->interrupt_num]);
+    kprintf("  rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
 
     if (state->interrupt_num == 14) {
         u64 x = x86_get_cr2();
@@ -189,7 +189,7 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
         return old_address_space;
     } else if (state->interrupt_num == 32) {
         u64 next_wake;
-        Thread* next = sched_try_switch(threads_current, now, &next_wake);
+        Thread* next = sched_try_switch(now, &next_wake);
         if (next == NULL) {
             kprintf("no tasks to do!\n");
             halt();

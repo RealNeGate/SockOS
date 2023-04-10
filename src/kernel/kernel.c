@@ -54,6 +54,7 @@ static void kernel_halt(void) {
 
 static int draw_background(void *arg) {
     u8 mult = 0;
+    kprintf("here?\n");
     for (;;) {
         u64 gradient_x = (boot_info->fb.width + 255) / 256;
         u64 gradient_y = (boot_info->fb.height + 255) / 256;
@@ -69,7 +70,9 @@ static int draw_background(void *arg) {
                 boot_info->fb.pixels[i + (j * boot_info->fb.stride)] = 0xFF000000 | (g << 16) | (b << 8);
             }
         }
+        kprintf("scheduling a wait!\n");
         sched_wait(threads_current, 16*1000);
+        kprintf("yielding\n");
         thread_yield();
         mult += 1;
     }
@@ -82,6 +85,7 @@ static int kernel_init(void* arg) {
     // Env* toy = env_create();
     //Thread* mine = env_load_elf(toy, test2.data, test2.length);
 
+    kprintf("spinning to win\n");
     for (;;) {}
     return 0;
 }
@@ -106,11 +110,14 @@ void kmain(BootInfo* restrict info) {
     kprintf("Found %d cores | TSC freq %d MHz\n", boot_info->core_count, boot_info->tsc_freq);
 
     // we're switching into a proper kernel task such that we can sleep correctly
+    kprintf("creating thread for %p\n", draw_background);
     uintptr_t nutstack = (uintptr_t) alloc_physical_pages(KERNEL_STACK_SIZE / PAGE_SIZE);
     thread_create(NULL, draw_background, nutstack, KERNEL_STACK_SIZE, false);
 
+    kprintf("creating thread for %p\n", kernel_init);
     uintptr_t nustack = (uintptr_t) alloc_physical_pages(KERNEL_STACK_SIZE / PAGE_SIZE);
     thread_create(NULL, kernel_init, nustack, KERNEL_STACK_SIZE, false);
+
 
 
     irq_startup(0);

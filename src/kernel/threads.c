@@ -5,7 +5,6 @@ typedef struct Thread Thread;
 typedef struct Wait Wait;
 typedef struct Env Env;
 
-#define SLICE 50000
 
 struct Env {
     _Atomic int lock;
@@ -37,9 +36,10 @@ _Atomic int threads_lock;
 
 Thread* threads_current = NULL;
 Thread* threads_first_in_schedule = NULL;
-
-int threads_awake_count;
 Thread* threads_first_deadline = NULL;
+
+int threads_count;
+int threads_awake_count;
 
 void spin_lock(_Atomic(int)* lock);
 void spin_unlock(_Atomic(int)* lock);
@@ -52,7 +52,7 @@ void thread_kill(Thread* thread);
 
 // this doesn't stall, just schedules a wait
 void sched_wait(Thread* t, u64 timeout);
-Thread* sched_try_switch(Thread* curr, u64 now_time, u64* restrict next_wake);
+Thread* sched_try_switch(u64 now_time, u64* restrict next_wake);
 
 #else
 
@@ -149,15 +149,23 @@ Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t stack, size
     }
 
     // put into schedule
+    spin_lock(&threads_lock);
+    if (threads_count == 0) {
+        threads_current = new_thread;
+        threads_first_in_schedule = threads_current;
+    }
+
     if (threads_first_in_schedule != NULL) {
         new_thread->next_in_schedule = threads_first_in_schedule;
         threads_first_in_schedule->prev_in_env = new_thread;
         threads_first_in_schedule = new_thread;
-    } else {
-        threads_first_in_schedule = new_thread;
     }
 
+    threads_count++;
     threads_awake_count++;
+    spin_unlock(&threads_lock);
+
+    kprintf("created thread: %p\n", new_thread);
     return new_thread;
 }
 
@@ -170,6 +178,10 @@ void thread_kill(Thread* thread) {
         thread->prev_in_schedule->next_in_schedule = thread->next_in_schedule;
     } else {
         threads_first_in_schedule = thread->next_in_schedule;
+    }
+    threads_count--;
+    if (threads_count == 0) {
+        threads_current = NULL;
     }
     spin_lock(&threads_lock);
 
@@ -230,67 +242,70 @@ void sched_wait(Thread* t, u64 timeout) {
     spin_unlock(&threads_lock);
 }
 
-// *next_wake is the micros until next timer interrupt
-Thread* sched_try_switch(Thread* curr, u64 now_time, u64* restrict next_wake) {
-    if (threads_awake_count == 0) {
-        *next_wake = SLICE;
-        return NULL;
+/*
+ * This is a tickless round-robin-like scheduler, 
+ * with priority given to tasks with scheduled wake-ups
+ *
+ * Adding 3 tasks, A, B, C, splits time like this:
+ *     (idle)
+ * AAAA AAAA AAAA
+ * AAAA AACC CCCC
+ * AAAA BBBB CCCC
+ *
+ * If B sleeps from there, and wakes up midway through A
+ * B's time should be the remainder of the current, plus a full slice
+ * AABB BBBB CCCC
+ * or
+ * AAAA AACC CCBB BB
+ * and then
+ * AAAA BBBB CCCC
+ *
+ * Yes. I'm making extra pie to ensure woken-tasks get at least 1 slice.
+ * Yes. This may be a DDOS waiting to happen. Will fix later.
+ */
+
+#define FULL_PIE 50000
+Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us) {
+    if (threads_count == 0) {
+        // run the idle task?
+        kprintf("There are no threads!\n");
+        halt();
     }
 
-    // first task to run
-    if (threads_current == NULL) {
-        return threads_first_in_schedule;
+    u64 sleeping_threads = threads_count - threads_awake_count;
+    if (sleeping_threads == 0) {
+        kassert(threads_awake_count == threads_count, "%d, %d\n", threads_awake_count, threads_count);
+
+        *out_wake_us = FULL_PIE / threads_awake_count;
+        if (threads_count == 1) {
+            return threads_current;
+        }
+        kassert(threads_current->next_in_schedule != NULL, "No scheduable next thread?\n");
+
+        return threads_current->next_in_schedule;
     }
 
-    Thread* next = NULL;
-    int fract = SLICE / threads_awake_count;
-
-    Thread* deadline = curr->next_deadline;
-    if (deadline && now_time >= deadline->wake_time) {
-        // we're going to wake up a sleeping thread
-        curr->next_deadline = deadline->next_deadline;
-
-        // remove from deadlines
-        next = deadline;
-        next->wake_time = 0;
-        next->next_deadline = NULL;
-
-        deadline = deadline->next_deadline;
-
-        // the wake will be handed a slightly smaller time frame because
-        // it has to accomodate for adding a new task to the slice.
+    kassert(threads_first_deadline != NULL, "%d\n", threads_first_deadline);
+    Thread *deadline = threads_first_deadline;
+    if (now_time >= deadline->wake_time) {
         threads_awake_count++;
-        fract = SLICE / threads_awake_count;
-    } else {
-        // we're going into a new awake thread
-        next = curr->next_in_schedule;
-        while (next != NULL && !IS_AWAKE(*next)) {
-            next = next->next_in_schedule;
-        }
+        *out_wake_us = FULL_PIE / threads_awake_count;
 
-        // wrap around, we're in the next slice
-        if (next == NULL) {
-            next = threads_first_in_schedule;
+        threads_first_deadline = deadline->next_deadline;
+        deadline->wake_time = 0;
+        deadline->next_deadline = NULL;
 
-            while (next != NULL && !IS_AWAKE(*next)) {
-                next = next->next_in_schedule;
-            }
-
-            // if next is NULL, we've got no tasks for a bit
-        }
+        return deadline;
     }
 
-    // we start with the assumption that a thread
-    // will take a clean fraction of the slice.
-    *next_wake = now_time + fract;
-
-    // we should wait on the shorter of these two
-    u64 next_deadline_time = deadline ? deadline->wake_time : UINT64_MAX;
-    if (*next_wake > next_deadline_time) {
-        *next_wake = next_deadline_time;
+    if (threads_count == 1) {
+        *out_wake_us = FULL_PIE;
+        return threads_current;
     }
 
-    return next;
+    kassert(threads_current->next_in_schedule != NULL, "threads count is wrong, or threads_current is borked!\n");
+    *out_wake_us = FULL_PIE / threads_awake_count;
+    return threads_current->next_in_schedule;
 }
 
 ////////////////////////////////
@@ -299,6 +314,7 @@ Thread* sched_try_switch(Thread* curr, u64 now_time, u64* restrict next_wake) {
 // this is the trusted ELF loader for priveleged programs, normal apps will probably
 // be loaded via a shared object.
 Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
+    kprintf("Loading a program!\n");
     Elf64_Ehdr* elf_header = (Elf64_Ehdr*) program;
 
     ////////////////////////////////
