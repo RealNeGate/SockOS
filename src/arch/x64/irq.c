@@ -175,8 +175,8 @@ void irq_startup(int core_id) {
 PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU* cpu) {
     uint64_t now = __rdtsc();
 
-    kprintf("int %d: error=%x (%s)\n", state->interrupt_num, state->error, interrupt_names[state->interrupt_num]);
-    kprintf("  rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
+    // kprintf("int %d: error=%x (%s)\n", state->interrupt_num, state->error, interrupt_names[state->interrupt_num]);
+    // kprintf("  rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
 
     if (state->interrupt_num == 14) {
         u64 x = x86_get_cr2();
@@ -188,12 +188,15 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
         halt();
         return old_address_space;
     } else if (state->interrupt_num == 32) {
-        Thread* next = sched_try_switch();
+        u64 next_wake;
+        Thread* next = sched_try_switch(threads_current, now, &next_wake);
         if (next == NULL) {
             kprintf("no tasks to do!\n");
             halt();
             return old_address_space;
         }
+
+        kprintf("switch %p -> %p (for %d ms)\n", now, next, next_wake / 1000);
 
         // do thread context switch, if we changed
         if (threads_current != next) {
@@ -208,13 +211,11 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
 
         // send EOI
         APIC(0xB0) = 0;
+        // set new one-shot
+        APIC(0x380) = tsc_to_apic_time(next_wake * boot_info->tsc_freq);
 
-        // write next one-shot interrupt
-        u64 time_slice = 1*1000*boot_info->tsc_freq; // 1ms
-        APIC(0x380) = tsc_to_apic_time(time_slice);
-
-        u64 *next_address = next->parent ? next->parent->address_space : boot_info->kernel_pml4;
-        return next_address;
+        // switch into thread's address space, for kernel threads they'll use kernel_pml4
+        return next->parent ? next->parent->address_space : boot_info->kernel_pml4;
     } else {
         return old_address_space;
     }

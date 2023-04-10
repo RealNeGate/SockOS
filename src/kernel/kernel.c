@@ -69,20 +69,17 @@ static int draw_background(void *arg) {
                 boot_info->fb.pixels[i + (j * boot_info->fb.stride)] = 0xFF000000 | (g << 16) | (b << 8);
             }
         }
-        sched_wait(threads_current, 16*1000*boot_info->tsc_freq);
+        sched_wait(threads_current, 16*1000);
         thread_yield();
         mult += 1;
     }
 }
 
 static int kernel_init(void* arg) {
-    // Draw fancy background
-
-
     // boot_cores();
 
-    extern Buffer test2;
-    Env* toy = env_create();
+    // extern Buffer test2;
+    // Env* toy = env_create();
     //Thread* mine = env_load_elf(toy, test2.data, test2.length);
 
     for (;;) {}
