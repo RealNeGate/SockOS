@@ -37,7 +37,9 @@ _Atomic int threads_lock;
 
 Thread* threads_current = NULL;
 Thread* threads_first_in_schedule = NULL;
+
 int threads_awake_count;
+Thread* threads_first_deadline = NULL;
 
 void spin_lock(_Atomic(int)* lock);
 void spin_unlock(_Atomic(int)* lock);
@@ -50,8 +52,7 @@ void thread_kill(Thread* thread);
 
 // this doesn't stall, just schedules a wait
 void sched_wait(Thread* t, u64 timeout);
-
-Thread* sched_try_switch(void);
+Thread* sched_try_switch(Thread* curr, u64 now_time, u64* restrict next_wake);
 
 #else
 
@@ -200,28 +201,29 @@ void thread_kill(Thread* thread) {
 // Scheduler related
 ////////////////////////////////
 void sched_wait(Thread* t, u64 timeout) {
-    Wait* restrict new_w = alloc_physical_page();
-    new_w->time = __rdtsc() + timeout;
-    new_w->thread = t;
-
+    t->wake_time = __rdtsc() + (timeout*boot_info->tsc_freq);
     spin_lock(&threads_lock);
 
-    // check if we're inserting as the first slot
-    Wait* w = timed_waits.start;
-    if (new_w->time < w->time) {
-        new_w->next = w;
-        timed_waits.start = new_w;
-    }
+    if (threads_first_deadline == NULL) {
+        threads_first_deadline = t;
+    } else if (threads_first_deadline->wake_time > t->wake_time) {
+        // insert as first task
+        t->next_deadline = threads_first_deadline;
+        threads_first_deadline = t;
+    } else {
+        // insert somewhere
+        Thread* last = threads_first_deadline;
+        Thread* curr = last->next_deadline;
 
-    // insert sorted
-    for (;;) {
-        Wait* next = w->next;
-        if (new_w->time < next->time) {
-            new_w->next = next;
-            w->next = new_w;
+        while (curr != NULL && curr->wake_time > t->wake_time) {
+            last = curr, curr = curr->next_deadline;
         }
 
-        w = w->next;
+        // insert
+        last->next_deadline = t;
+        if (curr != NULL) {
+            t->next_deadline = curr->next_deadline;
+        }
     }
 
     threads_awake_count--;
@@ -230,31 +232,51 @@ void sched_wait(Thread* t, u64 timeout) {
 
 // *next_wake is the micros until next timer interrupt
 Thread* sched_try_switch(Thread* curr, u64 now_time, u64* restrict next_wake) {
-    if (wake_count == 0) {
+    if (threads_awake_count == 0) {
         *next_wake = SLICE;
         return NULL;
     }
 
+    // first task to run
+    if (threads_current == NULL) {
+        return threads_first_in_schedule;
+    }
+
     Thread* next = NULL;
-    int fract = SLICE / wake_count;
+    int fract = SLICE / threads_awake_count;
 
     Thread* deadline = curr->next_deadline;
     if (deadline && now_time >= deadline->wake_time) {
         // we're going to wake up a sleeping thread
         curr->next_deadline = deadline->next_deadline;
+
+        // remove from deadlines
         next = deadline;
+        next->wake_time = 0;
+        next->next_deadline = NULL;
 
         deadline = deadline->next_deadline;
 
         // the wake will be handed a slightly smaller time frame because
         // it has to accomodate for adding a new task to the slice.
-        wake_count++;
-        fract = SLICE / wake_count;
+        threads_awake_count++;
+        fract = SLICE / threads_awake_count;
     } else {
         // we're going into a new awake thread
         next = curr->next_in_schedule;
         while (next != NULL && !IS_AWAKE(*next)) {
             next = next->next_in_schedule;
+        }
+
+        // wrap around, we're in the next slice
+        if (next == NULL) {
+            next = threads_first_in_schedule;
+
+            while (next != NULL && !IS_AWAKE(*next)) {
+                next = next->next_in_schedule;
+            }
+
+            // if next is NULL, we've got no tasks for a bit
         }
     }
 
@@ -263,26 +285,12 @@ Thread* sched_try_switch(Thread* curr, u64 now_time, u64* restrict next_wake) {
     *next_wake = now_time + fract;
 
     // we should wait on the shorter of these two
-    u64 next_deadline_time = deadline ? deadline->next_deadline : UINT64_MAX;
+    u64 next_deadline_time = deadline ? deadline->wake_time : UINT64_MAX;
     if (*next_wake > next_deadline_time) {
         *next_wake = next_deadline_time;
     }
 
     return next;
-}
-
-Thread* sched_try_switch(void) {
-    // first task to run
-    if (threads_current == NULL) {
-        return threads_first_in_schedule;
-    }
-
-    // run next task... until we run out, then return to the start
-    if (threads_current->next_in_schedule == NULL) {
-        return threads_first_in_schedule;
-    }
-
-    return threads_current->next_in_schedule;
 }
 
 ////////////////////////////////

@@ -52,26 +52,38 @@ static void kernel_halt(void) {
 
 }
 
+static int draw_background(void *arg) {
+    u8 mult = 0;
+    for (;;) {
+        u64 gradient_x = (boot_info->fb.width + 255) / 256;
+        u64 gradient_y = (boot_info->fb.height + 255) / 256;
+
+        for (size_t j = 0; j < boot_info->fb.height; j++) {
+            u32 g = ((j / gradient_y) / 2) + 0x7F;
+            g *= mult;
+
+            for (size_t i = 0; i < boot_info->fb.width; i++) {
+                u32 b = ((i / gradient_x) / 2) + 0x7F;
+                b *= mult;
+
+                boot_info->fb.pixels[i + (j * boot_info->fb.stride)] = 0xFF000000 | (g << 16) | (b << 8);
+            }
+        }
+        sched_wait(threads_current, 16*1000*boot_info->tsc_freq);
+        thread_yield();
+        mult += 1;
+    }
+}
+
 static int kernel_init(void* arg) {
     // Draw fancy background
-    u64 gradient_x = (boot_info->fb.width + 255) / 256;
-    u64 gradient_y = (boot_info->fb.height + 255) / 256;
 
-    for (size_t j = 0; j < boot_info->fb.height; j++) {
-        u32 g = ((j / gradient_y) / 2) + 0x7F;
-
-        for (size_t i = 0; i < boot_info->fb.width; i++) {
-            u32 b = ((i / gradient_x) / 2) + 0x7F;
-
-            boot_info->fb.pixels[i + (j * boot_info->fb.stride)] = 0xFF000000 | (g << 16) | (b << 8);
-        }
-    }
 
     // boot_cores();
 
     extern Buffer test2;
     Env* toy = env_create();
-    Thread* mine = env_load_elf(toy, test2.data, test2.length);
+    //Thread* mine = env_load_elf(toy, test2.data, test2.length);
 
     for (;;) {}
     return 0;
@@ -97,8 +109,12 @@ void kmain(BootInfo* restrict info) {
     kprintf("Found %d cores | TSC freq %d MHz\n", boot_info->core_count, boot_info->tsc_freq);
 
     // we're switching into a proper kernel task such that we can sleep correctly
+    uintptr_t nutstack = (uintptr_t) alloc_physical_pages(KERNEL_STACK_SIZE / PAGE_SIZE);
+    thread_create(NULL, draw_background, nutstack, KERNEL_STACK_SIZE, false);
+
     uintptr_t nustack = (uintptr_t) alloc_physical_pages(KERNEL_STACK_SIZE / PAGE_SIZE);
     thread_create(NULL, kernel_init, nustack, KERNEL_STACK_SIZE, false);
+
 
     irq_startup(0);
 
