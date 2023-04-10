@@ -70,10 +70,8 @@ static int draw_background(void *arg) {
                 boot_info->fb.pixels[i + (j * boot_info->fb.stride)] = 0xFF000000 | (g << 16) | (b << 8);
             }
         }
-        kprintf("scheduling a wait!\n");
-        sched_wait(threads_current, 16*1000);
-        kprintf("yielding\n");
-        thread_yield();
+        sched_wait(threads_current, 1000*1000);
+        kprintf("we return?\n");
         mult += 1;
     }
 }

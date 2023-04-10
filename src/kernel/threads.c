@@ -180,6 +180,7 @@ void thread_kill(Thread* thread) {
         threads_first_in_schedule = thread->next_in_schedule;
     }
     threads_count--;
+    threads_awake_count--;
     if (threads_count == 0) {
         threads_current = NULL;
     }
@@ -214,6 +215,7 @@ void thread_kill(Thread* thread) {
 ////////////////////////////////
 void sched_wait(Thread* t, u64 timeout) {
     t->wake_time = __rdtsc() + (timeout*boot_info->tsc_freq);
+    kprintf("scheduling a %d ms wait | should wake at %x\n", timeout / 1000, t->wake_time);
     spin_lock(&threads_lock);
 
     if (threads_first_deadline == NULL) {
@@ -240,6 +242,7 @@ void sched_wait(Thread* t, u64 timeout) {
 
     threads_awake_count--;
     spin_unlock(&threads_lock);
+    thread_yield();
 }
 
 /*
@@ -275,6 +278,7 @@ Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us) {
     u64 sleeping_threads = threads_count - threads_awake_count;
     if (sleeping_threads == 0) {
         kassert(threads_awake_count == threads_count, "%d, %d\n", threads_awake_count, threads_count);
+        kprintf("no sleepers?\n");
 
         *out_wake_us = FULL_PIE / threads_awake_count;
         if (threads_count == 1) {
@@ -294,6 +298,7 @@ Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us) {
         deadline->wake_time = 0;
         deadline->next_deadline = NULL;
 
+        kprintf("crossed a deadline?\n");
         return deadline;
     }
 

@@ -200,13 +200,13 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
             return old_address_space;
         }
 
-        kprintf("switch %p -> %p (for %d ms)\n", now, next, next_wake / 1000);
-        kprintf("%x -> %x\n", state->rip, threads_current->state.rip);
+        kprintf("switch %p -> %p (for %d ms)\n", threads_current, next, next_wake / 1000);
+        kprintf("currently: %x, should wake at: %x\n", now, now + (next_wake * boot_info->tsc_freq));
 
         // do thread context switch, if we changed
         if (threads_current != next || first_jump) {
             // if we're switching, save old thread state
-            if (threads_current != NULL && !first_jump) {
+            if (!first_jump) {
                 threads_current->state = *state;
             }
 
