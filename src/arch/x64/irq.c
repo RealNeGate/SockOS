@@ -172,17 +172,13 @@ void irq_startup(int core_id) {
     irq_enable(&idt);
 }
 
-bool first_jump = true;
-
 PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU* cpu) {
     uint64_t now = __rdtsc();
 
     kprintf("int %d: error=%x (%s)\n", state->interrupt_num, state->error, interrupt_names[state->interrupt_num]);
     kprintf("  rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
 
-    if (state->interrupt_num == 8) {
-        halt();
-    } else if (state->interrupt_num == 14) {
+    if (state->interrupt_num == 14) {
         u64 x = x86_get_cr2();
         u64 y = memmap__probe(old_address_space, x);
 
@@ -204,15 +200,14 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
         kprintf("currently: %x, should wake at: %x\n", now, now + (next_wake * boot_info->tsc_freq));
 
         // do thread context switch, if we changed
-        if (threads_current != next || first_jump) {
+        if (threads_current != next) {
             // if we're switching, save old thread state
-            if (!first_jump) {
+            if (threads_current != NULL) {
                 threads_current->state = *state;
             }
 
             *state = next->state;
             threads_current = next;
-            first_jump = false;
         }
 
         // send EOI
@@ -223,6 +218,7 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
         // switch into thread's address space, for kernel threads they'll use kernel_pml4
         return next->parent ? next->parent->address_space : boot_info->kernel_pml4;
     } else {
+        halt();
         return old_address_space;
     }
 }

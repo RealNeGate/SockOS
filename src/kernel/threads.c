@@ -124,6 +124,7 @@ Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t stack, size
     Thread* new_thread = alloc_physical_page();
     *new_thread = (Thread){
         .parent = env,
+        .wake_time = 0,
 
         // initial cpu state (CPU specific)
         .state = new_thread_state(entrypoint, stack, stack_size, is_user)
@@ -150,14 +151,11 @@ Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t stack, size
 
     // put into schedule
     spin_lock(&threads_lock);
-    if (threads_count == 0) {
-        threads_current = new_thread;
-        threads_first_in_schedule = threads_current;
-    }
-
     if (threads_first_in_schedule != NULL) {
         new_thread->next_in_schedule = threads_first_in_schedule;
         threads_first_in_schedule->prev_in_env = new_thread;
+        threads_first_in_schedule = new_thread;
+    } else {
         threads_first_in_schedule = new_thread;
     }
 
@@ -181,9 +179,6 @@ void thread_kill(Thread* thread) {
     }
     threads_count--;
     threads_awake_count--;
-    if (threads_count == 0) {
-        threads_current = NULL;
-    }
     spin_lock(&threads_lock);
 
     // remove from env
@@ -274,6 +269,10 @@ Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us) {
         kprintf("There are no threads!\n");
         halt();
     }
+    if (threads_current == NULL) {
+        *out_wake_us = FULL_PIE / threads_awake_count;
+        return threads_first_in_schedule;
+    }
 
     u64 sleeping_threads = threads_count - threads_awake_count;
     if (sleeping_threads == 0) {
@@ -307,9 +306,16 @@ Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us) {
         return threads_current;
     }
 
+    if (sleeping_threads == threads_count && threads_awake_count == 0) {
+        kprintf("Everything is sleeping!\n");
+        halt();
+    }
     kassert(threads_current->next_in_schedule != NULL, "threads count is wrong, or threads_current is borked!\n");
     *out_wake_us = FULL_PIE / threads_awake_count;
-    return threads_current->next_in_schedule;
+
+    kprintf("Current RIP: %p\n", threads_current->state.rip);
+
+    return threads_current;
 }
 
 ////////////////////////////////
