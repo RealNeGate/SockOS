@@ -67,6 +67,12 @@ static int kernel_init(void* arg) {
         }
     }
 
+    // boot_cores();
+
+    extern Buffer test2;
+    Env* toy = env_create();
+    Thread* mine = env_load_elf(toy, test2.data, test2.length);
+
     for (;;) {}
     return 0;
 }
@@ -89,11 +95,6 @@ void kmain(BootInfo* restrict info) {
 
     kprintf("ACPI processed...\n");
     kprintf("Found %d cores | TSC freq %d MHz\n", boot_info->core_count, boot_info->tsc_freq);
-    // boot_cores();
-
-    // extern Buffer test2;
-    // Env* toy = env_create();
-    // Thread* mine = env_load_elf(toy, test2.data, test2.length);
 
     // we're switching into a proper kernel task such that we can sleep correctly
     uintptr_t nustack = (uintptr_t) alloc_physical_pages(KERNEL_STACK_SIZE / PAGE_SIZE);

@@ -11,8 +11,6 @@ bootstrap:
     dq 0
 .sizeof_core:
     dq 0
-.counter:
-    dq 0
 .far_jumper_smp:
     dq 0 ; filled in at runtime
     dw 0x08
@@ -89,20 +87,19 @@ premain:
     mov ds, ax
     mov ss, ax
 
+    ; get core number
+    mov eax, 1
+    cpuid
+
     ; reserve core
-    ;   cpu_index = atomic_add(&counter, 1)
-    mov rax, [data_start + bootstrap.counter]
-    mov rcx, 1
-    xadd [rax], rcx
-    ;   cpu_index *= sizeof(PerCPU)
-    mov r8, [data_start + bootstrap.sizeof_core]
-    imul rcx, r8
+    ;   cpu_index = ebx * sizeof(PerCPU)
+    mov rdi, rbx
+    shr rdi, 24
+    imul rdi, [data_start + bootstrap.sizeof_core]
     ; get core pointer & stack
-    mov rdx, [data_start + bootstrap.cores]
-    add rcx, rdx
+    add rdi, [data_start + bootstrap.cores]
 
     ; jump into C... finally!
-    mov rsp, [rcx + 8] ; kernel_stack
-
+    mov rsp, [rdi + 8] ; kernel_stack
     call [data_start + bootstrap.smp_main]
 bootstrap_end:

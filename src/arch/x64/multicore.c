@@ -1,15 +1,12 @@
 // Toaruos SMP boot for reference
 // https://github.com/klange/toaruos/blob/master/kernel/arch/x86_64/smp.c
-
-extern char bootstrap_start[];
-extern char bootstrap_end[];
-
-uintptr_t smp_stack_base = 0;
-uintptr_t smp_lapic_addr = 0;
+static _Atomic(int) print_lock;
 
 void smp_main(PerCPU* cpu) {
-    kprintf("Hello Mr. CPU!\n");
-    //kprintf("Hello: %x\n", cpu - boot_info->cores);
+    spin_lock(&print_lock);
+    kprintf("Hello Mr. CPU! %p %d\n", cpu, cpu->core_id);
+    spin_unlock(&print_lock);
+
     // set up the GS, interrupts, and paging
 
     // add the idle task to the job queue
@@ -62,8 +59,6 @@ void boot_cores(void) {
     extern char bootstrap_end[];
     extern char premain[];
 
-    kassert((premain - bootstrap_entry) == 0x186, "expected layout %p", premain - bootstrap_entry);
-
     char* dst = (char*) 0x1000;
     memcpy(dst - (bootstrap_entry - bootstrap_start), bootstrap_start, bootstrap_end - bootstrap_start);
 
@@ -73,14 +68,11 @@ void boot_cores(void) {
     slots[1] = (u64) &smp_main;
     slots[2] = (u64) &boot_info->cores[0];
     slots[3] = (u64) sizeof(PerCPU);
-    slots[4] = 0; // atomic counter for core slot reserving
-    slots[5] = (u64) 0x1000 + (premain - bootstrap_entry);
+    slots[4] = (u64) 0x1000 + (premain - bootstrap_entry);
 
     // Walk the cores and boot them
     FOREACH_N(i, 1, boot_info->core_count) {
         u32 lapic_id = boot_info->cores[i].lapic_id;
-
-        kprintf("Starting CPU 0x%x\n", i);
 
         // Send a CPU INIT
         send_ipi(lapic_id, 0x4501);

@@ -2,29 +2,45 @@
 typedef int ThreadEntryFn(void*);
 
 typedef struct Thread Thread;
-typedef struct {
+typedef struct Wait Wait;
+typedef struct Env Env;
+
+struct Wait {
+    _Atomic(Wait*) next;
+
+    u64 time; // in TSC
+    Thread* thread;
+    volatile atomic_flag one_shot;
+};
+
+struct Env {
     _Atomic int lock;
     PageTable* address_space;
 
     Thread* first_in_env;
     Thread* last_in_env;
-} Env;
+};
 
 struct Thread {
     Env* parent;
     Thread* prev_in_env;
     Thread* next_in_env;
 
-    CPUState state;
-
     // scheduling
     Thread* prev_in_schedule;
     Thread* next_in_schedule;
+
+    CPUState state;
 };
 
 _Atomic int threads_lock;
 Thread* threads_current = NULL;
 Thread* threads_first_in_schedule = NULL;
+
+static struct {
+    _Atomic(Wait*) start;
+    _Atomic(Wait*) end;
+} timed_waits;
 
 void spin_lock(_Atomic(int)* lock);
 void spin_unlock(_Atomic(int)* lock);
@@ -35,14 +51,16 @@ void env_kill(Env* env);
 Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t stack, size_t stack_size, bool is_user);
 void thread_kill(Thread* thread);
 
+// this doesn't stall, just schedules a wait
+void sched_wait(Thread* t, u64 timeout);
+
 Thread* sched_try_switch(void);
 
 #else
 
 void spin_lock(_Atomic(int)* lock) {
     // we shouldn't be spin locking...
-    int old = 0;
-    while (atomic_compare_exchange_strong(lock, &old, 1)) {
+    while (!atomic_compare_exchange_strong(lock, &(int){ 0 }, 1)) {
         asm volatile ("pause");
     }
 }
@@ -180,6 +198,37 @@ void thread_kill(Thread* thread) {
     }
 }
 
+////////////////////////////////
+// Scheduler related
+////////////////////////////////
+void sched_wait(Thread* t, u64 timeout) {
+    Wait* restrict new_w = alloc_physical_page();
+    new_w->time = __rdtsc() + timeout;
+    new_w->thread = t;
+
+    spin_lock(&threads_lock);
+
+    // check if we're inserting as the first slot
+    Wait* w = timed_waits.start;
+    if (new_w->time < w->time) {
+        new_w->next = w;
+        timed_waits.start = new_w;
+    }
+
+    // insert sorted
+    for (;;) {
+        Wait* next = w->next;
+        if (new_w->time < next->time) {
+            new_w->next = next;
+            w->next = new_w;
+        }
+
+        w = w->next;
+    }
+
+    spin_unlock(&threads_lock);
+}
+
 Thread* sched_try_switch(void) {
     // first task to run
     if (threads_current == NULL) {
@@ -194,6 +243,9 @@ Thread* sched_try_switch(void) {
     return threads_current->next_in_schedule;
 }
 
+////////////////////////////////
+// Mini-ELF loader
+////////////////////////////////
 // this is the trusted ELF loader for priveleged programs, normal apps will probably
 // be loaded via a shared object.
 Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
