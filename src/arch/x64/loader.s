@@ -1,7 +1,7 @@
 .intel_syntax noprefix
 
 .extern kmain, kernel_tss
-.globl _start
+.globl _start, kernel_idle
 
 // We got ourselves boot info in RCX
 .text
@@ -37,6 +37,10 @@ _start.reload_cs:
     mov rdi, rcx
     call kmain
     hlt
+
+kernel_idle:
+    hlt
+    jmp kernel_idle
 
 .data
 far_jumper:

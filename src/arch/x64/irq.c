@@ -37,8 +37,6 @@ typedef struct __attribute__((packed)) {
 } IDT;
 _Static_assert(sizeof(IDT) == 10, "expected sizeof(IDT) to be 10 bytes");
 
-volatile IDTEntry _idt[256];
-
 // in irq.asm
 extern void syscall_handler(void);
 extern void do_context_switch(CPUState* state, PageTable* address_space);
@@ -56,6 +54,7 @@ static const char* interrupt_names[] = {
 };
 
 volatile IDTEntry _idt[256];
+static CPUState kernel_idle_state;
 
 CPUState new_thread_state(void* entrypoint, uintptr_t stack, size_t stack_size, bool is_user);
 
@@ -91,7 +90,7 @@ static volatile void* mmio_reg(volatile void* base, ptrdiff_t offset) {
 
 // This is hacky bullshit. Find a better way to get frequency
 static uint32_t tsc_to_apic_time(uint64_t t) {
-    return t / 4;
+    return t * 1000;
 }
 
 #define SET_INTERRUPT(num, has_error) do {              \
@@ -175,8 +174,10 @@ void irq_startup(int core_id) {
 PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU* cpu) {
     uint64_t now = __rdtsc();
 
-    kprintf("int %d: error=%x (%s)\n", state->interrupt_num, state->error, interrupt_names[state->interrupt_num]);
-    kprintf("  rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
+    if (state->interrupt_num != 32) {
+        kprintf("int %d: error=%x (%s)\n", state->interrupt_num, state->error, interrupt_names[state->interrupt_num]);
+        kprintf("  rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
+    }
 
     if (state->interrupt_num == 14) {
         u64 x = x86_get_cr2();
@@ -191,13 +192,19 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
         u64 next_wake;
         Thread* next = sched_try_switch(now, &next_wake);
         if (next == NULL) {
-            kprintf("no tasks to do!\n");
-            halt();
-            return old_address_space;
+            kprintf("\n  >> IDLE! (for %d ms) <<\n", next_wake / 1000);
+
+            // send EOI
+            APIC(0xB0) = 0;
+            // set new one-shot
+            APIC(0x380) = tsc_to_apic_time(next_wake);
+
+            *state = kernel_idle_state;
+            return boot_info->kernel_pml4;
         }
 
-        kprintf("switch %p -> %p (for %d ms)\n", threads_current, next, next_wake / 1000);
-        kprintf("currently: %x, should wake at: %x\n", now, now + (next_wake * boot_info->tsc_freq));
+        kprintf("\n  >> SWITCH %p -> %p (for %d ms, %d ticks) <<\n\n", threads_current, next, next_wake / 1000, tsc_to_apic_time(next_wake));
+        // kprintf("currently: %x, should wake at: %x\n", now, now + (next_wake * boot_info->tsc_freq));
 
         // do thread context switch, if we changed
         if (threads_current != next) {
@@ -213,7 +220,7 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
         // send EOI
         APIC(0xB0) = 0;
         // set new one-shot
-        APIC(0x380) = tsc_to_apic_time(next_wake * boot_info->tsc_freq);
+        APIC(0x380) = tsc_to_apic_time(next_wake);
 
         // switch into thread's address space, for kernel threads they'll use kernel_pml4
         return next->parent ? next->parent->address_space : boot_info->kernel_pml4;

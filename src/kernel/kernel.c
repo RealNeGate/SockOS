@@ -32,17 +32,6 @@ static void kernel_halt(void);
 #define IMPL
 #include "threads.c"
 
-int foobar(void* arg) {
-    for (size_t i = 500; i < 1000; i++) {
-        boot_info->fb.pixels[i] = 0xFF00FFFF;
-    }
-
-    // kill itself (then switch away)
-    thread_kill(threads_current);
-    asm ("int 32");
-    return 0;
-}
-
 #define STR2(x) #x
 #define STR(x) STR2(x)
 
@@ -70,7 +59,8 @@ static int draw_background(void *arg) {
                 boot_info->fb.pixels[i + (j * boot_info->fb.stride)] = 0xFF000000 | (g << 16) | (b << 8);
             }
         }
-        sched_wait(threads_current, 1000*1000);
+
+        sched_wait(threads_current, 16*1000);
         kprintf("we return?\n");
         mult += 1;
     }
@@ -84,9 +74,15 @@ static int kernel_init(void* arg) {
     //Thread* mine = env_load_elf(toy, test2.data, test2.length);
 
     kprintf("spinning to win\n");
-    for (;;) {}
+    for (;;) {
+        // kprintf("Do shit!\n");
+        // sched_wait(threads_current, 100*1000);
+    }
     return 0;
 }
+
+// loader.s
+extern int kernel_idle(void* arg);
 
 void kmain(BootInfo* restrict info) {
     boot_info = info;
@@ -108,12 +104,14 @@ void kmain(BootInfo* restrict info) {
     kprintf("Found %d cores | TSC freq %d MHz\n", boot_info->core_count, boot_info->tsc_freq);
 
     // we're switching into a proper kernel task such that we can sleep correctly
-    uintptr_t nutstack = (uintptr_t) alloc_physical_pages(KERNEL_STACK_SIZE / PAGE_SIZE);
-    thread_create(NULL, draw_background, nutstack, KERNEL_STACK_SIZE, false);
-
     uintptr_t nustack = (uintptr_t) alloc_physical_pages(KERNEL_STACK_SIZE / PAGE_SIZE);
+    thread_create(NULL, draw_background, nustack, KERNEL_STACK_SIZE, false);
+
+    nustack = (uintptr_t) alloc_physical_pages(KERNEL_STACK_SIZE / PAGE_SIZE);
     thread_create(NULL, kernel_init, nustack, KERNEL_STACK_SIZE, false);
 
+    nustack = (uintptr_t) alloc_physical_pages(KERNEL_STACK_SIZE / PAGE_SIZE);
+    kernel_idle_state = new_thread_state(kernel_idle, nustack, KERNEL_STACK_SIZE, false);
     irq_startup(0);
 
     // jump into timer interrupt, we're going to run tasks now

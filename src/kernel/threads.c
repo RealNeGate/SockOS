@@ -210,38 +210,16 @@ void thread_kill(Thread* thread) {
 ////////////////////////////////
 void sched_wait(Thread* t, u64 timeout) {
     t->wake_time = __rdtsc() + (timeout*boot_info->tsc_freq);
-    kprintf("scheduling a %d ms wait | should wake at %x\n", timeout / 1000, t->wake_time);
+    kprintf("sched_wait(%p, %d ms)\n", t, timeout / 1000);
+
     spin_lock(&threads_lock);
-
-    if (threads_first_deadline == NULL) {
-        threads_first_deadline = t;
-    } else if (threads_first_deadline->wake_time > t->wake_time) {
-        // insert as first task
-        t->next_deadline = threads_first_deadline;
-        threads_first_deadline = t;
-    } else {
-        // insert somewhere
-        Thread* last = threads_first_deadline;
-        Thread* curr = last->next_deadline;
-
-        while (curr != NULL && curr->wake_time > t->wake_time) {
-            last = curr, curr = curr->next_deadline;
-        }
-
-        // insert
-        last->next_deadline = t;
-        if (curr != NULL) {
-            t->next_deadline = curr->next_deadline;
-        }
-    }
-
     threads_awake_count--;
     spin_unlock(&threads_lock);
     thread_yield();
 }
 
 /*
- * This is a tickless round-robin-like scheduler, 
+ * This is a tickless round-robin-like scheduler,
  * with priority given to tasks with scheduled wake-ups
  *
  * Adding 3 tasks, A, B, C, splits time like this:
@@ -262,61 +240,109 @@ void sched_wait(Thread* t, u64 timeout) {
  * Yes. This may be a DDOS waiting to happen. Will fix later.
  */
 
+// start's searching at t
+static Thread* threads_find_next_awake(Thread* t, u64 now_time) {
+    bool wrap_around = false;
+    for (;;) {
+        if (t == NULL) {
+            // we're allowed to wrap once
+            if (wrap_around) {
+                return NULL;
+            }
+
+            wrap_around = true;
+            t = threads_first_in_schedule;
+        }
+
+        // it's awake now
+        if (t->wake_time <= now_time) {
+            t->wake_time = 0;
+            return t;
+        }
+
+        if (IS_AWAKE(*t)) {
+            return t;
+        }
+
+        t = t->next_in_schedule;
+    }
+}
+
 #define FULL_PIE 50000
+// #define kprintf
 Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us) {
     if (threads_count == 0) {
         // run the idle task?
         kprintf("There are no threads!\n");
-        halt();
+        return NULL;
     }
+
+    kprintf("sched_try_switch:\n");
     if (threads_current == NULL) {
-        *out_wake_us = FULL_PIE / threads_awake_count;
+        kprintf("  we just started running, entire time (%d ms).\n", FULL_PIE / 1000);
+        *out_wake_us = FULL_PIE;
         return threads_first_in_schedule;
     }
 
-    u64 sleeping_threads = threads_count - threads_awake_count;
-    if (sleeping_threads == 0) {
-        kassert(threads_awake_count == threads_count, "%d, %d\n", threads_awake_count, threads_count);
-        kprintf("no sleepers?\n");
-
-        *out_wake_us = FULL_PIE / threads_awake_count;
-        if (threads_count == 1) {
-            return threads_current;
+    // draw schedule list
+    kprintf("  ");
+    for (Thread* t = threads_first_in_schedule; t != NULL; t = t->next_in_schedule) {
+        if (t == threads_current) {
+            kprintf("\x1b[32m%p\x1b[0m", t);
+        } else {
+            kprintf("%p", t);
         }
-        kassert(threads_current->next_in_schedule != NULL, "No scheduable next thread?\n");
-        return threads_current->next_in_schedule;
+
+        if (IS_AWAKE(*t)) {
+            kprintf("\x1b[31m*\x1b[0m");
+        }
+
+        if (t->next_in_schedule != NULL) {
+            kprintf(" -> ");
+        }
+    }
+    kprintf("\n\n");
+
+    Thread* next = threads_current->next_in_schedule;
+    u64 slice = FULL_PIE / threads_count;
+    kprintf("  SLICE=%d\n", slice / 1000);
+
+    if (next != NULL) {
+        if (IS_AWAKE(*next)) {
+            kprintf("  task is awake and ready!\n");
+        } else {
+            i64 delta = next->wake_time - now_time;
+
+            kprintf("  we've got a sleeping task coming up\n");
+            if (delta <= 0) {
+                kprintf("    and it's ready!\n");
+                next->wake_time = 0;
+            } else {
+                i64 delta_us = delta / boot_info->tsc_freq;
+
+                kprintf("    we're missing %d ms\n", delta_us / 1000);
+                if (delta_us < slice) {
+                    kprintf("      we're closer to the wait, let's keep doing the old task until then.\n");
+
+                    slice = delta_us;
+                    next = threads_current;
+                } else {
+                    kprintf("      we've got some time until the wake time, let's just run the next awake.\n");
+                    next = threads_find_next_awake(next, now_time);
+                }
+            }
+        }
+
+        kprintf("  we've got an active thread (%p) coming up.\n", next);
+    } else {
+        next = threads_find_next_awake(next, now_time);
+        kprintf("  we have no more tasks in the schedule, restart (%p).\n", next);
     }
 
-    kassert(threads_first_deadline != NULL, "%d\n", threads_first_deadline);
-    Thread *deadline = threads_first_deadline;
-    if (now_time >= deadline->wake_time) {
-        threads_awake_count++;
-        *out_wake_us = FULL_PIE / threads_awake_count;
-
-        threads_first_deadline = deadline->next_deadline;
-        deadline->wake_time = 0;
-        deadline->next_deadline = NULL;
-
-        kprintf("crossed a deadline?\n");
-        return deadline;
-    }
-
-    if (threads_count == 1) {
-        *out_wake_us = FULL_PIE;
-        return threads_current;
-    }
-
-    if (sleeping_threads == threads_count && threads_awake_count == 0) {
-        kprintf("Everything is sleeping!\n");
-        halt();
-    }
-    kassert(threads_current->next_in_schedule != NULL, "threads count is wrong, or threads_current is borked!\n");
-    *out_wake_us = FULL_PIE / threads_awake_count;
-
-    kprintf("Current RIP: %p\n", threads_current->state.rip);
-
-    return threads_current;
+    *out_wake_us = slice ? slice : 1;
+    return next;
 }
+#undef kprintf
 
 ////////////////////////////////
 // Mini-ELF loader
