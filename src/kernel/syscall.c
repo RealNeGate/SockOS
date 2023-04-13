@@ -38,7 +38,7 @@ size_t syscall_table_count = SYS_MAX;
 SYS_FN(sleep) {
     kprintf("SYS_sleep(%p, %d us)\n", threads_current, SYS_PARAM0);
 
-    sched_wait(threads_current, state->rdi);
+    sched_wait(threads_current, SYS_PARAM0);
     thread_yield();
 
     return old_address_space;

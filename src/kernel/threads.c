@@ -206,28 +206,6 @@ void sched_wait(Thread* t, u64 timeout) {
     t->wake_time = __rdtsc() + (timeout*boot_info->tsc_freq);
 }
 
-/*
- * This is a tickless round-robin-like scheduler,
- * with priority given to tasks with scheduled wake-ups
- *
- * Adding 3 tasks, A, B, C, splits time like this:
- *     (idle)
- * AAAA AAAA AAAA
- * AAAA AACC CCCC
- * AAAA BBBB CCCC
- *
- * If B sleeps from there, and wakes up midway through A
- * B's time should be the remainder of the current, plus a full slice
- * AABB BBBB CCCC
- * or
- * AAAA AACC CCBB BB
- * and then
- * AAAA BBBB CCCC
- *
- * Yes. I'm making extra pie to ensure woken-tasks get at least 1 slice.
- * Yes. This may be a DDOS waiting to happen. Will fix later.
- */
-
 // start's searching at t
 static Thread* threads_find_next_awake(Thread* t, u64 now_time) {
     bool wrap_around = false;
