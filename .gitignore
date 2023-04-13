@@ -15,3 +15,4 @@ run4coder.bat
 project.4coder
 build.ninja
 *.map
+*.elf
