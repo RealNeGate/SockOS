@@ -9,4 +9,4 @@ fn getFile(comptime path: []const u8) Buffer {
     return .{ .length = b.len, .data = &b[0] };
 }
 
-export var test2 = getFile("test2.elf");
+export var desktop_elf = getFile("desktop.elf");

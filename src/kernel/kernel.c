@@ -7,8 +7,6 @@
 BootInfo* boot_info;
 static u16 cursor;
 
-static void kernel_halt(void);
-
 // core components
 #include "str.c"
 
@@ -24,9 +22,11 @@ static void kernel_halt(void);
 #include "arch/x64/mem.c"
 #include "arch/x64/acpi.c"
 #include "arch/x64/multicore.c"
+#include "arch/x64/disasm.c"
 #include "arch/x64/irq.c"
-#include "arch/x64/syscall.c"
 #endif
+
+#include "syscall.c"
 
 // components which depend on architecture stuff
 #define IMPL
@@ -35,50 +35,32 @@ static void kernel_halt(void);
 #define STR2(x) #x
 #define STR(x) STR2(x)
 
-static void kernel_halt(void) {
-    // TODO(NeGate): we should add some key to spawn a shell once we have that
-    kprintf("No tasks running...\n");
-
-}
-
 static int draw_background(void *arg) {
     u8 mult = 0;
-    kprintf("here?\n");
+
     for (;;) {
-        u64 gradient_x = (boot_info->fb.width + 255) / 256;
+        /*u64 gradient_x = (boot_info->fb.width + 255) / 256;
         u64 gradient_y = (boot_info->fb.height + 255) / 256;
 
         for (size_t j = 0; j < boot_info->fb.height; j++) {
             u32 g = ((j / gradient_y) / 2) + 0x7F;
-            g *= mult;
+            g = (g + mult) & 0xFF;
 
             for (size_t i = 0; i < boot_info->fb.width; i++) {
                 u32 b = ((i / gradient_x) / 2) + 0x7F;
-                b *= mult;
+                b = (b + mult) & 0xFF;
 
                 boot_info->fb.pixels[i + (j * boot_info->fb.stride)] = 0xFF000000 | (g << 16) | (b << 8);
             }
-        }
+        }*/
 
-        sched_wait(threads_current, 16*1000);
-        kprintf("we return?\n");
+        kprintf("A\n");
+
+        sched_wait(threads_current, 1000*1000);
+        thread_yield();
+
         mult += 1;
     }
-}
-
-static int kernel_init(void* arg) {
-    // boot_cores();
-
-    // extern Buffer test2;
-    // Env* toy = env_create();
-    //Thread* mine = env_load_elf(toy, test2.data, test2.length);
-
-    kprintf("spinning to win\n");
-    for (;;) {
-        // kprintf("Do shit!\n");
-        // sched_wait(threads_current, 100*1000);
-    }
-    return 0;
 }
 
 // loader.s
@@ -103,17 +85,13 @@ void kmain(BootInfo* restrict info) {
     kprintf("ACPI processed...\n");
     kprintf("Found %d cores | TSC freq %d MHz\n", boot_info->core_count, boot_info->tsc_freq);
 
-    // we're switching into a proper kernel task such that we can sleep correctly
-    uintptr_t nustack = (uintptr_t) alloc_physical_pages(KERNEL_STACK_SIZE / PAGE_SIZE);
-    thread_create(NULL, draw_background, nustack, KERNEL_STACK_SIZE, false);
+    extern Buffer desktop_elf;
+    Env* toy = env_create();
+    Thread* mine = env_load_elf(toy, desktop_elf.data, desktop_elf.length);
 
-    nustack = (uintptr_t) alloc_physical_pages(KERNEL_STACK_SIZE / PAGE_SIZE);
-    thread_create(NULL, kernel_init, nustack, KERNEL_STACK_SIZE, false);
-
-    nustack = (uintptr_t) alloc_physical_pages(KERNEL_STACK_SIZE / PAGE_SIZE);
-    kernel_idle_state = new_thread_state(kernel_idle, nustack, KERNEL_STACK_SIZE, false);
+    kernel_idle_state = new_thread_state(kernel_idle, 0, 0, false);
     irq_startup(0);
 
     // jump into timer interrupt, we're going to run tasks now
-    asm volatile ("int 32");
+    calibrate_apic_timer();
 }

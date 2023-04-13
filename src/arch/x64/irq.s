@@ -59,6 +59,13 @@ isr\num:
     jmp asm_int_handler
 .endm
 
+.macro swapgs_if_necessary
+    cmp qword ptr [rsp + 8], 8
+    je 1f
+    swapgs
+1:
+.endm
+
 DEFINE_INT 3
 DEFINE_INT 6
 DEFINE_ERR 8
@@ -87,7 +94,7 @@ asm_int_handler:
     cli
 
     // swap out user gs, use kernel gs now
-    swapgs
+    swapgs_if_necessary
 
     push rax
     push rcx
@@ -150,7 +157,7 @@ asm_int_handler:
     add rsp, 16 // pop interrupt_num and error code
 
     // back to user gs
-    swapgs
+    swapgs_if_necessary
     iretq
 
 // RCX - return address

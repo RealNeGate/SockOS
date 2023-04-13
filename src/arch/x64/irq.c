@@ -17,7 +17,9 @@ enum {
     INTR_LAPIC_TIMER      = 0xF0,
     INTR_LAPIC_SPURIOUS   = 0xF1,
     INTR_LAPIC_IPI        = 0xF2,
-    INTR_LAPIC_RESCHEDULE = 0xF3
+    INTR_LAPIC_RESCHEDULE = 0xF3,
+
+    APIC_CALIBRATION_TICKS = 1000000,
 };
 
 typedef struct __attribute__((packed)) IDTEntry {
@@ -56,6 +58,9 @@ static const char* interrupt_names[] = {
 volatile IDTEntry _idt[256];
 static CPUState kernel_idle_state;
 
+static volatile bool calibrating_apic_timer;
+static u64 apic_freq;
+
 CPUState new_thread_state(void* entrypoint, uintptr_t stack, size_t stack_size, bool is_user);
 
 static void irq_disable_pic(void) {
@@ -88,9 +93,8 @@ static volatile void* mmio_reg(volatile void* base, ptrdiff_t offset) {
     return ((volatile char*)base) + offset;
 }
 
-// This is hacky bullshit. Find a better way to get frequency
-static uint32_t tsc_to_apic_time(uint64_t t) {
-    return t * 1000;
+static uint32_t micros_to_apic_time(uint64_t t) {
+    return (t * boot_info->tsc_freq) / apic_freq;
 }
 
 #define SET_INTERRUPT(num, has_error) do {              \
@@ -106,6 +110,18 @@ static uint32_t tsc_to_apic_time(uint64_t t) {
         .reserved = 0,                                  \
     };                                                  \
 } while (0)
+
+// jumping into the scheduler after this
+void calibrate_apic_timer(void) {
+    // calibrate APIC timer
+    calibrating_apic_timer = true;
+    apic_freq = __rdtsc();
+    APIC(0x380) = APIC_CALIBRATION_TICKS;
+
+    while (calibrating_apic_timer) {
+        asm volatile ("hlt");
+    }
+}
 
 void irq_startup(int core_id) {
     if (core_id == 0) {
@@ -172,7 +188,7 @@ void irq_startup(int core_id) {
 }
 
 PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU* cpu) {
-    uint64_t now = __rdtsc();
+    u64 now = __rdtsc();
 
     if (state->interrupt_num != 32) {
         kprintf("int %d: error=%x (%s)\n", state->interrupt_num, state->error, interrupt_names[state->interrupt_num]);
@@ -180,34 +196,62 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
     }
 
     if (state->interrupt_num == 14) {
-        u64 x = x86_get_cr2();
-        u64 y = memmap__probe(old_address_space, x);
+        kprintf("  cr3=%p\n\n", old_address_space);
 
-        kprintf("  cr2=%p (translated %p)\n", x, y);
-        kprintf("  cr3=%p\n", old_address_space);
+        // print memory access address
+        u64 translated;
+        u64 access_addr = x86_get_cr2();
+        if (memmap__translate(old_address_space, access_addr, &translated)) {
+            kprintf("  access: %p (translated: %p)\n", access_addr, translated);
+        } else {
+            kprintf("  access: %p (NOT PRESENT)\n", access_addr);
+        }
+
+        // dissassemble code
+        if (memmap__translate(old_address_space, state->rip, &translated)) {
+            // relocate higher half addresses to the ELF in physical memory
+            if (state->rip >= 0xFFFFFFFF80000000ull) {
+                translated = state->rip;
+            }
+
+            kprintf("  code:   %p (translated: %p)\n\n", state->rip, translated);
+            // x86_print_disasm((uint8_t*) translated, 16);
+        } else {
+            kprintf("  code:   NOT PRESENT\n");
+        }
 
         halt();
         return old_address_space;
     } else if (state->interrupt_num == 32) {
+        if (calibrating_apic_timer) {
+            apic_freq = (now - apic_freq) / APIC_CALIBRATION_TICKS;
+            calibrating_apic_timer = false;
+
+            kprintf("APIC timer freq = %d\n", apic_freq);
+        }
+
         u64 next_wake;
+        spin_lock(&threads_lock);
         Thread* next = sched_try_switch(now, &next_wake);
+        spin_unlock(&threads_lock);
+
         if (next == NULL) {
-            kprintf("\n  >> IDLE! (for %d ms) <<\n", next_wake / 1000);
+            // kprintf("\n  >> IDLE! (for %d ms, %d ticks) <<\n", next_wake / 1000, micros_to_apic_time(next_wake));
 
             // send EOI
             APIC(0xB0) = 0;
             // set new one-shot
-            APIC(0x380) = tsc_to_apic_time(next_wake);
+            APIC(0x380) = micros_to_apic_time(next_wake);
 
             *state = kernel_idle_state;
+            threads_current = NULL;
             return boot_info->kernel_pml4;
         }
 
-        kprintf("\n  >> SWITCH %p -> %p (for %d ms, %d ticks) <<\n\n", threads_current, next, next_wake / 1000, tsc_to_apic_time(next_wake));
-        // kprintf("currently: %x, should wake at: %x\n", now, now + (next_wake * boot_info->tsc_freq));
-
         // do thread context switch, if we changed
         if (threads_current != next) {
+            // kprintf("\n  >> SWITCH %p -> %p (for %d ms, %d ticks) <<\n\n", threads_current, next, next_wake / 1000, micros_to_apic_time(next_wake));
+
             // if we're switching, save old thread state
             if (threads_current != NULL) {
                 threads_current->state = *state;
@@ -220,7 +264,7 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
         // send EOI
         APIC(0xB0) = 0;
         // set new one-shot
-        APIC(0x380) = tsc_to_apic_time(next_wake);
+        APIC(0x380) = micros_to_apic_time(next_wake);
 
         // switch into thread's address space, for kernel threads they'll use kernel_pml4
         return next->parent ? next->parent->address_space : boot_info->kernel_pml4;

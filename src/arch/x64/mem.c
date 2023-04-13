@@ -272,8 +272,7 @@ static u64 memmap__probe(PageTable* address_space, uintptr_t virt) {
 
     PageTable* curr = address_space;
     for (size_t i = 0; i < 3; i++) {
-        kprintf("Travel %x %x %x\n", (int)(uintptr_t) curr, (int) i, curr->entries[l[i]]);
-
+        // kprintf("Travel %x %x %x\n", (int)(uintptr_t) curr, (int) i, curr->entries[l[i]]);
         if (curr->entries[l[i]] == 0) {
             // kprintf("Didn't find page!!!\n");
             return 0;
@@ -284,3 +283,14 @@ static u64 memmap__probe(PageTable* address_space, uintptr_t virt) {
 
     return curr->entries[l[3]];
 }
+
+static bool memmap__translate(PageTable* address_space, uintptr_t virt, u64* out) {
+    u64 r = memmap__probe(address_space, virt);
+    if ((r & PAGE_PRESENT) == 0) {
+        return false;
+    }
+
+    *out = (r & ~0xFFFull) | (virt & 0xFFF);
+    return true;
+}
+

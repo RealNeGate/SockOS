@@ -1,0 +1,3 @@
+// 0x00 - 0x10    IPC
+X(sleep)
+#undef X

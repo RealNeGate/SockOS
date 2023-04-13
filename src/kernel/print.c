@@ -1,6 +1,6 @@
 #pragma once
 
-static void kprintf(char *fmt, ...);
+static void kprintf(const char *fmt, ...);
 static void put_char(int ch);
 static void put_string(const char* str);
 static void put_number(u64 x, u8 base);
@@ -87,7 +87,7 @@ static void draw_sprite(u32 color, int ch) {
 }
 
 #define _PRINT_BUFFER_LEN 128
-static void kprintf(char *fmt, ...) {
+static void kprintf(const char *fmt, ...) {
     __builtin_va_list args;
     __builtin_va_start(args, fmt);
 
@@ -130,6 +130,10 @@ static void kprintf(char *fmt, ...) {
                 c++;
                 min_len = *c - '0';
                 goto consume_moar;
+            } break;
+            case 'c': {
+                i64 c = __builtin_va_arg(args, i64);
+                put_char(c);
             } break;
             case 's': {
                 u8 *s = __builtin_va_arg(args, u8 *);
