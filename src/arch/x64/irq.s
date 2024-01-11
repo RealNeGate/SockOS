@@ -1,10 +1,8 @@
-.intel_syntax noprefix
+global irq_enable, irq_disable, asm_int_handler, syscall_handler
+global io_in8, io_in16, io_in32, io_out8, io_out16, io_out32
+extern irq_int_handler, syscall_table_count, syscall_table, boot_info
 
-.globl irq_enable, irq_disable, asm_int_handler, syscall_handler
-.globl io_in8, io_in16, io_in32, io_out8, io_out16, io_out32
-.extern irq_int_handler, syscall_table_count, syscall_table, boot_info
-
-.text
+section text
 irq_enable:
     lidt [rdi]
     sti
@@ -44,27 +42,27 @@ io_out32:
     out dx, eax
     ret
 
-.macro DEFINE_INT, num:req
-.global isr\num
-isr\num:
-    push 0 // Padded out
-    push \num
+%macro DEFINE_INT 1
+global isr%1
+isr%1:
+    push 0 ; Padded out
+    push %1
     jmp asm_int_handler
-.endm
+%endmacro
 
-.macro DEFINE_ERR, num:req
-.globl isr\num
-isr\num:
-    push \num
+%macro DEFINE_ERR 1
+global isr%1
+isr%1:
+    push %1
     jmp asm_int_handler
-.endm
+%endmacro
 
-.macro swapgs_if_necessary
-    cmp qword ptr [rsp + 8], 8
-    je 1f
+%macro swapgs_if_necessary 0
+    cmp qword [rsp + 8], 8
+    je %%woah
     swapgs
-1:
-.endm
+%%woah:
+%endmacro
 
 DEFINE_INT 3
 DEFINE_INT 6
@@ -93,7 +91,7 @@ asm_int_handler:
     cld
     cli
 
-    // swap out user gs, use kernel gs now
+    ; swap out user gs, use kernel gs now
     swapgs_if_necessary
 
     push rax
@@ -112,30 +110,30 @@ asm_int_handler:
     push r14
     push r15
 
-    // switch to kernel PML4
+    ; switch to kernel PML4
     mov rsi, cr3
     mov rax, [boot_info]
     mov rax, [rax + 0]
     mov cr3, rax
 
-    // fxsave needs to be aligned to 16bytes
-    // mov rbx,rsp
-    // and rsp,~0xF
-    // fxsave  [rsp - 512]
-    // mov rsp,rbx
-    // sub rsp,512 + 16
+    ; fxsave needs to be aligned to 16bytes
+    ; mov rbx,rsp
+    ; and rsp,~0xF
+    ; fxsave  [rsp - 512]
+    ; mov rsp,rbx
+    ; sub rsp,512 + 16
 
     mov rdi, rsp
     mov rcx, gs
     call irq_int_handler
 
-    // fxrstor also needs to be aligned to 16bytes
-    // add rsp, 512 + 16
-    // mov rbx,rsp
-    // and rbx,~0xF
-    // fxrstor [rbx - 512]
+    ; fxrstor also needs to be aligned to 16bytes
+    ; add rsp, 512 + 16
+    ; mov rbx,rsp
+    ; and rbx,~0xF
+    ; fxrstor [rbx - 512]
 
-    // switch to whichever address space we returned
+    ; switch to whichever address space we returned
     mov cr3, rax
 
     pop r15
@@ -154,41 +152,41 @@ asm_int_handler:
     pop rcx
     pop rax
 
-    add rsp, 16 // pop interrupt_num and error code
+    add rsp, 16 ; pop interrupt_num and error code
 
-    // back to user gs
+    ; back to user gs
     swapgs_if_necessary
     iretq
 
-// RCX - return address
-// R11 - original RFLAGS
+; RCX - return address
+; R11 - original RFLAGS
 syscall_handler:
-    // early out on >256 syscall numbers
+    ; early out on >256 syscall numbers
     cmp rax, [syscall_table_count]
     jae syscall_handler.bad_syscall
 
-    // disable interrupts
+    ; disable interrupts
     cli
 
-    // preserve old stack, use kernel stack
+    ; preserve old stack, use kernel stack
     swapgs
 
-    // save user stack, switch to kernel stack
+    ; save user stack, switch to kernel stack
     mov gs:[32], rsp
     mov rsp, gs:[8]
 
-    // ss, rsp, flags, cs, rip
-    push 0x23         // ss
-    push qword ptr gs:[32]// user rsp
-    push r11          // rflags
-    push 0x1B         // cs
-    push rcx          // rip
+    ; ss, rsp, flags, cs, rip
+    push 0x23         ; ss
+    push qword gs:[32]; user rsp
+    push r11          ; rflags
+    push 0x1B         ; cs
+    push rcx          ; rip
 
-    // error & interrupt num
+    ; error & interrupt num
     push 0
     push 0
 
-    // save registers
+    ; save registers
     push rax
     push rcx
     push rdx
@@ -205,23 +203,23 @@ syscall_handler:
     push r14
     push r15
 
-    // call into syscall table
+    ; call into syscall table
     lea rcx, syscall_table
     mov rcx, [rcx + rax*8]
     test rcx, rcx
     jz syscall_handler.no_syscall
 syscall_handler.has_syscall:
-    // switch to kernel PML4
+    ; switch to kernel PML4
     mov rsi, cr3
     mov rdx, [boot_info]
     mov rdx, [rdx + 0]
     mov cr3, rdx
 
-    // run C syscall stuff & preserve old address space (in callee saved reg)
+    ; run C syscall stuff & preserve old address space (in callee saved reg)
     mov rdi, rsp
     call rcx
 
-    // switch to new address space
+    ; switch to new address space
     mov cr3, rax
 syscall_handler.no_syscall:
     pop r15
@@ -240,31 +238,31 @@ syscall_handler.no_syscall:
     pop rcx
     pop rax
 
-    add rsp, 56 // pop the rest of the CPU state
+    add rsp, 56 ; pop the rest of the CPU state
 
-    // enable interrupts
+    ; enable interrupts
     or r11, 0x200
 
-    // give the user back his GS and stack
+    ; give the user back his GS and stack
     mov rsp, gs:[32]
     swapgs
 
-    // we're using the 64bit sysret
-    .byte 0x48
+    ; we're using the 64bit sysret
+    db 0x48
     sysret
 syscall_handler.bad_syscall:
     mov rax, -1
-    // we're using the 64bit sysret
-    .byte 0x48
+    ; we're using the 64bit sysret
+    db 0x48
     sysret
 
-// RDI - CPUState*
-// RSI - PageTable*
+; RDI - CPUState*
+; RSI - PageTable*
 do_context_switch:
-    // switch to new address space
+    ; switch to new address space
     mov cr3, rax
 
-    // use CPUState as the stack
+    ; use CPUState as the stack
     mov rsp, rdi
     pop r15
     pop r14
@@ -282,5 +280,5 @@ do_context_switch:
     pop rcx
     pop rax
 
-    add rsp, 16 // pop interrupt_num and error code
+    add rsp, 16 ; pop interrupt_num and error code
     iretq

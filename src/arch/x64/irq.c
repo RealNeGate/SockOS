@@ -191,7 +191,7 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
     u64 now = __rdtsc();
 
     if (state->interrupt_num != 32) {
-        kprintf("int %d: error=%x (%s)\n", state->interrupt_num, state->error, interrupt_names[state->interrupt_num]);
+        kprintf("int %d: error=0x%x (%s)\n", state->interrupt_num, state->error, interrupt_names[state->interrupt_num]);
         kprintf("  rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
     }
 
@@ -236,7 +236,7 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
         spin_unlock(&threads_lock);
 
         if (next == NULL) {
-            // kprintf("\n  >> IDLE! (for %d ms, %d ticks) <<\n", next_wake / 1000, micros_to_apic_time(next_wake));
+            kprintf("\n  >> IDLE! (for %d ms, %d ticks) <<\n", next_wake / 1000, micros_to_apic_time(next_wake));
 
             // send EOI
             APIC(0xB0) = 0;
@@ -250,7 +250,7 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
 
         // do thread context switch, if we changed
         if (threads_current != next) {
-            // kprintf("\n  >> SWITCH %p -> %p (for %d ms, %d ticks) <<\n\n", threads_current, next, next_wake / 1000, micros_to_apic_time(next_wake));
+            kprintf("\n  >> SWITCH %p -> %p (for %d ms, %d ticks) <<\n\n", threads_current, next, next_wake / 1000, micros_to_apic_time(next_wake));
 
             // if we're switching, save old thread state
             if (threads_current != NULL) {

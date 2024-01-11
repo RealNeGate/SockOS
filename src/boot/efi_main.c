@@ -12,7 +12,7 @@
 
 #define panic(fmt, ...)       \
 do {                          \
-    printf(fmt, __VA_ARGS__); \
+    printf(fmt, # __VA_ARGS__); \
     for (;;) {}               \
 } while (false);
 
@@ -268,7 +268,7 @@ static bool mem_map_verify(MemMap* mem_map) {
     return true;
 }
 
-EFI_STATUS EfiMain(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
+EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     EFI_STATUS status = st->ConOut->ClearScreen(st->ConOut);
     printf("[INFO] Booting\n");
 
@@ -299,6 +299,7 @@ EFI_STATUS EfiMain(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 
     // Load the kernel from disk
     char* kernel_buffer;
+    size_t kernel_size = KERNEL_BUFFER_SIZE;
     {
         kernel_buffer = efi_alloc(st, KERNEL_BUFFER_SIZE);
         if (kernel_buffer == NULL) {
@@ -335,9 +336,8 @@ EFI_STATUS EfiMain(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         }
 
         // Kernel buffer is right after the loader region
-        size_t size = KERNEL_BUFFER_SIZE;
-        kernel_file->Read(kernel_file, &size, kernel_buffer);
-        if (size >= KERNEL_BUFFER_SIZE) {
+        kernel_file->Read(kernel_file, &kernel_size, kernel_buffer);
+        if (kernel_size >= KERNEL_BUFFER_SIZE) {
             panic("Kernel too large to fit into buffer!\n");
         }
 
@@ -357,7 +357,7 @@ EFI_STATUS EfiMain(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     if(!elf_load(st, kernel_buffer, &kernel_module)) {
         panic("Failed to load the kernel module");
     }
-    printf("Loaded the kernel at: %X\n", kernel_module.phys_base);
+    printf("Loaded the kernel at: %X .. %X\n", kernel_module.phys_base, kernel_module.phys_base + kernel_size - 1);
     printf("Kernel entry: %X\n", kernel_module.entry_addr);
 
     // Create the stack for the kernel

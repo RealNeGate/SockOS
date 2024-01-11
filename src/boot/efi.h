@@ -11,20 +11,20 @@
 #define EFI_OPEN_PROTOCOL_GET_PROTOCOL 0x00000002
 
 #define EFI_ERRORS           \
-    X(EFI_NO_ERROR)          \
-    X(EFI_LOAD_ERROR)        \
-    X(EFI_INVALID_PARAMETER) \
-    X(EFI_UNSUPPORTED)       \
-    X(EFI_BAD_BUFFER_SIZE)   \
-    X(EFI_BUFFER_TOO_SMALL)  \
-    X(EFI_NOT_READY)         \
-    X(EFI_DEVICE_ERROR)      \
-    X(EFI_WRITE_PROTECTED)
+X(EFI_NO_ERROR)          \
+X(EFI_LOAD_ERROR)        \
+X(EFI_INVALID_PARAMETER) \
+X(EFI_UNSUPPORTED)       \
+X(EFI_BAD_BUFFER_SIZE)   \
+X(EFI_BUFFER_TOO_SMALL)  \
+X(EFI_NOT_READY)         \
+X(EFI_DEVICE_ERROR)      \
+X(EFI_WRITE_PROTECTED)
 
 typedef enum {
-#define X(name) name,
+    #define X(name) name,
     EFI_ERRORS
-#undef X
+        #undef X
 } EFI_Errors;
 
 typedef void*    EFI_HANDLE;
@@ -591,8 +591,10 @@ char *efi_errstr(int val) {
     switch (val) {
         #define X(error) \
         case error:      \
-            return #error;
-            EFI_ERRORS
-        #undef X
+        return #error;
+        EFI_ERRORS
+            #undef X
+
+        default: return "???";
     }
 }

@@ -1,0 +1,34 @@
+rule cc
+  depfile = $out.d
+  command = clang $in $flags -c -MD -MF $out.d -o $out
+  description = CC $out
+
+rule ld
+  command = ld.lld.exe $in -o $out
+  description = LINK $out
+
+rule link
+  command = lld-link $in $flags /out:$out
+  description = LINK $out
+
+rule nasm
+  command = nasm $in -f elf64 -o $out
+  description = NASM $out
+
+# build EFI app
+build objs/efi.o: cc src/boot/efi_main.c
+  flags = -target x86_64-pc-win32-coff -fuse-ld=lld-link -nostdlib -I src -Wall -Wno-unused -fno-stack-protector -fno-PIC -fshort-wchar -mno-red-zone -fno-finite-loops
+build bin/efi/boot/bootx64.efi: link objs/efi.o
+  flags = -subsystem:efi_application -nodefaultlib -dll -entry:efi_main
+
+# Kernel assembly code
+build objs/loader.o: nasm src/arch/x64/loader.s
+build objs/bootstrap.o: nasm src/arch/x64/bootstrap.s
+build objs/irq.o: nasm src/arch/x64/irq.s
+
+build objs/kernel.o: cc src/kernel/kernel.c
+  flags = -c -nostdlib -I src -target x86_64-linux-gnu -Wall -Wno-unused -fno-stack-protector -mno-red-zone -fno-finite-loops -ffreestanding -masm=intel
+
+build bin/kernel.so: ld objs/kernel.o objs/bootstrap.o objs/irq.o objs/loader.o
+  flags = -nostdlib
+

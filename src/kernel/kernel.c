@@ -85,9 +85,13 @@ void kmain(BootInfo* restrict info) {
     kprintf("ACPI processed...\n");
     kprintf("Found %d cores | TSC freq %d MHz\n", boot_info->core_count, boot_info->tsc_freq);
 
-    extern Buffer desktop_elf;
+    // tiny i know
+    void* physical_stack = alloc_physical_page();
+    thread_create(NULL, draw_background, (uintptr_t) physical_stack, 4096, false);
+
+    /*extern Buffer desktop_elf;
     Env* toy = env_create();
-    Thread* mine = env_load_elf(toy, desktop_elf.data, desktop_elf.length);
+    Thread* mine = env_load_elf(toy, desktop_elf.data, desktop_elf.length);*/
 
     kernel_idle_state = new_thread_state(kernel_idle, 0, 0, false);
     irq_startup(0);

@@ -3,6 +3,7 @@ bin/
 .vscode/
 zig-out/
 zig-cache/
+objs/
 
 *.log
 *.o
@@ -13,6 +14,5 @@ zig-cache/
 .ninja_log
 run4coder.bat
 project.4coder
-build.ninja
 *.map
 *.elf
