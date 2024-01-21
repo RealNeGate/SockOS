@@ -479,7 +479,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     #ifdef USE_INTRIN
     writecr3((uintptr_t) boot_info.kernel_pml4);
     #else
-    asm volatile("movq %0, %%cr3" ::"r" (boot_info.kernel_pml4) : "memory");
+    asm volatile("mov cr3, %0" ::"r" (boot_info.kernel_pml4) : "memory");
     #endif
 
     ((LoaderFunction) kernel_module.entry_addr)(&boot_info, kstack_end, tss[0], tss[1]);

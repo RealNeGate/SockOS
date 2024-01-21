@@ -30,12 +30,12 @@ static u16 com_port = PORT_COM1;
 // MSVC+Clang intrin
 u8 io_in8(u16 port) {
     u8 value;
-    asm volatile(".att_syntax\ninb %w1, %b0\n.intel_syntax" : "=a" (value) : "Nd" (port));
+    asm volatile(".intel_syntax noprefix; in %b0, %w1" : "=a" (value) : "Nd" (port));
     return value;
 }
 
 void io_out8(u16 port, u8 data) {
-    asm volatile(".att_syntax\noutb %b0, %w1\n.intel_syntax" : : "a" (data), "Nd" (port));
+    asm volatile(".intel_syntax noprefix; out %w1, %b0" : : "a" (data), "Nd" (port));
 }
 
 static inline void com_set_port(u16 port) {
