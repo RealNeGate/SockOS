@@ -26,7 +26,9 @@ static u16 cursor;
 #include "arch/x64/irq.c"
 #endif
 
+
 #include "syscall.c"
+#include "pci.c"
 
 // components which depend on architecture stuff
 #define IMPL
@@ -84,6 +86,9 @@ void kmain(BootInfo* restrict info) {
 
     kprintf("ACPI processed...\n");
     kprintf("Found %d cores | TSC freq %d MHz\n", boot_info->core_count, boot_info->tsc_freq);
+
+    // TODO(flysand): figure out why it doesn't work.
+    // pci_scan_all();
 
     // tiny i know
     void* physical_stack = alloc_physical_page();
