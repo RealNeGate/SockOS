@@ -12,6 +12,7 @@ objs/
 *.exe
 
 .ninja_log
+build.ninja
 run4coder.bat
 project.4coder
 *.map
