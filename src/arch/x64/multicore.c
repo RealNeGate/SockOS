@@ -42,13 +42,29 @@ void boot_cores(void) {
         return;
     }
 
-    // allocate percpu info
-    FOREACH_N(i, 1, boot_info->core_count) {
-        PerCPU* restrict cpu = &boot_info->cores[i];
+    enum { STACKS_PER_CHUNK = CHUNK_SIZE / KERNEL_STACK_SIZE };
+    int chunk_count = ((boot_info->core_count - 1) + STACKS_PER_CHUNK - 1) / STACKS_PER_CHUNK;
 
-        // if windows can get away with this so can we
-        cpu->kernel_stack = alloc_physical_pages(KERNEL_STACK_SIZE / PAGE_SIZE);
-        cpu->kernel_stack_top = cpu->kernel_stack + KERNEL_STACK_SIZE;
+    int k = 1;
+    FOREACH_N(i, 0, chunk_count) {
+        // subdivide into a few stacks with the bottoms tagged
+        char* stack_space = alloc_physical_chunk();
+
+        int limit = i == chunk_count ? ((boot_info->core_count - 1) % STACKS_PER_CHUNK) : STACKS_PER_CHUNK;
+        FOREACH_N(j, 0, limit) {
+            // we put a unique cookie at the bottom of the kernel thread's stack so it knows what
+            // Thread ID it is.
+            uint32_t* sp = (uint32_t*) &stack_space[j * KERNEL_STACK_SIZE];
+            sp[0] = KERNEL_STACK_COOKIE;
+            sp[1] = k;
+
+            kprintf("KernelStack[%d]: %p - %p\n", k, sp, sp + KERNEL_STACK_SIZE - 1);
+
+            // if windows can get away with small kernel stacks so can we
+            PerCPU* restrict cpu = &boot_info->cores[k++];
+            cpu->kernel_stack     = (uint8_t*) sp;
+            cpu->kernel_stack_top = (uint8_t*) sp + KERNEL_STACK_SIZE;
+        }
     }
 
     // map the bootstrap code

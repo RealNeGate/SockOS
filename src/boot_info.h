@@ -10,7 +10,11 @@ typedef struct {
 
 enum {
     PAGE_SIZE = 4096,
-    KERNEL_STACK_SIZE = 0x4000,
+
+    KERNEL_STACK_SIZE   = 0x10000,
+    KERNEL_STACK_COOKIE = 0xABCDABCD,
+
+    MAX_CORES = 256,
 };
 
 typedef struct {
@@ -52,6 +56,18 @@ typedef struct {
     MemRegion* regions;
 } MemMap;
 
+// lock-free queue
+typedef struct {
+    _Atomic int64_t bot;
+    _Atomic int64_t top;
+    _Atomic(void*)* data;
+} PerCPU_PageAllocator;
+
+typedef struct PageFreeList {
+    struct PageFreeList* next;
+    char data[];
+} PageFreeList;
+
 typedef struct {
     // used for interrupts
     u8* kernel_stack;
@@ -60,6 +76,12 @@ typedef struct {
     u8* user_stack_scratch;
 
     u32 core_id, lapic_id;
+
+    // 4KiB page heap
+    PageFreeList* heap;
+
+    // 2MiB heap
+    _Alignas(64) PerCPU_PageAllocator alloc;
 } PerCPU;
 
 // This is all the crap we throw into the loader

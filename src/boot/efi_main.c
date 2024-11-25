@@ -361,7 +361,11 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     printf("Kernel entry: %X\n", kernel_module.entry_addr);
 
     // Create the stack for the kernel
-    void* kstack_base = efi_alloc(st, KERNEL_STACK_SIZE);
+    void* kstack_base = efi_alloc(st, KERNEL_STACK_SIZE * 2);
+
+    // align kernel stack
+    kstack_base = (void*) ((uintptr_t) kstack_base & -KERNEL_STACK_SIZE);
+
     void* kstack_end  = (u8*) kstack_base + KERNEL_STACK_SIZE;
     printf("Kernel stack: %X .. %X\n", kstack_base, kstack_end);
 
@@ -466,7 +470,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     memdump(tss, 16);
     #endif
 
-    printf("Jumping to the kernel: %X\n", kernel_module.entry_addr);
+    printf("Jumping to the kernel: %X (sp=%X)\n", kernel_module.entry_addr, kstack_base);
     boot_info.kernel_virtual_used = kernel_module.virt_base;
     boot_info.elf_physical_ptr = kernel_module.phys_base;
     boot_info.fb = fb;
@@ -474,6 +478,10 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     boot_info.kernel_pml4 = &page_tables[0];
     boot_info.cores[0].kernel_stack = kstack_base;
     boot_info.cores[0].kernel_stack_top = kstack_end;
+
+    uint32_t* sp = (uint32_t*) kstack_base;
+    sp[0] = KERNEL_STACK_COOKIE;
+    sp[1] = 0;
 
     // transition to kernel page table
     #ifdef USE_INTRIN

@@ -362,7 +362,7 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
     // allocate virtual pages
     ////////////////////////////////
     size_t num_pages = (image_size + 0xFFF) / 4096;
-    char* dst = alloc_physical_pages(num_pages);
+    char* dst = alloc_physical_page();
     if (dst == NULL) {
         // no memory? lmao, just buy more ram
         return NULL;

@@ -81,18 +81,21 @@ void kmain(BootInfo* restrict info) {
     kprintf("Booting %s\n", brand_str);
 
     init_physical_page_alloc(&boot_info->mem_map);
-    parse_acpi();
-    enable_apic();
 
+    parse_acpi();
     kprintf("ACPI processed...\n");
+
+    enable_apic();
     kprintf("Found %d cores | TSC freq %d MHz\n", boot_info->core_count, boot_info->tsc_freq);
+
+    subdivide_memory(&boot_info->mem_map, boot_info->core_count);
 
     // TODO(flysand): figure out why it doesn't work.
     // pci_scan_all();
 
     // tiny i know
-    void* physical_stack = alloc_physical_page();
-    thread_create(NULL, draw_background, (uintptr_t) physical_stack, 4096, false);
+    void* physical_stack = alloc_physical_chunk();
+    thread_create(NULL, draw_background, (uintptr_t) physical_stack, CHUNK_SIZE, false);
 
     /*extern Buffer desktop_elf;
     Env* toy = env_create();

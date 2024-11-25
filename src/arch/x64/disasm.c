@@ -25,10 +25,10 @@ static const Opcode opcode_table[] = {
 #define DECODE_MODRXRM(mod, rx, rm, src) \
 (mod = (src >> 6) & 3, rx = (src >> 3) & 7, rm = (src & 7))
 
-static const char* X86_GPR_NAMES[16] = {
+/* static const char* X86_GPR_NAMES[16] = {
     "rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
     "r8",  "r9",  "r10", "r11", "r12", "r13", "r14", "r15"
-};
+}; */
 
 static const char* x86_prefix_name(uint8_t b) {
     switch (b) {
@@ -71,7 +71,7 @@ static void x86_print_disasm(u8* p, size_t size) {
         }
 
         // opcode
-        Opcode* op = &opcode_table[*p++];
+        const Opcode* op = &opcode_table[*p++];
         if (op->name) {
             kprintf("%s ", op->name);
         } else {
@@ -84,18 +84,18 @@ static void x86_print_disasm(u8* p, size_t size) {
             DECODE_MODRXRM(mod, rx, rm, *p++);
 
             if (op->flags & X86_OP_DIR) {
-                kprintf("%s", X86_GPR_NAMES[rx]);
+                kprintf("r%d", rx);
             }
 
             if (mod < MOD_DIRECT) {
                 kprintf("TODO MEMORY OPERAND\n");
                 // kprintf(X86_GPR_NAMES[]);
             } else {
-                kprintf("%s ", X86_GPR_NAMES[rm]);
+                kprintf("r%d ", rm);
             }
 
             if ((op->flags & X86_OP_DIR) == 0) {
-                kprintf("%s", X86_GPR_NAMES[rx]);
+                kprintf("r%d", rx);
             }
 
             // displacement

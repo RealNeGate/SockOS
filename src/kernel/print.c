@@ -93,7 +93,7 @@ static void kprintf(const char *fmt, ...) {
 
     u8 obuf[_PRINT_BUFFER_LEN];
     u32 min_len = 0;
-    for (char *c = fmt; *c != 0; c++) {
+    for (const char *c = fmt; *c != 0; c++) {
         if (*c != '%') {
             int i = 0;
             for (; *c != 0 && *c != '%'; i++) {

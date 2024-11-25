@@ -1,3 +1,7 @@
+enum {
+    CHUNK_SIZE = 2*1024*1024
+};
+
 typedef enum Result {
     RESULT_SUCCESS,
 
@@ -15,180 +19,157 @@ typedef enum PageFlags {
     PAGE_ACCESSED  = 32,
 } PageFlags;
 
-// this is what we use to allocate physical memory pages, it's a page big
-typedef struct BitmapAllocPage BitmapAllocPage;
-typedef struct BitmapAllocPageHeader {
-    BitmapAllocPage* next;
-    // we just track the popcount
-    u32 popcount, cap;
-} BitmapAllocPageHeader;
+static size_t cpu_alloc_queue_mask;
+static void* alloc_physical_chunk(void);
 
-enum {
-    BITMAP_ALLOC_WORD_CAP = (PAGE_SIZE - sizeof(BitmapAllocPageHeader)) / sizeof(u64),
-    BITMAP_ALLOC_PAGES_COVERED = BITMAP_ALLOC_WORD_CAP * 64,
-};
-
-struct BitmapAllocPage {
-    BitmapAllocPageHeader header;
-    u64 used[BITMAP_ALLOC_WORD_CAP];
-};
-_Static_assert(sizeof(BitmapAllocPage) == 4096, "BitmapAllocPage must be a page big");
-
-static BitmapAllocPage *alloc_head, *alloc_tail;
-
-static BitmapAllocPage* new_bitmap_alloc_page(uintptr_t p) {
-    BitmapAllocPage* page = (BitmapAllocPage*) p;
-    memset(page, 0, sizeof(BitmapAllocPage));
-    return page;
-}
-
-static BitmapAllocPage* append_bitmap_alloc_page(BitmapAllocPage* page) {
-    if (alloc_head == NULL) {
-        alloc_head = alloc_tail = page;
-    } else {
-        alloc_tail->header.next = page;
-        alloc_tail = page;
-    }
-    return page;
-}
-
-static void mark_bitmap_alloc_page(BitmapAllocPage* page, size_t i) {
-    page->used[i / 64] |= (1ull << (i % 64));
-    page->header.popcount += 1;
+static PerCPU* get_percpu(void) {
+    uint32_t* cookie = (uint32_t*) ((uintptr_t) __builtin_frame_address(0) & -KERNEL_STACK_SIZE);
+    kassert(cookie[0] == KERNEL_STACK_COOKIE, "bad cookie");
+    return &boot_info->cores[cookie[1]];
 }
 
 static void init_physical_page_alloc(MemMap* restrict mem_map) {
+    size_t total_chunks = 0;
+    FOREACH_N(i, 0, mem_map->nregions) {
+        MemRegion* region = &mem_map->regions[i];
+        if (region->type != MEM_REGION_USABLE || region->base < 0x100000) {
+            continue;
+        }
+
+        total_chunks += region->pages / (CHUNK_SIZE / PAGE_SIZE);
+    }
+
+    int64_t shift = 64 - __builtin_clzll(total_chunks - 1);
+    cpu_alloc_queue_mask   = (1ull << shift) - 1;
+    size_t pages_per_queue = (((1ull << shift)*8) + PAGE_SIZE - 1) / PAGE_SIZE;
+
+    kprintf("Physical memory (%d chunks, %d KiB / queue)\n", (int)total_chunks, (pages_per_queue * PAGE_SIZE) / 1024);
+
+    // c is count of chunks handed to a core's queue,
+    size_t c = 0;
     FOREACH_N(i, 0, mem_map->nregions) {
         MemRegion* restrict region = &mem_map->regions[i];
         if (region->type != MEM_REGION_USABLE || region->base < 0x100000) {
             continue;
         }
 
-        size_t total_pages = region->pages;
-        // kprintf("Region start: %p (%d pages, %d pages max in freelist)\n", region->base, region->pages, BITMAP_ALLOC_PAGES_COVERED);
+        int aa = (region->pages*PAGE_SIZE) / (1024*1024);
 
-        BitmapAllocPage* page = new_bitmap_alloc_page(region->base);
-        append_bitmap_alloc_page(page);
+        uintptr_t base = region->base;
+        uintptr_t end  = (region->base + region->pages*PAGE_SIZE) & -CHUNK_SIZE;
+        if (boot_info->cores[0].alloc.data == NULL) {
+            if ((end - base) / PAGE_SIZE < pages_per_queue) {
+                continue;
+            }
 
-        size_t used = 1;
-        while (used + BITMAP_ALLOC_PAGES_COVERED + 1 < total_pages) {
-            page->header.cap = BITMAP_ALLOC_PAGES_COVERED - 1;
-            // kprintf("1: cap = %p\n", page->header.cap);
-
-            // highest page is being used to store the next freelist start
-            mark_bitmap_alloc_page(page, BITMAP_ALLOC_WORD_CAP - 1);
-            used += BITMAP_ALLOC_PAGES_COVERED - 1;
-
-            // move ahead to this new bitmap
-            page = append_bitmap_alloc_page(new_bitmap_alloc_page(region->base + used*PAGE_SIZE));
+            boot_info->cores[0].alloc.data = (void*) base;
+            base += pages_per_queue*PAGE_SIZE;
         }
 
-        // trim last page
-        page->header.cap = total_pages - used;
-        // kprintf("2: cap = %p\n", page->header.cap);
-    }
-}
+        uintptr_t i = (base + CHUNK_SIZE - 1) & -CHUNK_SIZE;
+        if (i < end) {
+            kprintf("Region: %p - %p (%d MiB)\n", i, end - 1, aa);
 
-static BitmapAllocPage* find_physical_alloc(const void* ptr_) {
-    const char* ptr = ptr_;
-
-    BitmapAllocPage* p = alloc_head;
-    for (; p != NULL; p = p->header.next) {
-        // range check
-        char* start = (char*) p;
-        char* end   = start + p->header.cap*PAGE_SIZE;
-
-        if (ptr >= start && ptr < end) {
-            return p;
+            while (i < end) {
+                atomic_store_explicit(&boot_info->cores[0].alloc.data[c++], (void*) i, memory_order_relaxed);
+                i += CHUNK_SIZE;
+            }
         }
     }
 
-    return NULL;
+    atomic_store_explicit(&boot_info->cores[0].alloc.bot, c, memory_order_relaxed);
 }
 
-static void* alloc_physical_page(void) {
-    // find page with some empty page first
-    BitmapAllocPage* p = alloc_head;
-    while (p != NULL && p->header.popcount >= p->header.cap) {
-        p = p->header.next;
+// hand the other threads portions of the memory
+// so one queue is clogged up and the others are starved.
+static void subdivide_memory(MemMap* restrict mem_map, int num_cores) {
+    int64_t b = atomic_load_explicit(&boot_info->cores[0].alloc.bot, memory_order_acquire);
+    int64_t t = atomic_load_explicit(&boot_info->cores[0].alloc.top, memory_order_acquire);
+
+    int per_core = (b - t) / num_cores;
+
+    kprintf("Core[0] queue has %d entries (split into %d)\n", boot_info->cores[0].alloc.bot, per_core);
+
+    int64_t k = t + per_core;
+    FOREACH_N(i, 1, num_cores) {
+        FOREACH_N(j, 0, per_core) {
+            void* ptr = atomic_load_explicit(&boot_info->cores[0].alloc.data[k & cpu_alloc_queue_mask], memory_order_relaxed);
+
+            kprintf("Page[%d]: %p\n", k & cpu_alloc_queue_mask, ptr);
+            atomic_store_explicit(&boot_info->cores[i].alloc.data[j], ptr, memory_order_relaxed);
+            k = (k + 1) & cpu_alloc_queue_mask;
+        }
+        atomic_store_explicit(&boot_info->cores[i].alloc.bot, per_core, memory_order_relaxed);
     }
 
-    // we've run out of physical pages
-    if (p == NULL) {
+    atomic_store_explicit(&boot_info->cores[0].alloc.bot, per_core, memory_order_relaxed);
+}
+
+static void* alloc_physical_chunk(void) {
+    PerCPU* cpu = get_percpu();
+
+    // pop from local queue
+    int64_t b = atomic_load_explicit(&cpu->alloc.bot, memory_order_acquire);
+    int64_t t = atomic_load_explicit(&cpu->alloc.top, memory_order_acquire);
+
+    atomic_store_explicit(&cpu->alloc.bot, b - 1, memory_order_release);
+    int64_t size = b - t;
+    if (size < 0) {
+        atomic_store_explicit(&cpu->alloc.bot, b, memory_order_release);
+
+        // local queue is empty, go try to steal from a friend
+        kassert(0, "unreachable");
         return NULL;
     }
 
-    // find free bit
-    FOREACH_N(i, 0, BITMAP_ALLOC_WORD_CAP) if (p->used[i] != UINT64_MAX) {
-        int bit = p->used[i] ? __builtin_ffsll(~p->used[i]) - 1 : 0;
-        size_t index = i*64 + bit;
-
-        mark_bitmap_alloc_page(p, index);
-
-        // zero pages here to avoid problems everywhere else
-        char* result = ((char*) p) + ((index+1) * PAGE_SIZE);
-        memset(result, 0, PAGE_SIZE);
-        return result;
+    void* ptr = atomic_load_explicit(&cpu->alloc.data[b & cpu_alloc_queue_mask], memory_order_acquire);
+    if (size > 0) {
+        return ptr;
     }
 
-    kassert(0, "unreachable");
-}
-
-static void* alloc_physical_pages(size_t num_pages) {
-    BitmapAllocPage* p = alloc_head;
-
-    for (;;) {
-        // find page with some empty page first
-        while (p != NULL && p->header.popcount + num_pages > p->header.cap) {
-            p = p->header.next;
-        }
-
-        // we've run out of physical pages
-        if (p == NULL) {
-            return NULL;
-        }
-
-        // find free bit
-        FOREACH_N(i, 0, BITMAP_ALLOC_WORD_CAP) if (p->used[i] != UINT64_MAX) {
-            int bit = p->used[i] ? __builtin_ffsll(~p->used[i]) - 1 : 0;
-            size_t index = i*64 + bit;
-
-            // check for sequential pages
-            FOREACH_N(j, 1, num_pages) {
-                size_t index2 = index + j;
-                u64 mask = (1u << (index2 % 64));
-
-                if (p->used[index2 / 64] & mask) goto bad_region;
-            }
-
-            // mark pages
-            FOREACH_N(j, 0, num_pages) {
-                mark_bitmap_alloc_page(p, index + j);
-            }
-
-            // zero pages here to avoid problems everywhere else
-            char* result = ((char*) p) + ((index+1) * PAGE_SIZE);
-            memset(result, 0, num_pages * PAGE_SIZE);
-            return result;
-
-            // couldn't find enough sequential pages
-            bad_region:
-            break;
-        }
-
-        p = p->header.next;
+    if (!atomic_compare_exchange_strong(&cpu->alloc.top, &t, t + 1)) {
+        kassert(0, "unreachable");
+        return NULL;
     }
+
+    atomic_store_explicit(&cpu->alloc.bot, t + 1, memory_order_release);
+    return ptr;
 }
 
-static void free_physical_page(const void* ptr) {
-    BitmapAllocPage* p = find_physical_alloc(ptr);
-    kassert(p != NULL, "attempt to free non-allocated page");
+static void free_physical_chunk(void* ptr) {
+    PerCPU* cpu = get_percpu();
 
-    size_t page_index = (((char*) ptr - (char*) p) / PAGE_SIZE) - 1;
-    u64 mask = 1ull << (page_index % 64);
+    // push to local queue
+    int64_t b = atomic_load_explicit(&cpu->alloc.bot, memory_order_acquire);
+    atomic_store_explicit(&cpu->alloc.data[b & cpu_alloc_queue_mask], ptr, memory_order_release);
+    atomic_store_explicit(&cpu->alloc.bot, b + 1, memory_order_release);
+}
 
-    kassert(p->used[page_index / 64] & mask, "double free?");
-    p->used[page_index / 64] &= ~mask;
+static void free_physical_page(void* ptr) {
+    PerCPU* cpu = get_percpu();
+
+    // push to freelist
+    PageFreeList* fl = (PageFreeList*) ptr;
+    fl->next = cpu->heap;
+    cpu->heap = fl;
+}
+
+static void* alloc_physical_page(void) {
+    PerCPU* cpu = get_percpu();
+    if (cpu->heap == NULL) {
+        // allocate chunk, subdivide into 4KiB
+        char* dst = alloc_physical_chunk();
+        FOREACH_N(i, 0, CHUNK_SIZE / PAGE_SIZE) {
+            free_physical_page(&dst[i * PAGE_SIZE]);
+        }
+    }
+
+    // pop freelist
+    PageFreeList* fl = cpu->heap;
+    cpu->heap = fl->next;
+
+    kprintf("Alloc %p\n", fl);
+    return fl;
 }
 
 static u64 canonical_addr(u64 ptr) {
