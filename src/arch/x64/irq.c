@@ -230,10 +230,17 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
             kprintf("APIC timer freq = %d\n", apic_freq);
         }
 
+        spall_end_event(0);
+
         u64 next_wake;
         spin_lock(&threads_lock);
         Thread* next = sched_try_switch(now, &next_wake);
         spin_unlock(&threads_lock);
+
+        // if we're switching, save old thread state
+        if (threads_current != NULL) {
+            threads_current->state = *state;
+        }
 
         if (next == NULL) {
             kprintf("\n  >> IDLE! (for %d ms, %d ticks) <<\n", next_wake / 1000, micros_to_apic_time(next_wake));
@@ -243,6 +250,7 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
             // set new one-shot
             APIC(0x380) = micros_to_apic_time(next_wake);
 
+            spall_begin_event("sleep", 0);
             *state = kernel_idle_state;
             threads_current = NULL;
             return boot_info->kernel_pml4;
@@ -251,11 +259,6 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
         // do thread context switch, if we changed
         if (threads_current != next) {
             kprintf("\n  >> SWITCH %p -> %p (for %d ms, %d ticks) <<\n\n", threads_current, next, next_wake / 1000, micros_to_apic_time(next_wake));
-
-            // if we're switching, save old thread state
-            if (threads_current != NULL) {
-                threads_current->state = *state;
-            }
 
             *state = next->state;
             threads_current = next;
@@ -267,6 +270,7 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
         APIC(0x380) = micros_to_apic_time(next_wake);
 
         // switch into thread's address space, for kernel threads they'll use kernel_pml4
+        spall_begin_event("task", 0);
         return next->parent ? next->parent->address_space : boot_info->kernel_pml4;
     } else {
         halt();

@@ -17,6 +17,7 @@ static u16 cursor;
 // forward decls
 #include "threads.c"
 #include "print.c"
+#include "spall.h"
 
 #ifdef __x86_64__
 #include "arch/x64/mem.c"
@@ -25,7 +26,6 @@ static u16 cursor;
 #include "arch/x64/disasm.c"
 #include "arch/x64/irq.c"
 #endif
-
 
 #include "syscall.c"
 #include "pci.c"
@@ -41,7 +41,8 @@ static int draw_background(void *arg) {
     u8 mult = 0;
 
     for (;;) {
-        /*u64 gradient_x = (boot_info->fb.width + 255) / 256;
+        spall_begin_event("draw", 1);
+        u64 gradient_x = (boot_info->fb.width + 255) / 256;
         u64 gradient_y = (boot_info->fb.height + 255) / 256;
 
         for (size_t j = 0; j < boot_info->fb.height; j++) {
@@ -54,15 +55,35 @@ static int draw_background(void *arg) {
 
                 boot_info->fb.pixels[i + (j * boot_info->fb.stride)] = 0xFF000000 | (g << 16) | (b << 8);
             }
-        }*/
+        }
 
-        kprintf("A\n");
+        spall_end_event(1);
 
         sched_wait(threads_current, 1000*1000);
         thread_yield();
 
         mult += 1;
     }
+}
+
+static int other_guy(void *arg) {
+    for (;;) {
+        kprintf("A");
+
+        sched_wait(threads_current, 500*1000);
+        thread_yield();
+    }
+    return 0;
+}
+
+static int other_other_guy(void *arg) {
+    for (;;) {
+        kprintf("B");
+
+        sched_wait(threads_current, 500*1000);
+        thread_yield();
+    }
+    return 0;
 }
 
 // loader.s
@@ -93,17 +114,27 @@ void kmain(BootInfo* restrict info) {
     // TODO(flysand): figure out why it doesn't work.
     // pci_scan_all();
 
+    spall_header();
+    spall_begin_event("AAA", 0);
+
     // tiny i know
     void* physical_stack = alloc_physical_chunk();
     thread_create(NULL, draw_background, (uintptr_t) physical_stack, CHUNK_SIZE, false);
+    /* physical_stack = alloc_physical_chunk();
+    thread_create(NULL, other_guy,       (uintptr_t) physical_stack, CHUNK_SIZE, false);
+    physical_stack = alloc_physical_chunk();
+    thread_create(NULL, other_other_guy, (uintptr_t) physical_stack, CHUNK_SIZE, false); */
+    spall_end_event(0);
 
     /*extern Buffer desktop_elf;
     Env* toy = env_create();
     Thread* mine = env_load_elf(toy, desktop_elf.data, desktop_elf.length);*/
 
     kernel_idle_state = new_thread_state(kernel_idle, 0, 0, false);
+
     irq_startup(0);
 
     // jump into timer interrupt, we're going to run tasks now
+    spall_begin_event("main", 0);
     calibrate_apic_timer();
 }

@@ -272,8 +272,11 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     EFI_STATUS status = st->ConOut->ClearScreen(st->ConOut);
     printf("[INFO] Booting\n");
 
-    if(!com_init(COM_DEFAULT_BAUD)) {
+    if(!com_init(PORT_COM1, COM_DEFAULT_BAUD)) {
         efi_println(st, L"Failed to initialize COM1 port output");
+    }
+    if(!com_init(PORT_COM2, COM_DEFAULT_BAUD)) {
+        efi_println(st, L"Failed to initialize COM2 port output");
     }
     com_writes("COM1 port output success!\n");
 

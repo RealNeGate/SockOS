@@ -88,14 +88,14 @@ static void subdivide_memory(MemMap* restrict mem_map, int num_cores) {
 
     int per_core = (b - t) / num_cores;
 
-    kprintf("Core[0] queue has %d entries (split into %d)\n", boot_info->cores[0].alloc.bot, per_core);
+    // kprintf("Core[0] queue has %d entries (split into %d)\n", boot_info->cores[0].alloc.bot, per_core);
 
     int64_t k = t + per_core;
     FOREACH_N(i, 1, num_cores) {
         FOREACH_N(j, 0, per_core) {
             void* ptr = atomic_load_explicit(&boot_info->cores[0].alloc.data[k & cpu_alloc_queue_mask], memory_order_relaxed);
 
-            kprintf("Page[%d]: %p\n", k & cpu_alloc_queue_mask, ptr);
+            // kprintf("Page[%d]: %p\n", k & cpu_alloc_queue_mask, ptr);
             atomic_store_explicit(&boot_info->cores[i].alloc.data[j], ptr, memory_order_relaxed);
             k = (k + 1) & cpu_alloc_queue_mask;
         }
@@ -112,7 +112,9 @@ static void* alloc_physical_chunk(void) {
     int64_t b = atomic_load_explicit(&cpu->alloc.bot, memory_order_acquire);
     int64_t t = atomic_load_explicit(&cpu->alloc.top, memory_order_acquire);
 
-    atomic_store_explicit(&cpu->alloc.bot, b - 1, memory_order_release);
+    b -= 1;
+    atomic_store_explicit(&cpu->alloc.bot, b, memory_order_release);
+
     int64_t size = b - t;
     if (size < 0) {
         atomic_store_explicit(&cpu->alloc.bot, b, memory_order_release);

@@ -42,24 +42,24 @@ static inline void com_set_port(u16 port) {
     com_port = port;
 }
 
-static inline bool com_init(u32 baud) {
+static inline bool com_init(int port, u32 baud) {
     u16 divisor = COM_DEFAULT_BAUD / baud;
     u8 divisor_lo = (u8)(divisor & 0xff);
     u8 divisor_hi = (u8)((divisor>>8) & 0xff);
-    io_out8(com_port+COM_PO_IER, 0x00); // Disable all interrupts
-    io_out8(com_port+COM_PO_LCR, 0x80); // Enable DLAB to set baud rate divisor
-    io_out8(com_port+COM_PO_BAUD_LO, divisor_lo);
-    io_out8(com_port+COM_PO_BAUD_HI, divisor_hi);
-    io_out8(com_port+COM_PO_LCR, 0x03); // 8 bits per character
-    io_out8(com_port+COM_PO_FCR, 0xc7); // Enable FIFO, do some shit
-    io_out8(com_port+COM_PO_MCR, 0x0b); // RTS/DSR set
+    io_out8(port+COM_PO_IER, 0x00); // Disable all interrupts
+    io_out8(port+COM_PO_LCR, 0x80); // Enable DLAB to set baud rate divisor
+    io_out8(port+COM_PO_BAUD_LO, divisor_lo);
+    io_out8(port+COM_PO_BAUD_HI, divisor_hi);
+    io_out8(port+COM_PO_LCR, 0x03); // 8 bits per character
+    io_out8(port+COM_PO_FCR, 0xc7); // Enable FIFO, do some shit
+    io_out8(port+COM_PO_MCR, 0x0b); // RTS/DSR set
     // Test the chip
-    io_out8(com_port+COM_PO_MCR, 0x1e); // Set in loopback mode
-    io_out8(com_port+COM_PO_DR, 0xae); // Write 0xae
-    if(io_in8(com_port+COM_PO_DR) != 0xae) {
+    io_out8(port+COM_PO_MCR, 0x1e); // Set in loopback mode
+    io_out8(port+COM_PO_DR, 0xae); // Write 0xae
+    if(io_in8(port+COM_PO_DR) != 0xae) {
         return false;
     }
-    io_out8(com_port+COM_PO_MCR, 0x0f); // Set back to normal mode
+    io_out8(port+COM_PO_MCR, 0x0f); // Set back to normal mode
     return true;
 }
 
