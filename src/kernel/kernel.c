@@ -61,7 +61,7 @@ static int draw_background(void *arg) {
 
         spall_end_event(1);
 
-        sched_wait(boot_info->cores[0].current_thread, 1000*1000);
+        sched_wait(boot_info->cores[0].current_thread, 50000);
         thread_yield();
 
         mult += 1;
@@ -69,17 +69,15 @@ static int draw_background(void *arg) {
 }
 
 static int other_guy(void *arg) {
-    uint64_t sum = 0;
     for (;;) {
-        sum++; // kprintf("A");
+        kprintf("A");
     }
     return 0;
 }
 
 static int other_other_guy(void *arg) {
-    uint64_t sum = 0;
     for (;;) {
-        sum++; // kprintf("B");
+        kprintf("B");
     }
     return 0;
 }

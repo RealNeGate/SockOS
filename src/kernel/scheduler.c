@@ -137,8 +137,12 @@ Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us) {
             // them before the rest of the tasks. this is because waiting would
             // have required them to have given up their time slice earlier on.
             Thread* next_waiter = sched->waiters.first;
-            if (next_waiter && (next_waiter->wake_time == 0 || next_waiter->wake_time > now_time)) {
-                kprintf("  Thread-%p is awake now\n", next_waiter, next_waiter->wait_time);
+            if (next_waiter != NULL) {
+                kprintf("  next_wake=%d\n", next_waiter->wake_time);
+            }
+
+            if (next_waiter && now_time > next_waiter->wake_time) {
+                kprintf("  Thread-%p is awake now\n", next_waiter);
 
                 tq_remove(&sched->waiters, next_waiter);
                 tq_append(&sched->active,  next_waiter);
