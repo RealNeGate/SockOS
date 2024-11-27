@@ -36,16 +36,18 @@ size_t syscall_table_count = SYS_MAX;
 // Syscall table
 ////////////////////////////////
 SYS_FN(sleep) {
-    kprintf("SYS_sleep(%p, %d us)\n", threads_current, SYS_PARAM0);
+    PerCPU* cpu = get_percpu();
+    kprintf("SYS_sleep(%p, %d us)\n", cpu->current_thread, SYS_PARAM0);
 
-    sched_wait(threads_current, SYS_PARAM0);
+    sched_wait(cpu->current_thread, SYS_PARAM0);
     thread_yield();
 
     return old_address_space;
 }
 
 SYS_FN(exit_group) {
-    Env* group = threads_current->parent;
+    PerCPU* cpu = get_percpu();
+    Env* group = cpu->current_thread->parent;
     kprintf("SYS_exit_group(%p, %d)\n", group, SYS_PARAM0);
 
     env_kill(group);

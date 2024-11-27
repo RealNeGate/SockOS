@@ -231,46 +231,66 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
         }
 
         spall_end_event(0);
+        PerCPU* cpu = get_percpu();
 
         u64 next_wake;
         spin_lock(&threads_lock);
-        Thread* next = sched_try_switch(now, &next_wake);
+        Thread* next = sched_try_switch(now / boot_info->tsc_freq, &next_wake);
         spin_unlock(&threads_lock);
 
+        uint64_t new_now_time = (__rdtsc() / boot_info->tsc_freq);
+        uint64_t until_wake = 1;
+        if (next_wake > new_now_time) {
+            until_wake = next_wake - new_now_time;
+        }
+
         // if we're switching, save old thread state
-        if (threads_current != NULL) {
-            threads_current->state = *state;
+        if (cpu->current_thread != NULL) {
+            cpu->current_thread->state = *state;
         }
 
         if (next == NULL) {
-            kprintf("\n  >> IDLE! (for %d ms, %d ticks) <<\n", next_wake / 1000, micros_to_apic_time(next_wake));
+            kprintf("  >> IDLE! (for %d ms, %d ticks) <<\n", until_wake / 1000, micros_to_apic_time(until_wake));
 
             // send EOI
             APIC(0xB0) = 0;
             // set new one-shot
-            APIC(0x380) = micros_to_apic_time(next_wake);
+            APIC(0x380) = micros_to_apic_time(until_wake);
 
             spall_begin_event("sleep", 0);
             *state = kernel_idle_state;
-            threads_current = NULL;
+            cpu->current_thread = NULL;
             return boot_info->kernel_pml4;
         }
 
         // do thread context switch, if we changed
-        if (threads_current != next) {
-            kprintf("\n  >> SWITCH %p -> %p (for %d ms, %d ticks) <<\n\n", threads_current, next, next_wake / 1000, micros_to_apic_time(next_wake));
+        if (cpu->current_thread != next) {
+            kprintf("  >> SWITCH %p -> %p (for %d ms, %d ticks) <<\n\n", cpu->current_thread, next, until_wake / 1000, micros_to_apic_time(until_wake));
 
             *state = next->state;
-            threads_current = next;
+            cpu->current_thread = next;
+        } else {
+            kprintf("  >> STAY %p (for %d ms, %d ticks) <<\n\n", cpu->current_thread, until_wake / 1000, micros_to_apic_time(until_wake));
         }
 
         // send EOI
         APIC(0xB0) = 0;
         // set new one-shot
-        APIC(0x380) = micros_to_apic_time(next_wake);
+        APIC(0x380) = micros_to_apic_time(until_wake);
 
         // switch into thread's address space, for kernel threads they'll use kernel_pml4
-        spall_begin_event("task", 0);
+        char str[32];
+        str[0] = 't', str[1] = 'a', str[2] = 's', str[3] = 'k', str[4] = '-';
+
+        const char hex[] = "0123456789abcdef";
+        int i = 5;
+        uint64_t addr = (uint64_t) next;
+        for(int j = 16; j--;) {
+            str[i++] = hex[(addr >> (j*4)) & 0xF];
+        }
+        str[i++] = 0;
+        spall_begin_event(str, 0);
+
         return next->parent ? next->parent->address_space : boot_info->kernel_pml4;
     } else {
         halt();

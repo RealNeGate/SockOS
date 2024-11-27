@@ -24,7 +24,7 @@ static void* alloc_physical_chunk(void);
 
 static PerCPU* get_percpu(void) {
     uint32_t* cookie = (uint32_t*) ((uintptr_t) __builtin_frame_address(0) & -KERNEL_STACK_SIZE);
-    kassert(cookie[0] == KERNEL_STACK_COOKIE, "bad cookie");
+    kassert(cookie[0] == KERNEL_STACK_COOKIE, "bad cookie (%x @ %p)", cookie[0], cookie);
     return &boot_info->cores[cookie[1]];
 }
 

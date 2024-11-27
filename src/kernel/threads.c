@@ -5,6 +5,8 @@ typedef struct Thread Thread;
 typedef struct Wait Wait;
 typedef struct Env Env;
 
+#define SCHED_QUANTA 15625 // 64Hz
+
 struct Env {
     _Atomic int lock;
     PageTable* address_space;
@@ -18,9 +20,14 @@ struct Thread {
     Thread* prev_in_env;
     Thread* next_in_env;
 
-    // scheduling
-    Thread* prev_in_schedule;
-    Thread* next_in_schedule;
+    Thread* prev_sched;
+    Thread* next_sched;
+
+    // active range
+    u64 start_time, end_time;
+
+    // how much of the quanta did we give up to waiting
+    u64 wait_time;
 
     // sleeping
     u64 wake_time;
@@ -31,11 +38,6 @@ struct Thread {
 #define IS_AWAKE(t) ((t).wake_time == 0)
 
 _Atomic int threads_lock;
-
-Thread* threads_current = NULL;
-Thread* threads_first_in_schedule = NULL;
-
-int threads_count;
 
 void spin_lock(_Atomic(int)* lock);
 void spin_unlock(_Atomic(int)* lock);
@@ -51,6 +53,17 @@ void sched_wait(Thread* t, u64 timeout);
 Thread* sched_try_switch(u64 now_time, u64* restrict next_wake);
 
 #else
+
+static PerCPU_Scheduler* get_sched(void) {
+    // initialize scheduler
+    PerCPU* cpu = get_percpu();
+    if (cpu->sched == NULL) {
+        cpu->sched = alloc_physical_page();
+        *cpu->sched = (PerCPU_Scheduler){ 0 };
+    }
+
+    return cpu->sched;
+}
 
 void spin_lock(_Atomic(int)* lock) {
     // we shouldn't be spin locking...
@@ -146,16 +159,12 @@ Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t stack, size
     }
 
     // put into schedule
+    PerCPU_Scheduler* sched = get_sched();
     spin_lock(&threads_lock);
-    if (threads_first_in_schedule != NULL) {
-        new_thread->next_in_schedule = threads_first_in_schedule;
-        threads_first_in_schedule->prev_in_env = new_thread;
-        threads_first_in_schedule = new_thread;
-    } else {
-        threads_first_in_schedule = new_thread;
+    tq_append(&sched->active, new_thread);
+    if (sched->active.curr == NULL) {
+        sched->active.curr = new_thread;
     }
-
-    threads_count++;
     spin_unlock(&threads_lock);
 
     kprintf("created thread: %p\n", new_thread);
@@ -165,15 +174,8 @@ Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t stack, size
 void thread_kill(Thread* thread) {
     free_physical_page(thread);
 
-    // remove from schedule
-    spin_lock(&threads_lock);
-    if (thread->prev_in_schedule != NULL) {
-        thread->prev_in_schedule->next_in_schedule = thread->next_in_schedule;
-    } else {
-        threads_first_in_schedule = thread->next_in_schedule;
-    }
-    threads_count--;
-    spin_lock(&threads_lock);
+    // TODO(NeGate): remove from schedule
+    // ...
 
     // remove from env
     Env* env = thread->parent;
@@ -198,138 +200,6 @@ void thread_kill(Thread* thread) {
         spin_unlock(&env->lock);
     }
 }
-
-////////////////////////////////
-// Scheduler related
-////////////////////////////////
-void sched_wait(Thread* t, u64 timeout) {
-    t->wake_time = __rdtsc() + (timeout*boot_info->tsc_freq);
-}
-
-// start's searching at t
-static Thread* threads_find_next_awake(Thread* t, u64 now_time) {
-    bool wrap_around = false;
-    for (;;) {
-        if (t == NULL) {
-            // we're allowed to wrap once
-            if (wrap_around) {
-                return NULL;
-            }
-
-            wrap_around = true;
-            t = threads_first_in_schedule;
-        }
-
-        // it's awake now
-        if (t->wake_time <= now_time) {
-            t->wake_time = 0;
-            return t;
-        }
-
-        if (IS_AWAKE(*t)) {
-            return t;
-        }
-
-        t = t->next_in_schedule;
-    }
-}
-
-static Thread* threads_find_nearest_sleep(u64 now_time) {
-    u64 nearest_t = UINT64_MAX;
-    Thread* result = NULL;
-    for (Thread* t = threads_first_in_schedule; t != NULL; t = t->next_in_schedule) {
-        if (!IS_AWAKE(*t) && t->wake_time < nearest_t) {
-            nearest_t = t->wake_time;
-            result = t;
-        }
-    }
-
-    return result;
-}
-
-#define FULL_PIE 50000
-#define kprintf
-Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us) {
-    if (threads_count == 0) {
-        // run the idle task?
-        kprintf("There are no threads!\n");
-        return NULL;
-    }
-
-    kprintf("sched_try_switch:\n");
-    if (threads_current == NULL) {
-        kprintf("  we just started running, entire time (%d ms).\n", FULL_PIE / 1000);
-        *out_wake_us = FULL_PIE;
-        return threads_first_in_schedule;
-    }
-
-    // draw schedule list
-    kprintf("  ");
-    for (Thread* t = threads_first_in_schedule; t != NULL; t = t->next_in_schedule) {
-        if (t == threads_current) {
-            kprintf("\x1b[32m%p\x1b[0m", t);
-        } else {
-            kprintf("%p", t);
-        }
-
-        if (IS_AWAKE(*t)) {
-            kprintf("\x1b[31m*\x1b[0m");
-        }
-
-        if (t->next_in_schedule != NULL) {
-            kprintf(" -> ");
-        }
-    }
-    kprintf("\n\n");
-
-    Thread* next = threads_find_next_awake(threads_current->next_in_schedule, now_time);
-    u64 slice = FULL_PIE / threads_count;
-    kprintf("  SLICE=%d\n", slice / 1000);
-
-    if (next == NULL) {
-        Thread* nappy_guy = threads_find_nearest_sleep(now_time);
-
-        if (nappy_guy == NULL) {
-            kprintf("  we're going into maximum nappy time\n");
-            *out_wake_us = 0;
-            return NULL;
-        } else {
-            kprintf("  we have no awake tasks, let's sleep until the nearest wake time\n");
-            *out_wake_us = (nappy_guy->wake_time - now_time) / boot_info->tsc_freq;
-            return NULL;
-        }
-    }
-
-    if (IS_AWAKE(*next)) {
-        kprintf("  task is awake and ready! %p\n", next);
-    } else {
-        i64 delta = next->wake_time - now_time;
-
-        kprintf("  we've got a sleeping task coming up\n");
-        if (delta <= 0) {
-            kprintf("    and it's ready!\n");
-            next->wake_time = 0;
-        } else {
-            i64 delta_us = delta / boot_info->tsc_freq;
-
-            kprintf("    we're missing %d ms\n", delta_us / 1000);
-            if (delta_us < slice) {
-                kprintf("      we're closer to the wait, let's keep doing the old task until then.\n");
-
-                slice = delta_us;
-                next = threads_current;
-            } else {
-                kprintf("      we've got some time until the wake time, let's just run the next awake.\n");
-                next = threads_find_next_awake(next, now_time);
-            }
-        }
-    }
-
-    // kprintf("  we've got an active thread (%p) coming up.\n", next);
-    *out_wake_us = slice ? slice : 1;
-    return next;
-}
-#undef kprintf
 
 ////////////////////////////////
 // Mini-ELF loader

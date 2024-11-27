@@ -16,6 +16,7 @@ static u16 cursor;
 
 // forward decls
 #include "threads.c"
+#include "scheduler.c"
 #include "print.c"
 #include "spall.h"
 
@@ -33,6 +34,7 @@ static u16 cursor;
 // components which depend on architecture stuff
 #define IMPL
 #include "threads.c"
+#include "scheduler.c"
 
 #define STR2(x) #x
 #define STR(x) STR2(x)
@@ -59,7 +61,7 @@ static int draw_background(void *arg) {
 
         spall_end_event(1);
 
-        sched_wait(threads_current, 1000*1000);
+        sched_wait(boot_info->cores[0].current_thread, 1000*1000);
         thread_yield();
 
         mult += 1;
@@ -67,21 +69,17 @@ static int draw_background(void *arg) {
 }
 
 static int other_guy(void *arg) {
+    uint64_t sum = 0;
     for (;;) {
-        kprintf("A");
-
-        sched_wait(threads_current, 500*1000);
-        thread_yield();
+        sum++; // kprintf("A");
     }
     return 0;
 }
 
 static int other_other_guy(void *arg) {
+    uint64_t sum = 0;
     for (;;) {
-        kprintf("B");
-
-        sched_wait(threads_current, 500*1000);
-        thread_yield();
+        sum++; // kprintf("B");
     }
     return 0;
 }
@@ -120,10 +118,10 @@ void kmain(BootInfo* restrict info) {
     // tiny i know
     void* physical_stack = alloc_physical_chunk();
     thread_create(NULL, draw_background, (uintptr_t) physical_stack, CHUNK_SIZE, false);
-    /* physical_stack = alloc_physical_chunk();
+    physical_stack = alloc_physical_chunk();
     thread_create(NULL, other_guy,       (uintptr_t) physical_stack, CHUNK_SIZE, false);
     physical_stack = alloc_physical_chunk();
-    thread_create(NULL, other_other_guy, (uintptr_t) physical_stack, CHUNK_SIZE, false); */
+    thread_create(NULL, other_other_guy, (uintptr_t) physical_stack, CHUNK_SIZE, false);
     spall_end_event(0);
 
     /*extern Buffer desktop_elf;

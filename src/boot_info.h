@@ -68,6 +68,7 @@ typedef struct PageFreeList {
     char data[];
 } PageFreeList;
 
+typedef struct PerCPU_Scheduler PerCPU_Scheduler;
 typedef struct {
     // used for interrupts
     u8* kernel_stack;
@@ -82,6 +83,10 @@ typedef struct {
 
     // 2MiB heap
     _Alignas(64) PerCPU_PageAllocator alloc;
+
+    // Scheduler info
+    struct Thread* current_thread;
+    PerCPU_Scheduler* sched;
 } PerCPU;
 
 // This is all the crap we throw into the loader
