@@ -8,4 +8,4 @@ it's now a WIP OS thingy
 
 Build:
 
-  py build.py
+  python3 build.py

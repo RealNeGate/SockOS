@@ -161,7 +161,7 @@ static void* alloc_physical_page(void) {
     if (cpu->heap == NULL) {
         // allocate chunk, subdivide into 4KiB
         char* dst = alloc_physical_chunk();
-        FOREACH_N(i, 0, CHUNK_SIZE / PAGE_SIZE) {
+        for (size_t i = CHUNK_SIZE / PAGE_SIZE; i--;) {
             free_physical_page(&dst[i * PAGE_SIZE]);
         }
     }

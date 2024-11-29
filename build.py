@@ -12,6 +12,7 @@ LD = 'ld.lld' if platform.system() != 'Windows' else 'ld.lld.exe'
 
 CFLAGS = [
     '-Wall',
+    '-std=gnu23',
     '-nostdlib',
     '-masm=intel',
     '-mno-red-zone',

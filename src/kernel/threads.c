@@ -232,13 +232,6 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
     // allocate virtual pages
     ////////////////////////////////
     size_t num_pages = (image_size + 0xFFF) / 4096;
-    char* dst = alloc_physical_page();
-    if (dst == NULL) {
-        // no memory? lmao, just buy more ram
-        return NULL;
-    }
-
-    memmap__view(env->address_space, (uintptr_t) dst, image_base, image_size, PAGE_USER | PAGE_WRITE);
 
     ////////////////////////////////
     // map segments
@@ -254,20 +247,31 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
         kassert(segment->p_filesz <= segment->p_memsz, "no enough space in memory for file data");
         kassert((segment->p_align & (segment->p_align - 1)) == 0, "alignment is not a power-of-two");
 
-        uintptr_t vaddr = segment->p_vaddr;
+        // file offset % page_size == virtual addr % page_size, it allows us to file map
+        // awkward offsets because the virtual address is just as awkward :p
+        uintptr_t vaddr = image_base + (segment->p_vaddr & -0x1000);
+
+        // allocate individual chunks
+        char* dst = alloc_physical_chunk();
+        kassert(dst, "OOM!");
+        kassert(segment->p_memsz < CHUNK_SIZE, "segment too big");
+
+        kprintf("  Segment: %p => %p\n", dst, vaddr);
 
         // map file contents
         if (segment->p_filesz) {
             kassert(segment->p_offset + segment->p_filesz <= program_size, "segment contents out of bounds (%x + %x < %x)", segment->p_offset, segment->p_filesz, program_size);
 
             const u8* src = program + segment->p_offset;
-            memcpy(dst + vaddr, src, segment->p_filesz);
+            memcpy(dst, src, segment->p_filesz);
         }
 
         // map zeroed region at the end
         if (segment->p_memsz > segment->p_filesz) {
-            memset(dst + vaddr + segment->p_filesz, 0, segment->p_memsz - segment->p_filesz);
+            memset(dst + segment->p_filesz, 0, segment->p_memsz - segment->p_filesz);
         }
+
+        memmap__view(env->address_space, (uintptr_t) dst, vaddr, segment->p_memsz, PAGE_USER | PAGE_WRITE);
     }
 
     // tiny i know

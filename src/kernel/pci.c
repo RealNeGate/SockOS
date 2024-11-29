@@ -53,7 +53,7 @@ static void io_write8(u16 port, u8 data) {
 
 static inline u16 pci_config_read_u16(u8 bus, u8 slot, u8 func, u8 offs) {
     u32 address =
-        (1u<<31)
+    (1u<<31)
         | ((u32) bus  << 16)
         | ((u32) slot << 11)
         | ((u32) func << 8)
@@ -66,7 +66,7 @@ static inline u16 pci_config_read_u16(u8 bus, u8 slot, u8 func, u8 offs) {
 
 static inline u32 pci_config_read_u32(u8 bus, u8 slot, u8 func, u8 offs) {
     u32 address =
-        (1u<<31)
+    (1u<<31)
         | ((u32) bus  << 16)
         | ((u32) slot << 11)
         | ((u32) func << 8)
@@ -146,7 +146,7 @@ static void pci_scan_bus(u8 bus) {
     }
 }
 
-static void pci_scan_all() {
+static void pci_scan_all(void) {
     kprintf("[pci] TEST2 %08x\n", pci_config_read_u32(0, 1, 1, 0));
 
     u8 header_type = pci_header_type(0, 0, 0);
