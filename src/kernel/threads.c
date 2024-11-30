@@ -9,7 +9,8 @@ typedef struct Env Env;
 
 struct Env {
     _Atomic int lock;
-    PageTable* address_space;
+
+    VMem_AddrSpace* address_space;
 
     Thread* first_in_env;
     Thread* last_in_env;
@@ -76,7 +77,7 @@ void spin_unlock(_Atomic(int)* lock) {
     atomic_exchange(lock, 0);
 }
 
-static void identity_map_kernel_region(PageTable* address_space, void* p, size_t size) {
+static void identity_map_kernel_region(VMem_AddrSpace* addr_space, void* p, size_t size) {
     uintptr_t x = (((uintptr_t) p) & ~0xFFF);
 
     // relocate higher half addresses to the ELF in physical memory
@@ -86,7 +87,7 @@ static void identity_map_kernel_region(PageTable* address_space, void* p, size_t
     }
 
     uintptr_t base = ((uintptr_t) p) & ~0xFFF;
-    memmap__view(address_space, x, base, size + 4096, PAGE_WRITE);
+    memmap__view(addr_space->hw_tables, x, base, size + 4096, PAGE_WRITE);
 }
 
 // envs can have address spaces, threads merely inherit theirs.
@@ -95,7 +96,8 @@ static void identity_map_kernel_region(PageTable* address_space, void* p, size_t
 // and we have executables.
 Env* env_create(void) {
     Env* env = alloc_physical_page();
-    env->address_space = alloc_physical_page();
+    env->address_space = kernelfl_alloc(sizeof(VMem_AddrSpace));
+    env->address_space->hw_tables = alloc_physical_page();
 
     // identity map essential kernel stuff
     //   * IRQ handler
@@ -239,7 +241,7 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
     size_t segment_header_bounds = elf_header->e_phoff + elf_header->e_phnum*segment_size;
     kassert(segment_header_bounds < program_size, "segments do not fit into file");
 
-    FOREACH_N(i, 0, elf_header->e_phnum) {
+    /* FOREACH_N(i, 0, elf_header->e_phnum) {
         Elf64_Phdr* segment = (Elf64_Phdr*) (segments + i*segment_size);
         if (segment->p_type != PT_LOAD) continue;
 
@@ -276,7 +278,7 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
 
     // tiny i know
     void* physical_stack = alloc_physical_page();
-    memmap__view(env->address_space, (uintptr_t) physical_stack, 0xA0000000, 4096, PAGE_USER | PAGE_WRITE);
+    memmap__view(env->address_space, (uintptr_t) physical_stack, 0xA0000000, 4096, PAGE_USER | PAGE_WRITE); */
 
     return thread_create(env, (ThreadEntryFn*) (image_base + elf_header->e_entry), 0xA0000000, 4096, true);
 }

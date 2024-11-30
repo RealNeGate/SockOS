@@ -35,7 +35,7 @@ asm_files = {
 file = open(NINJA_SCRIPT, "w")
 file.write(f'rule cc\n')
 file.write(f'  depfile = $out.d\n')
-file.write(f'  command = clang $in $flags -c -MD -MF $out.d -o $out\n')
+file.write(f'  command = clang-19 $in $flags -c -MD -MF $out.d -o $out\n')
 file.write(f'  description = CC $out\n')
 file.write(f'\n')
 file.write(f'rule ld\n')

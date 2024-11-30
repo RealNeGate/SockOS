@@ -291,7 +291,7 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
         str[i++] = 0;
         spall_begin_event(str, 0);
 
-        return next->parent ? next->parent->address_space : boot_info->kernel_pml4;
+        return next->parent ? next->parent->address_space->hw_tables : boot_info->kernel_pml4;
     } else {
         halt();
         return old_address_space;

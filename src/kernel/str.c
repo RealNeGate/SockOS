@@ -1,3 +1,4 @@
+
 void* memset(void* buffer, int c, size_t n) {
     u8* buf = (u8*)buffer;
     for (size_t i = 0; i < n; i++) {

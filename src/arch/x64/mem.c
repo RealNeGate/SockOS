@@ -19,6 +19,103 @@ typedef enum PageFlags {
     PAGE_ACCESSED  = 32,
 } PageFlags;
 
+typedef struct KernelFreeList KernelFreeList;
+struct KernelFreeList {
+    // next node is directly after the end size of this one
+    uint64_t size     : 62;
+    uint64_t is_free  : 1;
+    uint64_t has_next : 1;
+    // used to track coalescing correctly
+    KernelFreeList* prev;
+    char data[];
+};
+
+static KernelFreeList* kernel_free_list;
+
+static KernelFreeList* kernelfl_next(KernelFreeList* n) {
+    return n->has_next ? (KernelFreeList*) &n->data[n->size - sizeof(KernelFreeList)] : NULL;
+}
+
+static void* kernelfl_alloc(size_t obj_size) {
+    // add free list header and 8b padding
+    obj_size = (obj_size + 7) & ~7;
+    obj_size += sizeof(KernelFreeList);
+
+    for (KernelFreeList* list = kernel_free_list; list; list = kernelfl_next(list)) {
+        if (list->is_free) {
+            if (list->size == obj_size) {
+                // perfect fit
+                list->is_free = false;
+
+                kprintf("[kheap] alloc(%d) = %p\n", obj_size, &list->data[0]);
+                return &list->data[0];
+            } else if (list->size > obj_size) {
+                size_t full_size = list->size;
+
+                // split
+                KernelFreeList* split = (KernelFreeList*) &list->data[obj_size - sizeof(KernelFreeList)];
+                list->is_free = false;
+                list->size = obj_size;
+
+                split->size = full_size - obj_size;
+                split->is_free = false;
+                split->prev = list;
+
+                kprintf("[kheap] alloc(%d) = %p\n", obj_size, &list->data[0]);
+                return &list->data[0];
+            }
+        }
+    }
+
+    kassert(0, "Ran out of kernel memory");
+}
+
+static void kernelfl_free(void* obj) {
+    KernelFreeList* list = &((KernelFreeList*) obj)[-1];
+    kassert(!list->is_free, "not allocated... you can't free it");
+
+    list->is_free = true;
+
+    // if there's free space ahead, merge with it
+    KernelFreeList* next = kernelfl_next(list);
+    if (next->is_free) {
+        list->size += next->size;
+    }
+
+    KernelFreeList* prev = list->prev;
+    if (list->prev && list->prev->is_free) {
+        prev->size += list->size;
+        list = prev;
+    }
+
+    memset(list->data, 0xCD, list->size - sizeof(KernelFreeList));
+}
+
+static void* kernelfl_realloc(void* obj, size_t obj_size) {
+    if (obj == NULL) {
+        return kernelfl_alloc(obj_size);
+    }
+
+    KernelFreeList* list = &((KernelFreeList*) obj)[-1];
+    if (obj_size == 0) {
+        kernelfl_free(obj);
+    }
+
+    // add free list header and 8b padding
+    obj_size = (obj_size + 7) & ~7;
+    obj_size += sizeof(KernelFreeList);
+
+    // TODO(NeGate): shrink allocation when obj_size is smaller than list->size
+    // ...
+
+    // TODO(NeGate): extend current space
+    // ...
+
+    // TODO(NeGate): migrate allocation
+    // ...
+    kassert(0, "TODO");
+}
+
 static size_t cpu_alloc_queue_mask;
 static void* alloc_physical_chunk(void);
 
@@ -30,10 +127,15 @@ static PerCPU* get_percpu(void) {
 
 static void init_physical_page_alloc(MemMap* restrict mem_map) {
     size_t total_chunks = 0;
+    int biggest = -1;
     FOREACH_N(i, 0, mem_map->nregions) {
         MemRegion* region = &mem_map->regions[i];
         if (region->type != MEM_REGION_USABLE || region->base < 0x100000) {
             continue;
+        }
+
+        if (region->pages > mem_map->regions[biggest].pages) {
+            biggest = i;
         }
 
         total_chunks += region->pages / (CHUNK_SIZE / PAGE_SIZE);
@@ -57,6 +159,21 @@ static void init_physical_page_alloc(MemMap* restrict mem_map) {
 
         uintptr_t base = region->base;
         uintptr_t end  = (region->base + region->pages*PAGE_SIZE) & -CHUNK_SIZE;
+
+        // chop off 10% of the biggest memory region for the kernel heap
+        if (biggest == i) {
+            size_t kernel_heap_size = ((region->pages + 9) / 10) * PAGE_SIZE;
+            kprintf("Kernel heap: %p - %p (%d MiB)\n", base, base + kernel_heap_size - 1, kernel_heap_size / (1024*1024));
+
+            kernel_free_list = (KernelFreeList*) base;
+            kernel_free_list->size = kernel_heap_size;
+            kernel_free_list->is_free = 1;
+            kernel_free_list->has_next = false;
+            kernel_free_list->prev = NULL;
+
+            base += kernel_heap_size;
+        }
+
         if (boot_info->cores[0].alloc.data == NULL) {
             if ((end - base) / PAGE_SIZE < pages_per_queue) {
                 continue;
@@ -171,6 +288,7 @@ static void* alloc_physical_page(void) {
     cpu->heap = fl->next;
 
     kprintf("Alloc %p\n", fl);
+    memset(fl, 0, PAGE_SIZE);
     return fl;
 }
 

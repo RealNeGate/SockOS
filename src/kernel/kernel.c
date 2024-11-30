@@ -15,9 +15,10 @@ static u16 cursor;
 #endif
 
 // forward decls
+#include "print.c"
+#include "vmem.c"
 #include "threads.c"
 #include "scheduler.c"
-#include "print.c"
 #include "spall.h"
 
 #ifdef __x86_64__
@@ -28,7 +29,6 @@ static u16 cursor;
 #include "arch/x64/irq.c"
 #endif
 
-#include "vmem.c"
 #include "syscall.c"
 #include "pci.c"
 
@@ -122,12 +122,12 @@ void kmain(BootInfo* restrict info) {
     thread_create(NULL, other_other_guy, (uintptr_t) physical_stack, CHUNK_SIZE, false);
     spall_end_event(0);
 
-    static const uint8_t desktop_elf[] = {
+    /* static const uint8_t desktop_elf[] = {
         #embed "../desktop.elf"
     };
 
     Env* toy = env_create();
-    Thread* mine = env_load_elf(toy, desktop_elf, sizeof(desktop_elf));
+    Thread* mine = env_load_elf(toy, desktop_elf, sizeof(desktop_elf)); */
 
     kernel_idle_state = new_thread_state(kernel_idle, 0, 0, false);
 
