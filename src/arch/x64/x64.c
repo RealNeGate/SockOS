@@ -33,8 +33,8 @@ u16 io_in16(u16 port);
 u32 io_in32(u16 port);
 
 void io_out8(u16 port, u8 value);
-void io_out16(u16 port, u8 value);
-void io_out32(u16 port, u8 value);
+void io_out16(u16 port, u16 value);
+void io_out32(u16 port, u32 value);
 
 static inline void io_wait(void) {
     asm volatile(

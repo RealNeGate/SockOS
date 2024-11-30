@@ -30,21 +30,10 @@
 
 #define PCI_BRIDGE_PCI2PCI          0x04
 
-// FIXME: The asm stubs for these are inexplicably broken
-static void out32(u32 port, u32 value) {
-	asm volatile ("out dx, eax" :: "dN" (port), "a" (value));
-}
-
-static u32 in32(u16 port) {
-	u32 rv;
-	asm volatile ("in eax, dx" : "=a" (rv) : "dN" (port));
-	return rv;
-}
-
 static inline u32 pci_read_u32(u32 bus, u32 device, u32 func, u32 offs) {
     u32 address = PCI_BASE_ADDR | (bus << 16) | (device << 11) | (func << 8) | offs;
-    out32(PCI_ADDR_PORT, address);
-    return in32(PCI_VALUE_PORT);
+    io_out32(PCI_ADDR_PORT, address);
+    return io_in32(PCI_VALUE_PORT);
 }
 
 typedef struct {
