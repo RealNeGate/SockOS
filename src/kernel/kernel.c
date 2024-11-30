@@ -108,8 +108,7 @@ void kmain(BootInfo* restrict info) {
 
     subdivide_memory(&boot_info->mem_map, boot_info->core_count);
 
-    // TODO(flysand): figure out why it doesn't work.
-    // pci_scan_all();
+    pci_scan_all();
 
     spall_header();
     spall_begin_event("AAA", 0);
@@ -126,6 +125,7 @@ void kmain(BootInfo* restrict info) {
     static const uint8_t desktop_elf[] = {
         #embed "../desktop.elf"
     };
+
     Env* toy = env_create();
     Thread* mine = env_load_elf(toy, desktop_elf, sizeof(desktop_elf));
 

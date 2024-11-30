@@ -22,8 +22,7 @@ io_in16:
     in ax, dx
     ret
 io_in32:
-    mov rdx, rdi
-    xor rax, rax
+    mov edx, edi
     in eax, dx
     ret
 io_out8:
@@ -37,8 +36,8 @@ io_out16:
     out dx, ax
     ret
 io_out32:
-    mov rax, rsi
-    mov rdx, rdi
+    mov eax, esi
+    mov edx, edi
     out dx, eax
     ret
 

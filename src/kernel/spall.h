@@ -1,7 +1,6 @@
 #pragma once
 
 #include <stdint.h>
-#include <string.h>
 #include <stdbool.h>
 
 #define SPALL_MIN(a, b) (((a) < (b)) ? (a) : (b))
