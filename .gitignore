@@ -17,3 +17,4 @@ run4coder.bat
 project.4coder
 *.map
 *.elf
+*.spall
