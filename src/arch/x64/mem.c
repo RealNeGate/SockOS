@@ -204,15 +204,20 @@ static void subdivide_memory(MemMap* restrict mem_map, int num_cores) {
     int64_t t = atomic_load_explicit(&boot_info->cores[0].alloc.top, memory_order_acquire);
 
     int per_core = (b - t) / num_cores;
+    size_t pages_per_queue = (((cpu_alloc_queue_mask+1)*8) + PAGE_SIZE - 1) / PAGE_SIZE;
 
     // kprintf("Core[0] queue has %d entries (split into %d)\n", boot_info->cores[0].alloc.bot, per_core);
 
     int64_t k = t + per_core;
     FOREACH_N(i, 1, num_cores) {
+        kassert(pages_per_queue == 1, "TODO: queue too big (we're dumb)");
+        boot_info->cores[i].alloc.data = alloc_physical_page();
+
         FOREACH_N(j, 0, per_core) {
             void* ptr = atomic_load_explicit(&boot_info->cores[0].alloc.data[k & cpu_alloc_queue_mask], memory_order_relaxed);
 
             // kprintf("Page[%d]: %p\n", k & cpu_alloc_queue_mask, ptr);
+
             atomic_store_explicit(&boot_info->cores[i].alloc.data[j], ptr, memory_order_relaxed);
             k = (k + 1) & cpu_alloc_queue_mask;
         }
@@ -287,13 +292,21 @@ static void* alloc_physical_page(void) {
     PageFreeList* fl = cpu->heap;
     cpu->heap = fl->next;
 
-    kprintf("Alloc %p\n", fl);
+    kprintf("[kpool] alloc(%d) = %p\n", PAGE_SIZE, fl);
     memset(fl, 0, PAGE_SIZE);
     return fl;
 }
 
 static u64 canonical_addr(u64 ptr) {
     return (ptr >> 48) != 0 ? ptr | (0xFFFull << 48) : ptr;
+}
+
+static PageTable* get_pt(PageTable* parent, size_t index) {
+    if (parent->entries[index] & PAGE_PRESENT) {
+        return (PageTable*) canonical_addr(parent->entries[index] & 0xFFFFFFFFF000ull);
+    } else {
+        return NULL;
+    }
 }
 
 static PageTable* get_or_alloc_pt(PageTable* parent, size_t index, int depth, PageFlags flags) {
@@ -339,6 +352,41 @@ static Result memmap__view(PageTable* address_space, uintptr_t phys_addr, uintpt
     }
 
     return RESULT_SUCCESS;
+}
+
+static void memmap__unview(PageTable* address_space, uintptr_t virt_addr, size_t size) {
+    size_t page_count = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+    kassert((virt_addr & 0xFFFull) == 0, "virtual address unaligned (%p)", virt_addr);
+
+    // Generate the page table mapping
+    for (size_t i = 0; i < page_count; i++, virt_addr += PAGE_SIZE) {
+        PageTable* table_l3 = get_pt(address_space, (virt_addr >> 39) & 0x1FF); // 512GiB
+        if (table_l3 == NULL) { continue; }
+        PageTable* table_l2 = get_pt(table_l3,      (virt_addr >> 30) & 0x1FF); // 1GiB
+        if (table_l2 == NULL) { continue; }
+        PageTable* table_l1 = get_pt(table_l2,      (virt_addr >> 21) & 0x1FF); // 2MiB
+        if (table_l1 == NULL) { continue; }
+
+        size_t pte_index = (virt_addr >> 12) & 0x1FF; // 4KiB
+        table_l1->entries[pte_index] = 0;
+        x86_invalidate_page(virt_addr);
+    }
+}
+
+static void dump_pages(PageTable* pt, int depth, uintptr_t base) {
+    static const uint64_t shifts[4] = { 39, 30, 21, 12 };
+    for (int i = 0; i < 512; i++) {
+        if (pt->entries[i] & 1) {
+            for (int i = 0; i < depth; i++) { kprintf("  "); }
+
+            uintptr_t vaddr = base + (i << shifts[depth]);
+            kprintf("[%d] %p (%p)\n", i, pt->entries[i], vaddr);
+
+            if (depth < 3) {
+                dump_pages((PageTable*) (pt->entries[i] & -PAGE_SIZE), depth + 1, vaddr);
+            }
+        }
+    }
 }
 
 static void memdump(u64 *buffer, size_t size) {

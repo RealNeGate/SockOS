@@ -9,6 +9,7 @@ enum {
     IA32_EFER  = 0xC0000080,
     IA32_STAR  = 0xC0000081,
     IA32_LSTAR = 0xC0000082,
+    I32_GS_BASE = 0xC0000101,
     IA32_KERNEL_GS_BASE = 0xC0000102,
 
     IA32_TSC_DEADLINE = 0x6E0,
@@ -164,21 +165,11 @@ void irq_startup(int core_id) {
         _Static_assert(0x10      + 8  == USER_DS,   "SYSRET expectations");
         __writemsr(IA32_STAR, ((u64)KERNEL_CS << 32ull) | (0x10ull << 48ull));
 
+        __writemsr(IA32_KERNEL_GS_BASE, (uintptr_t) &boot_info->cores[core_id]);
+        x86_swapgs();
+
         // we're storing the per_cpu info here, syscall will use this
         __writemsr(IA32_KERNEL_GS_BASE, (uintptr_t) &boot_info->cores[core_id]);
-    }
-
-    // Enable APIC timer
-    {
-        // 0xF0 - Spurious Interrupt Vector Register
-        // Punting spurious interrupts (see PIC/CPU race condition, this is a fake interrupt)
-        APIC(0xF0) |= 0x1FF;
-
-        // 320h - LVT timer register
-        //   we just want a simple one-shot timer on IRQ32
-        APIC(0x320) = 0x00000 | 32;
-        //   timer divide reg
-        APIC(0x3E0) = 0b1011;
     }
 
     IDT idt;
@@ -187,6 +178,19 @@ void irq_startup(int core_id) {
     irq_enable(&idt);
 }
 
+void irq_begin_timer(void) {
+    // Enable APIC timer
+    //   0xF0 - Spurious Interrupt Vector Register
+    //   Punting spurious interrupts (see PIC/CPU race condition, this is a fake interrupt)
+    APIC(0xF0) |= 0x1FF;
+    //   320h - LVT timer register
+    //     we just want a simple one-shot timer on IRQ32
+    APIC(0x320) = 0x00000 | 32;
+    //   timer divide reg
+    APIC(0x3E0) = 0b1011;
+}
+
+static int times = 0;
 PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU* cpu) {
     u64 now = __rdtsc();
 
@@ -196,31 +200,100 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
     }
 
     if (state->interrupt_num == 14) {
+        u64 access_addr = x86_get_cr2();
+
         kprintf("  cr3=%p\n\n", old_address_space);
 
         // print memory access address
         u64 translated;
-        u64 access_addr = x86_get_cr2();
         if (memmap__translate(old_address_space, access_addr, &translated)) {
             kprintf("  access: %p (translated: %p)\n", access_addr, translated);
         } else {
             kprintf("  access: %p (NOT PRESENT)\n", access_addr);
         }
 
-        // dissassemble code
-        if (memmap__translate(old_address_space, state->rip, &translated)) {
-            // relocate higher half addresses to the ELF in physical memory
-            if (state->rip >= 0xFFFFFFFF80000000ull) {
-                translated = state->rip;
-            }
-
-            kprintf("  code:   %p (translated: %p)\n\n", state->rip, translated);
-            // x86_print_disasm((uint8_t*) translated, 16);
-        } else {
-            kprintf("  code:   NOT PRESENT\n");
+        if (times++ == 2) {
+            halt();
         }
 
-        halt();
+        VMem_AddrSpace* addr_space = NULL;
+        if (cpu->current_thread && cpu->current_thread->parent) {
+            addr_space = &cpu->current_thread->parent->addr_space;
+        }
+
+        // update hardware page tables to match
+        VMem_PTEUpdate update;
+        if (addr_space != NULL && vmem_segfault(addr_space, access_addr, false, &update)) {
+            // there's two events:
+            //   update software PTEs => update hardware PTEs
+            //
+            // if we lose the CASes to write hardware PTEs but win the software ones, threads which
+            // acknowledged the incorrect value will simply segfault again and update to a consistent
+            // view. If the memory map update makes "backwards progress" (new form causes more segfaults,
+            // thus updates can't be accomodated for in existing segfaults), we'll require TLB shootdowns
+            // and an exclusive lock on the address space.
+            static const uint64_t shifts[3] = { 39, 30, 21 };
+
+            // convert software page properties into hardware page flags
+            uint64_t page_flags = PAGE_WRITE;
+
+            uint64_t virt_addr = 0;
+            PageTable* curr = addr_space->hw_tables;
+            for (size_t i = 0; i < 3; i++) {
+                size_t index = (virt_addr >> shifts[i]) & 0x1FF;
+
+                // the intermediate page tables need to have permissions that are "above" the child pages, so we'll OR our
+                // flags with it.
+                u64 entry = atomic_load_explicit(&curr->entries[index], memory_order_relaxed);
+                for (;;) {
+                    u64 new_entry = entry;
+                    // no table? add one
+                    PageTable* new_pt = NULL;
+                    if ((entry & ~0x1FFull) == 0) {
+                        new_pt = alloc_physical_page();
+                        memset(new_pt, 0, sizeof(PageTable));
+
+                        new_entry = ((u64) new_pt) | page_flags | PAGE_PRESENT;
+                    } else {
+                        // bits missing? add one
+                        new_entry |= page_flags;
+                    }
+                    // no progress necessary, it's already behaving
+                    if (entry == new_entry) { break; }
+                    // transaction, if we fail at least someone allocate the
+                    // physical page (so we don't spam allocations as much)
+                    if (atomic_compare_exchange_strong(&curr->entries[index], &entry, new_entry)) { break; }
+                    // throw away our new_pt
+                    if (new_pt == NULL) { free_physical_page(new_pt); }
+                }
+
+                curr = (PageTable*) (entry & ~0x1FF);
+            }
+
+            size_t pte_index = (virt_addr >> 12) & 0x1FF; // 4KiB
+
+            u64 old_pte = curr->entries[pte_index];
+            u64 new_pte = (update.translated & 0xFFFFFFFFF000) | page_flags | PAGE_PRESENT;
+            atomic_compare_exchange_strong(&curr->entries[pte_index], &old_pte, new_pte);
+
+            x86_invalidate_page(virt_addr);
+        } else {
+            // dissassemble code
+            if (memmap__translate(old_address_space, state->rip, &translated)) {
+                // relocate higher half addresses to the ELF in physical memory
+                if (state->rip >= 0xFFFFFFFF80000000ull) {
+                    translated = state->rip;
+                }
+
+                kprintf("  code:   %p (translated: %p)\n\n", state->rip, translated);
+                // x86_print_disasm((uint8_t*) translated, 16);
+            } else {
+                kprintf("  code:   NOT PRESENT\n");
+            }
+
+            halt();
+        }
+
         return old_address_space;
     } else if (state->interrupt_num == 32) {
         if (calibrating_apic_timer) {
@@ -291,7 +364,12 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
         str[i++] = 0;
         spall_begin_event(str, 0);
 
-        return next->parent ? next->parent->address_space->hw_tables : boot_info->kernel_pml4;
+        PageTable* next_pml4 = next->parent ? next->parent->addr_space.hw_tables : boot_info->kernel_pml4;
+
+        kprintf("AAA %p\n", next_pml4);
+        // dump_pages(next_pml4, 0, 0);
+
+        return next_pml4;
     } else {
         halt();
         return old_address_space;

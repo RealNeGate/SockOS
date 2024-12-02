@@ -15,6 +15,12 @@ static inline void x86_invalidate_page(unsigned long addr) {
     asm volatile("invlpg [%0]" ::"r" (addr) : "memory");
 }
 
+PerCPU* cpu_get(void) {
+    u64 result;
+    asm volatile ("mov %q0, gs:[0]" : "=a" (result));
+    return (PerCPU*) result;
+}
+
 static inline u64 x86_get_cr2(void) {
     u64 result;
     asm volatile ("mov %q0, cr2" : "=a" (result));
@@ -33,8 +39,8 @@ u16 io_in16(u16 port);
 u32 io_in32(u16 port);
 
 void io_out8(u16 port, u8 value);
-void io_out16(u16 port, u8 value);
-void io_out32(u16 port, u8 value);
+void io_out16(u16 port, u16 value);
+void io_out32(u16 port, u32 value);
 
 static inline void io_wait(void) {
     asm volatile(
@@ -54,6 +60,10 @@ static inline void __writemsr(u32 r, u64 v) {
     u32 eax = v & 0xffffffff;
     u32 edx = v >> 32;
     asm volatile ("wrmsr" : : "c" (r), "a" (eax), "d" (edx));
+}
+
+void x86_swapgs(void) {
+    asm volatile ("swapgs");
 }
 
 static inline void x86_cli() {

@@ -62,6 +62,7 @@ void boot_cores(void) {
 
             // if windows can get away with small kernel stacks so can we
             PerCPU* restrict cpu = &boot_info->cores[k++];
+            cpu->self = cpu;
             cpu->kernel_stack     = (uint8_t*) sp;
             cpu->kernel_stack_top = (uint8_t*) sp + KERNEL_STACK_SIZE;
         }

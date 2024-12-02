@@ -16,9 +16,12 @@ static Thread* tq_peek(ThreadQueue* tq) {
 
 static void tq_remove(ThreadQueue* tq, Thread* t) {
     Thread* next = t->next_sched;
+
     if (tq->first == t) { tq->first = next; }
     if (tq->last == t) { tq->last = t->prev_sched; }
-    t->prev_sched->next_sched = next;
+    if (t->prev_sched != NULL) {
+        t->prev_sched->next_sched = next;
+    }
     if (next != NULL) {
         next->prev_sched = t->prev_sched;
     }
@@ -55,8 +58,9 @@ static Thread* tq_advance(ThreadQueue* tq) {
 
 #define kprintf
 void sched_wait(Thread* t, u64 timeout) {
-    // PerCPU_Scheduler* sched = get_sched();
-    PerCPU_Scheduler* sched = boot_info->cores[0].sched;
+    kprintf("QQQ\n");
+
+    PerCPU_Scheduler* sched = cpu_get()->sched;
     kassert(sched->active.curr == t, "wtf?");
 
     uint64_t now_time = __rdtsc() / boot_info->tsc_freq;

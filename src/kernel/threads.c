@@ -9,8 +9,7 @@ typedef struct Env Env;
 
 struct Env {
     _Atomic int lock;
-
-    VMem_AddrSpace* address_space;
+    VMem_AddrSpace addr_space;
 
     Thread* first_in_env;
     Thread* last_in_env;
@@ -96,22 +95,23 @@ static void identity_map_kernel_region(VMem_AddrSpace* addr_space, void* p, size
 // and we have executables.
 Env* env_create(void) {
     Env* env = alloc_physical_page();
-    env->address_space = kernelfl_alloc(sizeof(VMem_AddrSpace));
-    env->address_space->hw_tables = alloc_physical_page();
+    env->addr_space.range_count = 0;
+    env->addr_space.hw_tables = alloc_physical_page();
+    env->addr_space.commit_table = nbhm_alloc(64);
 
     // identity map essential kernel stuff
     //   * IRQ handler
     extern void asm_int_handler(void);
     extern void syscall_handler(void);
-    identity_map_kernel_region(env->address_space, &asm_int_handler, 4096);
-    identity_map_kernel_region(env->address_space, &syscall_handler, 4096);
-    identity_map_kernel_region(env->address_space, (void*) &_idt[0], sizeof(_idt));
-    identity_map_kernel_region(env->address_space, boot_info, sizeof(BootInfo));
-    identity_map_kernel_region(env->address_space, &boot_info, sizeof(BootInfo*));
-    identity_map_kernel_region(env->address_space, &syscall_table[0], sizeof(syscall_table));
+    identity_map_kernel_region(&env->addr_space, &asm_int_handler, 4096);
+    identity_map_kernel_region(&env->addr_space, &syscall_handler, 4096);
+    identity_map_kernel_region(&env->addr_space, (void*) &_idt[0], sizeof(_idt));
+    identity_map_kernel_region(&env->addr_space, boot_info, sizeof(BootInfo));
+    identity_map_kernel_region(&env->addr_space, &boot_info, sizeof(BootInfo*));
+    identity_map_kernel_region(&env->addr_space, &syscall_table[0], sizeof(syscall_table));
 
     // TODO(NeGate): uhh... i think we wanna map all their kernel stacks?
-    identity_map_kernel_region(env->address_space, boot_info->cores[0].kernel_stack, KERNEL_STACK_SIZE);
+    identity_map_kernel_region(&env->addr_space, boot_info->cores[0].kernel_stack, KERNEL_STACK_SIZE);
 
     return env;
 }
@@ -213,35 +213,14 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
     Elf64_Ehdr* elf_header = (Elf64_Ehdr*) program;
 
     ////////////////////////////////
-    // find program bounds
-    ////////////////////////////////
-    uintptr_t image_base = 0xC0000000;
-    uintptr_t image_size = 0;
-
-    const u8* segments = program + elf_header->e_phoff;
-    size_t segment_size = elf_header->e_phentsize;
-    FOREACH_N(i, 0, elf_header->e_phnum) {
-        Elf64_Phdr* segment = (Elf64_Phdr*) (segments + i*segment_size);
-        if (segment->p_type != PT_LOAD) continue;
-
-        uintptr_t segment_top = segment->p_vaddr + segment->p_memsz;
-        if (segment_top > image_size) {
-            image_size = segment_top;
-        }
-    }
-
-    ////////////////////////////////
-    // allocate virtual pages
-    ////////////////////////////////
-    size_t num_pages = (image_size + 0xFFF) / 4096;
-
-    ////////////////////////////////
     // map segments
     ////////////////////////////////
+    size_t segment_size = elf_header->e_phentsize;
     size_t segment_header_bounds = elf_header->e_phoff + elf_header->e_phnum*segment_size;
     kassert(segment_header_bounds < program_size, "segments do not fit into file");
 
-    /* FOREACH_N(i, 0, elf_header->e_phnum) {
+    const u8* segments = program + elf_header->e_phoff;
+    FOREACH_N(i, 0, elf_header->e_phnum) {
         Elf64_Phdr* segment = (Elf64_Phdr*) (segments + i*segment_size);
         if (segment->p_type != PT_LOAD) continue;
 
@@ -251,36 +230,30 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
 
         // file offset % page_size == virtual addr % page_size, it allows us to file map
         // awkward offsets because the virtual address is just as awkward :p
-        uintptr_t vaddr = image_base + (segment->p_vaddr & -0x1000);
+        uintptr_t vaddr = (segment->p_vaddr & -PAGE_SIZE);
+        uintptr_t paddr = (uintptr_t) program + (segment->p_offset & -PAGE_SIZE);
 
-        // allocate individual chunks
-        char* dst = alloc_physical_chunk();
-        kassert(dst, "OOM!");
-        kassert(segment->p_memsz < CHUNK_SIZE, "segment too big");
+        kprintf("[elf] segment: %p (%d) => %p (%d)\n", vaddr, segment->p_memsz, paddr, segment->p_filesz);
 
-        kprintf("  Segment: %p => %p\n", dst, vaddr);
+        size_t file_size = (segment->p_filesz + PAGE_SIZE - 1) & -PAGE_SIZE;
+        size_t mem_size  = (segment->p_memsz  + PAGE_SIZE - 1) & -PAGE_SIZE;
 
-        // map file contents
-        if (segment->p_filesz) {
-            kassert(segment->p_offset + segment->p_filesz <= program_size, "segment contents out of bounds (%x + %x < %x)", segment->p_offset, segment->p_filesz, program_size);
-
-            const u8* src = program + segment->p_offset;
-            memcpy(dst, src, segment->p_filesz);
+        if (file_size > 0) {
+            vmem_add_range(&env->addr_space, vaddr, file_size, paddr, file_size, VMEM_PAGE_READ | VMEM_PAGE_WRITE | VMEM_PAGE_USER);
         }
 
-        // map zeroed region at the end
-        if (segment->p_memsz > segment->p_filesz) {
-            memset(dst + segment->p_filesz, 0, segment->p_memsz - segment->p_filesz);
+        if (mem_size > file_size) {
+            // zero pages
+            vmem_add_range(&env->addr_space, vaddr+mem_size, file_size - mem_size, 0, 0, VMEM_PAGE_READ | VMEM_PAGE_WRITE | VMEM_PAGE_USER);
         }
-
-        memmap__view(env->address_space, (uintptr_t) dst, vaddr, segment->p_memsz, PAGE_USER | PAGE_WRITE);
     }
+    kprintf("[elf] entry=%p\n", elf_header->e_entry);
 
     // tiny i know
     void* physical_stack = alloc_physical_page();
-    memmap__view(env->address_space, (uintptr_t) physical_stack, 0xA0000000, 4096, PAGE_USER | PAGE_WRITE); */
+    vmem_add_range(&env->addr_space, 0xA0000000, 4096, (uintptr_t) physical_stack, 4096, VMEM_PAGE_READ | VMEM_PAGE_WRITE | VMEM_PAGE_USER);
 
-    return thread_create(env, (ThreadEntryFn*) (image_base + elf_header->e_entry), 0xA0000000, 4096, true);
+    return thread_create(env, (ThreadEntryFn*) elf_header->e_entry, 0xA0000000, 4096, true);
 }
 
 #endif /* IMPL */

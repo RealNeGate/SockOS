@@ -39,7 +39,7 @@ file.write(f'  command = clang-19 $in $flags -c -MD -MF $out.d -o $out\n')
 file.write(f'  description = CC $out\n')
 file.write(f'\n')
 file.write(f'rule ld\n')
-file.write(f'  command = {LD} $in -o $out\n')
+file.write(f'  command = {LD} $in  -Map=output.map -o $out\n')
 file.write(f'  description = LINK $out\n')
 file.write(f'\n')
 file.write(f'rule link\n')
@@ -74,7 +74,7 @@ file.write(f'  flags = -I src -target x86_64-linux-gnu -ffreestanding {cflags}\n
 file.write(f'\n')
 
 kernel_asm = ' '.join(asm_outputs['kernel'])
-file.write(f'build bin/kernel.so: ld objs/kernel.o {kernel_asm}\n')
+file.write(f'build bin/kernel.so | output.map: ld objs/kernel.o {kernel_asm}\n')
 file.write(f'  flags = -nostdlib\n')
 file.write(f'\n')
 

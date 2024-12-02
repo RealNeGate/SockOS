@@ -14,6 +14,13 @@ static u16 cursor;
 #include "arch/x64/x64.c"
 #endif
 
+// Implemented in mem.c (we should move physical memory management out of arch-specific)
+static void* alloc_physical_chunk(void);
+static void free_physical_chunk(void* ptr);
+
+static void* alloc_physical_page(void);
+static void free_physical_page(void* ptr);
+
 // forward decls
 #include "print.c"
 #include "vmem.c"
@@ -44,7 +51,7 @@ static int draw_background(void *arg) {
     u8 mult = 0;
 
     for (;;) {
-        spall_begin_event("draw", 1);
+        // spall_begin_event("draw", 1);
         u64 gradient_x = (boot_info->fb.width + 255) / 256;
         u64 gradient_y = (boot_info->fb.height + 255) / 256;
 
@@ -60,7 +67,8 @@ static int draw_background(void *arg) {
             }
         }
 
-        spall_end_event(1);
+        kprintf("A\n");
+        // spall_end_event(1);
 
         sched_wait(boot_info->cores[0].current_thread, 50000);
         thread_yield();
@@ -88,7 +96,12 @@ extern int kernel_idle(void* arg);
 
 void kmain(BootInfo* restrict info) {
     boot_info = info;
+    boot_info->cores[0].self = &boot_info->cores[0];
+
     kprintf("Beginning kernel boot...\n");
+
+    // unmap the bottom 64KiB
+    memmap__unview(boot_info->kernel_pml4, 0, 65536);
 
     if (!has_cpu_support()) {
         panic("Here's a nickel, kid. Buy yourself a computer.\n");
@@ -98,6 +111,7 @@ void kmain(BootInfo* restrict info) {
     get_cpu_str(brand_str);
     kprintf("Booting %s\n", brand_str);
 
+    irq_startup(0);
     init_physical_page_alloc(&boot_info->mem_map);
 
     parse_acpi();
@@ -116,22 +130,22 @@ void kmain(BootInfo* restrict info) {
     // tiny i know
     void* physical_stack = alloc_physical_chunk();
     thread_create(NULL, draw_background, (uintptr_t) physical_stack, CHUNK_SIZE, false);
-    physical_stack = alloc_physical_chunk();
+    /* physical_stack = alloc_physical_chunk();
     thread_create(NULL, other_guy,       (uintptr_t) physical_stack, CHUNK_SIZE, false);
     physical_stack = alloc_physical_chunk();
-    thread_create(NULL, other_other_guy, (uintptr_t) physical_stack, CHUNK_SIZE, false);
+    thread_create(NULL, other_other_guy, (uintptr_t) physical_stack, CHUNK_SIZE, false); */
     spall_end_event(0);
 
-    /* static const uint8_t desktop_elf[] = {
-        #embed "../desktop.elf"
+    static _Alignas(4096) const uint8_t desktop_elf[] = {
+        #embed "../../userland/desktop.elf"
     };
 
     Env* toy = env_create();
-    Thread* mine = env_load_elf(toy, desktop_elf, sizeof(desktop_elf)); */
+    Thread* mine = env_load_elf(toy, desktop_elf, sizeof(desktop_elf));
 
     kernel_idle_state = new_thread_state(kernel_idle, 0, 0, false);
 
-    irq_startup(0);
+    irq_begin_timer();
 
     // jump into timer interrupt, we're going to run tasks now
     spall_begin_event("main", 0);

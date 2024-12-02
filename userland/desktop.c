@@ -11,6 +11,7 @@ enum {
 };
 
 int _start(void) {
+    __builtin_debugtrap();
     for (;;) {
         syscall(SYS_sleep, 2000*1000);
     }

@@ -18,7 +18,7 @@ enum {
 };
 
 typedef struct {
-    u64 entries[512];
+    _Atomic(u64) entries[512];
 } PageTable;
 
 enum {
@@ -69,7 +69,10 @@ typedef struct PageFreeList {
 } PageFreeList;
 
 typedef struct PerCPU_Scheduler PerCPU_Scheduler;
-typedef struct {
+typedef struct PerCPU PerCPU;
+struct PerCPU {
+    PerCPU* self;
+
     // used for interrupts
     u8* kernel_stack;
     u8* kernel_stack_top;
@@ -87,11 +90,11 @@ typedef struct {
     // Scheduler info
     struct Thread* current_thread;
     PerCPU_Scheduler* sched;
-} PerCPU;
+};
 
 // This is all the crap we throw into the loader
 typedef struct {
-    PageTable* kernel_pml4; // identity mapped
+    PageTable* kernel_pml4; // mostly identity mapped
 
     u64 lapic_base;
     u64 tsc_freq;
@@ -117,5 +120,8 @@ typedef struct {
 
 // loader.s & irq.s needs these to be here
 _Static_assert(offsetof(BootInfo, kernel_pml4) == 0, "the loader is sad");
-_Static_assert(offsetof(PerCPU, kernel_stack_top) == 8, "the irq.s & bootstrap.s is sad");
-_Static_assert(offsetof(PerCPU, user_stack_scratch) == 16, "the irq.s is sad");
+_Static_assert(offsetof(PerCPU, kernel_stack_top) == 16, "the irq.s & bootstrap.s is sad");
+_Static_assert(offsetof(PerCPU, user_stack_scratch) == 24, "the irq.s is sad");
+
+PerCPU* cpu_get(void);
+

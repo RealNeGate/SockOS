@@ -20,21 +20,31 @@ static void kernelfl_free(void* obj);
 
 // This is what's stored in the virtual address tree
 typedef enum {
-    VMEM_PROT_READ   = 1u << 0u,
-    VMEM_PROT_WRITE  = 1u << 1u,
-    VMEM_PROT_EXEC   = 1u << 2u,
-    VMEM_PROT_USER   = 1u << 3u,
-} VMem_Prot;
+    VMEM_PAGE_READ   = 1u << 0u,
+    VMEM_PAGE_WRITE  = 1u << 1u,
+    VMEM_PAGE_EXEC   = 1u << 2u,
+    VMEM_PAGE_USER   = 1u << 3u,
+} VMem_Flags;
 
-typedef union {
+typedef struct {
     uint64_t valid : 1;
-    uint64_t props : 7;
-    // for file mapped memory
-    uint64_t file_index : 24;
+    uint64_t flags : 7;
 } VMem_PageDesc;
 
 typedef struct {
-    // interval tree
+    // [start, end)
+    size_t start, end;
+    VMem_Flags flags;
+
+    // bootleg file mapping
+    uintptr_t paddr;
+    size_t psize;
+} VMem_Range;
+
+typedef struct {
+    // TODO(NeGate): interval trees
+    size_t range_count;
+    VMem_Range ranges[16];
 
     // virtual addresses -> committed pages
     NBHM commit_table;
@@ -71,15 +81,74 @@ bool vmem_addrhm_cmp(const void* a, const void* b) {
 #define NBHM_IMPL
 #include <nbhm.h>
 
-// commits: CommittedTable
-//
-// void* page = alloc_page()
-// if put_if_null(commits, vaddr, page) != page {
-//   // another thread committed a page at the same time
-//   free_page(page)
-// }
+VMem_Range* vmem_add_range(VMem_AddrSpace* addr_space, uintptr_t vaddr, size_t vsize, uintptr_t paddr, size_t psize, VMem_Flags flags) {
+    kassert((vaddr & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", vaddr);
+    kassert((vsize & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", vsize);
+    kassert((paddr & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", paddr);
+    kassert((psize & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", psize);
+    kassert(addr_space->range_count < 16, "too many ranges");
 
+    VMem_Range* range = &addr_space->ranges[addr_space->range_count++];
+    range->flags = flags;
+    range->start = vaddr;
+    range->end   = vaddr + vsize;
+    range->paddr = paddr;
+    range->psize = psize;
+    return range;
+}
 
-// _ _
-//
+typedef struct {
+    uintptr_t     translated;
+    VMem_PageDesc desc;
+} VMem_PTEUpdate;
 
+static VMem_Range* vmem_get_page(VMem_AddrSpace* addr_space, uintptr_t addr) {
+    for (size_t i = 0; i < addr_space->range_count; i++) {
+        if (addr_space->ranges[i].start >= addr && addr < addr_space->ranges[i].end) {
+            return &addr_space->ranges[i];
+        }
+    }
+
+    return NULL;
+}
+
+static _Alignas(4096) const uint8_t VMEM_ZERO_PAGE[4096];
+bool vmem_segfault(VMem_AddrSpace* addr_space, uintptr_t access_addr, bool is_write, VMem_PTEUpdate* out_update) {
+    VMem_Range* r = vmem_get_page(addr_space, access_addr);
+
+    kprintf("SEGFAULT on %p!!!\n", access_addr);
+    kprintf("  %d\n", r->flags);
+
+    if (r == NULL) {
+        // page not nice :(
+        halt();
+        return false;
+    }
+
+    // attempt to commit page
+    void* actual_page = vmem_addrhm_get(&addr_space->commit_table, (void*) access_addr);
+    if (actual_page == NULL) {
+        void* new_page = NULL;
+        if (r->paddr != 0) {
+            // we're "file" mapped, just view the address
+            size_t offset = (access_addr & -PAGE_SIZE) - r->start;
+            new_page = (void*) (r->paddr + offset);
+
+            kprintf("[segfault] file mapped address (%p) was accessed, paddr=%p\n", access_addr, new_page);
+        } else {
+            void* new_page = alloc_physical_page();
+            memset(new_page, 0, PAGE_SIZE);
+
+            kprintf("[segfault] first touch on private page (%p), paddr=%p\n", access_addr, new_page);
+        }
+
+        actual_page = vmem_addrhm_put_if_null(&addr_space->commit_table, (void*) access_addr, new_page);
+        if (actual_page != new_page && r->paddr == 0) {
+            free_physical_chunk(new_page);
+        }
+    }
+
+    out_update->translated = (uintptr_t) actual_page;
+    out_update->desc = (VMem_PageDesc){ .valid = 1, .flags = r->flags };
+    return true;
+}

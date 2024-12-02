@@ -2,7 +2,7 @@ global irq_enable, irq_disable, asm_int_handler, syscall_handler
 global io_in8, io_in16, io_in32, io_out8, io_out16, io_out32
 extern irq_int_handler, syscall_table_count, syscall_table, boot_info
 
-section text
+section .text
 irq_enable:
     lidt [rdi]
     sti
@@ -171,12 +171,12 @@ syscall_handler:
     swapgs
 
     ; save user stack, switch to kernel stack
-    mov gs:[32], rsp
-    mov rsp, gs:[8]
+    mov gs:[24], rsp
+    mov rsp, gs:[16]
 
     ; ss, rsp, flags, cs, rip
     push 0x23         ; ss
-    push qword gs:[32]; user rsp
+    push qword gs:[24]; user rsp
     push r11          ; rflags
     push 0x1B         ; cs
     push rcx          ; rip
@@ -243,7 +243,7 @@ syscall_handler.no_syscall:
     or r11, 0x200
 
     ; give the user back his GS and stack
-    mov rsp, gs:[32]
+    mov rsp, gs:[24]
     swapgs
 
     ; we're using the 64bit sysret

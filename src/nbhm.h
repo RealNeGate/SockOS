@@ -122,14 +122,14 @@ struct NBHM_FreeNode {
 
 static size_t nbhm_compute_cap(size_t y) {
     // minimum capacity
-    if (y < 256) {
-        y = 256;
+    if (y < 64) {
+        y = 64;
     } else {
         y = ((y + 1) / 3) * 4;
     }
 
     size_t cap = 1ull << (64 - __builtin_clzll(y - 1));
-    return cap - (sizeof(NBHM_Table) / sizeof(NBHM_Entry));
+    return cap - ((16 + sizeof(NBHM_Table)) / sizeof(NBHM_Entry));
 }
 
 static void nbhm_compute_size(NBHM_Table* table, size_t cap) {
@@ -696,7 +696,7 @@ void* NBHM_FN(get)(NBHM* hm, void* key) {
     return v;
 }
 
-void* NBHM_FN(put_if_null)(NBHM* hm, void* val) {
+void* NBHM_FN(put_if_null)(NBHM* hm, void* key, void* val) {
     NBHM__BEGIN("put");
 
     NBHM_ASSERT(val);
@@ -714,7 +714,7 @@ void* NBHM_FN(put_if_null)(NBHM* hm, void* val) {
         }
     }
 
-    void* v = NBHM_FN(put_if_match)(hm, latest, prev, val, val, &NBHM_TOMBSTONE);
+    void* v = NBHM_FN(put_if_match)(hm, latest, prev, key, val, &NBHM_TOMBSTONE);
 
     NBHM_FN(exit_pinned)();
     NBHM__END();

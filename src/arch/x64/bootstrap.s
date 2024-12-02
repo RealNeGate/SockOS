@@ -100,6 +100,6 @@ premain:
     add rdi, [data_start + bootstrap.cores]
 
     ; jump into C... finally!
-    mov rsp, [rdi + 8] ; kernel_stack
+    mov rsp, [rdi + 16] ; kernel_stack_top
     call [data_start + bootstrap.smp_main]
 bootstrap_end:

@@ -61,15 +61,4 @@ static __inline long __syscall6(long n, long a1, long a2, long a3, long a4, long
 #define __SYSCALL_CONCAT(a,b) __SYSCALL_CONCAT_X(a,b)
 #define __SYSCALL_DISP(b,...) __SYSCALL_CONCAT(b,__SYSCALL_NARGS(__VA_ARGS__))(__VA_ARGS__)
 
-#define __syscall(...) __SYSCALL_DISP(__syscall,__VA_ARGS__)
-#define syscall(...) __syscall_ret(__syscall(__VA_ARGS__))
-
-static long errno = 0;
-
-int64_t __syscall_ret(uint64_t r) {
-    if (r > -4096UL) {
-        errno = -r;
-        return -1;
-    }
-    return r;
-}
+#define syscall(...) __SYSCALL_DISP(__syscall,__VA_ARGS__)
