@@ -351,8 +351,6 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 
         kernel_file->Close(kernel_file);
         fs_root->Close(fs_root);
-
-        printf("Loaded the kernel at: %X\n", kernel_buffer);
     }
 
     // Load the kernel ELF
@@ -422,7 +420,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     }
 
     // Print memory map
-    if (0) {
+    if (1) {
         printf("Memory map (%d entries):\n", mem_map.nregions);
         for(int i = 0; i != mem_map.nregions; ++i) {
             MemRegion region = mem_map.regions[i];
@@ -435,17 +433,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     // Map everything in the memory map that's ever been allocated
     for(int i = 0; i != mem_map.nregions; ++i) {
         MemRegion region = mem_map.regions[i];
-        if(region.base == kernel_module.phys_base) {
-            if(region.type != MEM_REGION_KERNEL) {
-                panic("Something bad is located at kernel's paddr");
-            }
-            // printf("Making a map %X -> %X (%X pages)\n", kernel_module.virt_base, region.base, region.pages);
-            map_pages(&ctx, kernel_module.virt_base, region.base, region.pages);
-        }
-        else {
-            // printf("Making a map %X -> %X (%X pages)\n", region.base, region.base, region.pages);
-            map_pages_id(&ctx, region.base, region.pages);
-        }
+        map_pages_id(&ctx, region.base, region.pages);
     }
 
     // memset(framebuffer, 0, framebuffer_stride * framebuffer_height * sizeof(u32));
@@ -473,8 +461,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     memdump(tss, 16);
     #endif
 
-    printf("Jumping to the kernel: %X (sp=%X)\n", kernel_module.entry_addr, kstack_base);
-    boot_info.kernel_virtual_used = kernel_module.virt_base;
+    printf("Jumping to the kernel: %X (sp=%X)\n", kernel_module.entry_addr, kstack_end);
     boot_info.elf_physical_ptr = kernel_module.phys_base;
     boot_info.fb = fb;
     boot_info.mem_map = mem_map;

@@ -190,6 +190,7 @@ static size_t nbhm_capacity(NBHM* hs)   { return hs->latest->cap; }
 int NBHM_TOMBSTONE;
 int NBHM_NO_MATCH_OLD;
 
+#if __STDC_HOSTED__
 _Thread_local bool nbhm_ebr_init;
 _Thread_local NBHM_EBREntry nbhm_ebr;
 atomic_int nbhm_ebr_count;
@@ -205,7 +206,6 @@ _Atomic(NBHM_FreeNode*) nbhm_free_tail = &NBHM_DUMMY;
 _Atomic uint32_t nbhm_free_done;
 _Atomic uint32_t nbhm_free_count;
 
-#if __STDC_HOSTED__
 int nbhm_thread_fn(void* arg) {
     #if NBHM__DEBOOGING
     spall_auto_thread_init(111111, SPALL_DEFAULT_BUFFER_SIZE);
@@ -308,6 +308,7 @@ int nbhm_thread_fn(void* arg) {
 extern int NBHM_TOMBSTONE;
 extern int NBHM_NO_MATCH_OLD;
 
+#if __STDC_HOSTED__
 extern _Thread_local bool nbhm_ebr_init;
 extern _Thread_local NBHM_EBREntry nbhm_ebr;
 extern _Atomic(int) nbhm_ebr_count;
@@ -322,6 +323,7 @@ extern _Atomic uint32_t nbhm_free_done;
 extern _Atomic uint32_t nbhm_free_count;
 
 extern int nbhm_thread_fn(void*);
+#endif
 
 static void* NBHM_FN(put_if_match)(NBHM* hs, NBHM_Table* latest, NBHM_Table* prev, void* key, void* val, void* exp);
 
@@ -345,14 +347,18 @@ static size_t NBHM_FN(hash2index)(NBHM_Table* table, uint64_t h) {
 
 // flips the top bit on
 static void NBHM_FN(enter_pinned)(void) {
+    #if __STDC_HOSTED__
     uint64_t t = atomic_load_explicit(&nbhm_ebr.time, memory_order_relaxed);
     atomic_store_explicit(&nbhm_ebr.time, t + NBHM_PINNED_BIT, memory_order_release);
+    #endif
 }
 
 // flips the top bit off AND increments time by one
 static void NBHM_FN(exit_pinned)(void) {
+    #if __STDC_HOSTED__
     uint64_t t = atomic_load_explicit(&nbhm_ebr.time, memory_order_relaxed);
     atomic_store_explicit(&nbhm_ebr.time, t + NBHM_PINNED_BIT + 1, memory_order_release);
+    #endif
 }
 
 NBHM_Table* NBHM_FN(move_items)(NBHM* hm, NBHM_Table* latest, NBHM_Table* prev, int items_to_move) {
@@ -446,6 +452,7 @@ NBHM_Table* NBHM_FN(move_items)(NBHM* hm, NBHM_Table* latest, NBHM_Table* prev, 
 }
 
 static void NBHM_FN(ebr_try_init)(void) {
+    #if __STDC_HOSTED__
     if (!nbhm_ebr_init) {
         NBHM__BEGIN("init");
         nbhm_ebr_init = true;
@@ -460,6 +467,7 @@ static void NBHM_FN(ebr_try_init)(void) {
         } while (!atomic_compare_exchange_strong(&nbhm_ebr_list, &old, &nbhm_ebr));
         NBHM__END();
     }
+    #endif
 }
 
 static void* NBHM_FN(raw_lookup)(NBHM* hs, NBHM_Table* table, uint32_t h, void* key) {

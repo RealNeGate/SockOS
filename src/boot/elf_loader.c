@@ -1,7 +1,6 @@
 
 typedef struct {
     void* entry_addr;
-    u64 virt_base;
     u64 phys_base;
     size_t size;
 } ELF_Module;
@@ -13,8 +12,7 @@ static bool elf_load(EFI_SYSTEM_TABLE* st, void* elf_base, ELF_Module *module) {
     size_t segment_size = elf_header->e_phentsize;
     size_t segment_count = elf_header->e_phnum;
     // Determine the image size
-    size_t min_vaddr = (size_t)0xffffffffffffffffull;
-    size_t max_vaddr = 0;
+    size_t image_size = 0;
     for (size_t i = 0; i < segment_count; i++) {
         Elf64_Phdr* segment = (Elf64_Phdr*) (segments + i*segment_size);
         if (segment->p_type != PT_LOAD) {
@@ -30,26 +28,21 @@ static bool elf_load(EFI_SYSTEM_TABLE* st, void* elf_base, ELF_Module *module) {
         if ((segment->p_align & (segment->p_align - 1)) != 0) {
             panic("segment must be aligned to a power-of-two\n");
         }
-        u64 segment_vstart = segment->p_vaddr;
+
         u64 segment_vend = segment->p_vaddr + segment->p_memsz;
-        if(segment_vstart < min_vaddr) {
-            min_vaddr = segment_vstart;
-        }
-        if(segment_vend > max_vaddr) {
-            max_vaddr = segment_vend;
+        if (segment_vend > image_size) {
+            image_size = segment_vend;
         }
     }
-    size_t image_size = max_vaddr - min_vaddr;
     // Allocate the memory for the image
     u8* phys_base = efi_alloc(st, image_size);
     if (phys_base == NULL) {
         panic("Failed to allocate space for kernel phys_base!\n");
     }
     // zero our pages
-    memset(phys_base, 0, image_size);
     printf("Phys addr: %X..%X\n", phys_base, phys_base + image_size);
     // Copy the segments into memory at the respective addresses in physical memory
-    u64 virt_base = min_vaddr;
+    u64 virt_base = (u64) phys_base;
     printf("Virt addr: %X\n", virt_base);
     size_t pages_used = 0;
     for (size_t i = 0; i < segment_count; i++) {
@@ -57,11 +50,16 @@ static bool elf_load(EFI_SYSTEM_TABLE* st, void* elf_base, ELF_Module *module) {
         if (segment->p_type != PT_LOAD) {
             continue;
         }
-        u64 base_offset = segment->p_vaddr - virt_base;
-        // printf("  Segment offset: %X\n", base_offset);
-        u8* dst_data = phys_base + base_offset;
+        printf("  Segment offset: %X\n", segment->p_vaddr);
+        u8* dst_data = phys_base + segment->p_vaddr;
         u8* src_data = elf + segment->p_offset;
-        memcpy(dst_data, src_data, segment->p_filesz);
+        if (segment->p_filesz > 0) {
+            memcpy(dst_data, src_data, segment->p_filesz);
+        }
+        if (segment->p_memsz > segment->p_filesz) {
+            memset(dst_data + segment->p_filesz, 0, segment->p_memsz - segment->p_filesz);
+        }
+
         // printf("Memory dump at %X:\n", dst_data);
         // memdump(dst_data, 16);
         // TODO(NeGate): set new memory protection rules
@@ -103,8 +101,7 @@ static bool elf_load(EFI_SYSTEM_TABLE* st, void* elf_base, ELF_Module *module) {
             }
         }
     }
-    module->entry_addr = (void*) elf_header->e_entry;
-    module->virt_base = virt_base;
+    module->entry_addr = phys_base + elf_header->e_entry;
     module->phys_base = (u64) phys_base;
     module->size = image_size;
     return true;

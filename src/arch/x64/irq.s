@@ -1,3 +1,4 @@
+default rel
 global irq_enable, irq_disable, asm_int_handler, syscall_handler
 global io_in8, io_in16, io_in32, io_out8, io_out16, io_out32
 extern irq_int_handler, syscall_table_count, syscall_table, boot_info
@@ -109,6 +110,8 @@ asm_int_handler:
     push r14
     push r15
 
+	mov rcx, ss
+
     ; switch to kernel PML4
     mov rsi, cr3
     mov rax, [boot_info]
@@ -123,7 +126,7 @@ asm_int_handler:
     ; sub rsp,512 + 16
 
     mov rdi, rsp
-    mov rcx, gs
+    mov rdx, gs:[0]
     call irq_int_handler
 
     ; fxrstor also needs to be aligned to 16bytes

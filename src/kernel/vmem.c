@@ -12,7 +12,7 @@ static void* kernelfl_realloc(void* obj, size_t obj_size);
 static void* kernelfl_alloc(size_t obj_size);
 static void kernelfl_free(void* obj);
 
-#define NBHM_VIRTUAL_ALLOC(size)     kernelfl_alloc(size)
+#define NBHM_VIRTUAL_ALLOC(size)     memset(kernelfl_alloc(size), 0, size)
 #define NBHM_VIRTUAL_FREE(ptr, size) kernelfl_free(ptr)
 #define NBHM_ASSERT(x) kassert(x, ":(")
 #define NBHM_REALLOC(ptr, size) kernelfl_realloc(ptr, size)
@@ -117,8 +117,6 @@ bool vmem_segfault(VMem_AddrSpace* addr_space, uintptr_t access_addr, bool is_wr
     VMem_Range* r = vmem_get_page(addr_space, access_addr);
 
     kprintf("SEGFAULT on %p!!!\n", access_addr);
-    kprintf("  %d\n", r->flags);
-
     if (r == NULL) {
         // page not nice :(
         halt();

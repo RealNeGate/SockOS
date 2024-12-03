@@ -1,4 +1,4 @@
-extern kmain, kernel_tss
+extern kmain, kernel_tss, gdt64
 global _start, kernel_idle
 
 ; We got ourselves boot info in RCX

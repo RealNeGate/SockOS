@@ -339,6 +339,7 @@ static Result memmap__view(PageTable* address_space, uintptr_t phys_addr, uintpt
     kassert(flags & 0xFFF, "invalid flags (%x)", flags);
 
     // Generate the page table mapping
+    bool is_current = address_space == x86_get_cr3();
     for (size_t i = 0; i < page_count; i++) {
         PageTable* table_l3 = get_or_alloc_pt(address_space, (virt_addr >> 39) & 0x1FF, 0, flags); // 512GiB
         PageTable* table_l2 = get_or_alloc_pt(table_l3,      (virt_addr >> 30) & 0x1FF, 1, flags); // 1GiB
@@ -346,7 +347,9 @@ static Result memmap__view(PageTable* address_space, uintptr_t phys_addr, uintpt
         size_t pte_index = (virt_addr >> 12) & 0x1FF; // 4KiB
 
         table_l1->entries[pte_index] = (phys_addr & 0xFFFFFFFFF000) | flags | PAGE_PRESENT;
-        x86_invalidate_page(virt_addr);
+        if (is_current) {
+            x86_invalidate_page(virt_addr);
+        }
 
         virt_addr += PAGE_SIZE, phys_addr += PAGE_SIZE;
     }
@@ -359,6 +362,7 @@ static void memmap__unview(PageTable* address_space, uintptr_t virt_addr, size_t
     kassert((virt_addr & 0xFFFull) == 0, "virtual address unaligned (%p)", virt_addr);
 
     // Generate the page table mapping
+    bool is_current = address_space == x86_get_cr3();
     for (size_t i = 0; i < page_count; i++, virt_addr += PAGE_SIZE) {
         PageTable* table_l3 = get_pt(address_space, (virt_addr >> 39) & 0x1FF); // 512GiB
         if (table_l3 == NULL) { continue; }
@@ -369,7 +373,9 @@ static void memmap__unview(PageTable* address_space, uintptr_t virt_addr, size_t
 
         size_t pte_index = (virt_addr >> 12) & 0x1FF; // 4KiB
         table_l1->entries[pte_index] = 0;
-        x86_invalidate_page(virt_addr);
+        if (is_current) {
+            x86_invalidate_page(virt_addr);
+        }
     }
 }
 

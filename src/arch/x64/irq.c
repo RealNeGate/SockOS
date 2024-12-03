@@ -191,11 +191,11 @@ void irq_begin_timer(void) {
 }
 
 static int times = 0;
-PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU* cpu) {
+PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU* cpu, int a) {
     u64 now = __rdtsc();
 
     if (state->interrupt_num != 32) {
-        kprintf("int %d: error=0x%x (%s)\n", state->interrupt_num, state->error, interrupt_names[state->interrupt_num]);
+        kprintf("int %d: error=0x%x\n", state->interrupt_num, state->error);
         kprintf("  rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
     }
 
@@ -275,8 +275,6 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
             u64 old_pte = curr->entries[pte_index];
             u64 new_pte = (update.translated & 0xFFFFFFFFF000) | page_flags | PAGE_PRESENT;
             atomic_compare_exchange_strong(&curr->entries[pte_index], &old_pte, new_pte);
-
-            x86_invalidate_page(virt_addr);
         } else {
             // dissassemble code
             if (memmap__translate(old_address_space, state->rip, &translated)) {
@@ -365,10 +363,7 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
         spall_begin_event(str, 0);
 
         PageTable* next_pml4 = next->parent ? next->parent->addr_space.hw_tables : boot_info->kernel_pml4;
-
         kprintf("AAA %p\n", next_pml4);
-        // dump_pages(next_pml4, 0, 0);
-
         return next_pml4;
     } else {
         halt();

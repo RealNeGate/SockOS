@@ -103,8 +103,10 @@ Env* env_create(void) {
     //   * IRQ handler
     extern void asm_int_handler(void);
     extern void syscall_handler(void);
+    extern uint64_t gdt64[];
     identity_map_kernel_region(&env->addr_space, &asm_int_handler, 4096);
     identity_map_kernel_region(&env->addr_space, &syscall_handler, 4096);
+    identity_map_kernel_region(&env->addr_space, &gdt64, 4096);
     identity_map_kernel_region(&env->addr_space, (void*) &_idt[0], sizeof(_idt));
     identity_map_kernel_region(&env->addr_space, boot_info, sizeof(BootInfo));
     identity_map_kernel_region(&env->addr_space, &boot_info, sizeof(BootInfo*));

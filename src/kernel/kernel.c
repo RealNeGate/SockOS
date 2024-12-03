@@ -128,9 +128,9 @@ void kmain(BootInfo* restrict info) {
     spall_begin_event("AAA", 0);
 
     // tiny i know
-    void* physical_stack = alloc_physical_chunk();
+    /* void* physical_stack = alloc_physical_chunk();
     thread_create(NULL, draw_background, (uintptr_t) physical_stack, CHUNK_SIZE, false);
-    /* physical_stack = alloc_physical_chunk();
+    physical_stack = alloc_physical_chunk();
     thread_create(NULL, other_guy,       (uintptr_t) physical_stack, CHUNK_SIZE, false);
     physical_stack = alloc_physical_chunk();
     thread_create(NULL, other_other_guy, (uintptr_t) physical_stack, CHUNK_SIZE, false); */

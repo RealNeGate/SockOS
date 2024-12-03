@@ -108,9 +108,6 @@ typedef struct {
 
     uintptr_t elf_physical_ptr;
 
-    // the kernel virtual memory is allocated
-    // with a simple bump allocator
-    size_t kernel_virtual_used;
     Framebuffer fb;
 
     // This is initialized by the kernel but put into
