@@ -54,7 +54,7 @@ typedef struct {
 } VMem_AddrSpace;
 
 uint32_t vmem_addrhm_hash(const void* k) {
-    uint32_t* addr = (uint32_t*) k;
+    uint32_t* addr = (uint32_t*) &k;
 
     // simplified murmur3 32-bit
     uint32_t h = 0;
@@ -72,9 +72,7 @@ uint32_t vmem_addrhm_hash(const void* k) {
 }
 
 bool vmem_addrhm_cmp(const void* a, const void* b) {
-    uintptr_t aa = *(uintptr_t*) a;
-    uintptr_t bb = *(uintptr_t*) b;
-    return aa == bb;
+    return a == b;
 }
 
 #define NBHM_FN(n) vmem_addrhm_ ## n
@@ -125,24 +123,26 @@ bool vmem_segfault(VMem_AddrSpace* addr_space, uintptr_t access_addr, bool is_wr
 
     // attempt to commit page
     void* actual_page = vmem_addrhm_get(&addr_space->commit_table, (void*) access_addr);
+    kprintf("B %p\n", actual_page);
     if (actual_page == NULL) {
         void* new_page = NULL;
         if (r->paddr != 0) {
             // we're "file" mapped, just view the address
             size_t offset = (access_addr & -PAGE_SIZE) - r->start;
             new_page = (void*) (r->paddr + offset);
-
-            kprintf("[segfault] file mapped address (%p) was accessed, paddr=%p\n", access_addr, new_page);
         } else {
             void* new_page = alloc_physical_page();
             memset(new_page, 0, PAGE_SIZE);
-
-            kprintf("[segfault] first touch on private page (%p), paddr=%p\n", access_addr, new_page);
         }
 
         actual_page = vmem_addrhm_put_if_null(&addr_space->commit_table, (void*) access_addr, new_page);
-        if (actual_page != new_page && r->paddr == 0) {
-            free_physical_chunk(new_page);
+        if (r->paddr != 0) {
+            kprintf("[segfault] file mapped address (%p) was accessed, paddr=%p\n", access_addr, new_page);
+        } else {
+            kprintf("[segfault] first touch on private page (%p), paddr=%p\n", access_addr, new_page);
+            if (actual_page != new_page) {
+                free_physical_chunk(new_page);
+            }
         }
     }
 

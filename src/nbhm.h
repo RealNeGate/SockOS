@@ -687,11 +687,16 @@ void* NBHM_FN(get)(NBHM* hm, void* key) {
 
         if (k == NULL) {
             // first time seen, maybe the entry hasn't been moved yet
-            if (prev == NULL) {
+            if (prev != NULL) {
                 v = NBHM_FN(raw_lookup)(hm, prev, h, key);
             }
-            break;
+
+            NBHM_FN(exit_pinned)();
+            NBHM__END();
+            return v;
         } else if (NBHM_FN(cmp)(k, key)) {
+            NBHM_FN(exit_pinned)();
+            NBHM__END();
             return v;
         }
 
@@ -699,9 +704,7 @@ void* NBHM_FN(get)(NBHM* hm, void* key) {
         i = (i == cap-1) ? 0 : i + 1;
     } while (i != first);
 
-    NBHM_FN(exit_pinned)();
-    NBHM__END();
-    return v;
+    NBHM_ASSERT(0);
 }
 
 void* NBHM_FN(put_if_null)(NBHM* hm, void* key, void* val) {
