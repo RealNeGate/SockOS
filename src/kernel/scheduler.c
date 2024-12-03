@@ -58,8 +58,6 @@ static Thread* tq_advance(ThreadQueue* tq) {
 
 #define kprintf
 void sched_wait(Thread* t, u64 timeout) {
-    kprintf("QQQ\n");
-
     PerCPU_Scheduler* sched = cpu_get()->sched;
     kassert(sched->active.curr == t, "wtf?");
 

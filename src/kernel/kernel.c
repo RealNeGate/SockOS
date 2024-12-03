@@ -127,6 +127,8 @@ void kmain(BootInfo* restrict info) {
     spall_header();
     spall_begin_event("AAA", 0);
 
+    kprintf("  SYS %p %p\n\n", syscall_table[SYS_sleep], syscall_sleep);
+
     // tiny i know
     /* void* physical_stack = alloc_physical_chunk();
     thread_create(NULL, draw_background, (uintptr_t) physical_stack, CHUNK_SIZE, false);

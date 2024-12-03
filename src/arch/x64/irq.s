@@ -110,7 +110,10 @@ asm_int_handler:
     push r14
     push r15
 
-	mov rcx, ss
+    ; stack segment seems to be set to 0 on interrupts, let's
+    ; just set it back to the kernel DS selector
+    mov ax, 0x10
+    mov ss, ax
 
     ; switch to kernel PML4
     mov rsi, cr3
@@ -219,6 +222,7 @@ syscall_handler.has_syscall:
 
     ; run C syscall stuff & preserve old address space (in callee saved reg)
     mov rdi, rsp
+    mov rdx, gs:[0]
     call rcx
 
     ; switch to new address space

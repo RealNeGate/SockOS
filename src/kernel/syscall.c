@@ -1,8 +1,8 @@
 ////////////////////////////////
 // Syscall table
 ////////////////////////////////
-#define SYS_FN(name) static PageTable* syscall_ ## name(CPUState* state, PageTable* old_address_space)
-typedef PageTable* SyscallFn(CPUState* state, PageTable* old_address_space);
+#define SYS_FN(name) static PageTable* syscall_ ## name(CPUState* state, PageTable* old_address_space, PerCPU* cpu)
+typedef PageTable* SyscallFn(CPUState* state, PageTable* old_address_space, PerCPU* cpu);
 
 typedef enum {
     #define X(name, ...) SYS_ ## name,
@@ -12,7 +12,7 @@ typedef enum {
 } SyscallNum;
 
 // forward decls
-#define X(name, ...) static PageTable* syscall_ ## name (CPUState*, PageTable*);
+#define X(name, ...) static PageTable* syscall_ ## name (CPUState*, PageTable*, PerCPU*);
 #include "syscall_table.h"
 
 SyscallFn* syscall_table[] = {
@@ -36,7 +36,6 @@ size_t syscall_table_count = SYS_MAX;
 // Syscall table
 ////////////////////////////////
 SYS_FN(sleep) {
-    PerCPU* cpu = get_percpu();
     kprintf("SYS_sleep(%p, %d us)\n", cpu->current_thread, SYS_PARAM0);
 
     sched_wait(cpu->current_thread, SYS_PARAM0);
@@ -46,7 +45,6 @@ SYS_FN(sleep) {
 }
 
 SYS_FN(exit_group) {
-    PerCPU* cpu = get_percpu();
     Env* group = cpu->current_thread->parent;
     kprintf("SYS_exit_group(%p, %d)\n", group, SYS_PARAM0);
 

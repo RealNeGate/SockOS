@@ -90,8 +90,8 @@ static bool elf_load(EFI_SYSTEM_TABLE* st, void* elf_base, ELF_Module *module) {
             Elf64_Rela* rela = &relocs[j];
             u8 type = ELF64_R_TYPE(rela->r_info);
             if (type == R_X86_64_RELATIVE) {
-                size_t reloc_offset = rela->r_offset - virt_base;
-                size_t reloc_addend = rela->r_addend - virt_base;
+                size_t reloc_offset = rela->r_offset;
+                size_t reloc_addend = rela->r_addend;
                 u64 patch_address = (u64)(phys_base + reloc_offset);
                 u64 resolved_address = (u64)(virt_base + reloc_addend);
                 // printf("  Reloc: [%X] = %X\n", patch_address, resolved_address);

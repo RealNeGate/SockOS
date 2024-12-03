@@ -41,7 +41,22 @@ typedef struct {
     size_t psize;
 } VMem_Range;
 
+// bottom bit means there's an exclusive lock.
+typedef _Atomic(uint32_t) RWLock;
+
 typedef struct {
+    // read-write lock is needed since multiple "forward progress" modifications can occur at once, while only
+    // one "backwards progress" can occur exclusively.
+    //
+    //   "forward progress" in this context means the modification to the page table will produce at the same
+    //   or less segfaults as the old form, the reason this is important is because it means we can hide the
+    //   act of TLB updates and invalidation behind segfaults if a core were to see an out-dated view of the page
+    //   table. A simple example
+    //
+    //   "backwards progress" requires everyone to acknowledge the changes. For instance, unmapping a page requires everyone
+    //   to acknowledge it or else the data might be corrupted, miss an important segfault.
+    RWLock lock;
+
     // TODO(NeGate): interval trees
     size_t range_count;
     VMem_Range ranges[16];
@@ -79,6 +94,31 @@ bool vmem_addrhm_cmp(const void* a, const void* b) {
 #define NBHM_IMPL
 #include <nbhm.h>
 
+void rwlock_lock_shared(RWLock* lock) {
+    uint32_t old;
+    do {
+        old = atomic_load_explicit(lock, memory_order_acquire);
+        // spin lock until exclusive hold is gone
+        if (old == 1) { continue; }
+        // if there's no hold, let's take it (or if there's one we should tick up)
+    } while (!atomic_compare_exchange_strong(lock, &old, old + 2));
+}
+
+void rwlock_unlock_shared(RWLock* lock) {
+    atomic_fetch_sub_explicit(lock, 2, memory_order_acq_rel);
+}
+
+void rwlock_lock_exclusive(RWLock* lock) {
+    while (!atomic_compare_exchange_strong(lock, &(uint32_t){ 0 }, 1)) {
+        // spin lock...
+        asm volatile ("pause");
+    }
+}
+
+void rwlock_unlock_exclusive(RWLock* lock) {
+    atomic_store_explicit(lock, 0, memory_order_release);
+}
+
 VMem_Range* vmem_add_range(VMem_AddrSpace* addr_space, uintptr_t vaddr, size_t vsize, uintptr_t paddr, size_t psize, VMem_Flags flags) {
     kassert((vaddr & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", vaddr);
     kassert((vsize & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", vsize);
@@ -102,7 +142,7 @@ typedef struct {
 
 static VMem_Range* vmem_get_page(VMem_AddrSpace* addr_space, uintptr_t addr) {
     for (size_t i = 0; i < addr_space->range_count; i++) {
-        if (addr_space->ranges[i].start >= addr && addr < addr_space->ranges[i].end) {
+        if (addr >= addr_space->ranges[i].start && addr < addr_space->ranges[i].end) {
             return &addr_space->ranges[i];
         }
     }
@@ -114,16 +154,13 @@ static _Alignas(4096) const uint8_t VMEM_ZERO_PAGE[4096];
 bool vmem_segfault(VMem_AddrSpace* addr_space, uintptr_t access_addr, bool is_write, VMem_PTEUpdate* out_update) {
     VMem_Range* r = vmem_get_page(addr_space, access_addr);
 
-    kprintf("SEGFAULT on %p!!!\n", access_addr);
     if (r == NULL) {
         // page not nice :(
-        halt();
         return false;
     }
 
     // attempt to commit page
     void* actual_page = vmem_addrhm_get(&addr_space->commit_table, (void*) access_addr);
-    kprintf("B %p\n", actual_page);
     if (actual_page == NULL) {
         void* new_page = NULL;
         if (r->paddr != 0) {
@@ -137,9 +174,9 @@ bool vmem_segfault(VMem_AddrSpace* addr_space, uintptr_t access_addr, bool is_wr
 
         actual_page = vmem_addrhm_put_if_null(&addr_space->commit_table, (void*) access_addr, new_page);
         if (r->paddr != 0) {
-            kprintf("[segfault] file mapped address (%p) was accessed, paddr=%p\n", access_addr, new_page);
+            kprintf("[vmem] first touch on file mapped address (%p), paddr=%p\n", access_addr, new_page);
         } else {
-            kprintf("[segfault] first touch on private page (%p), paddr=%p\n", access_addr, new_page);
+            kprintf("[vmem] first touch on private page (%p), paddr=%p\n", access_addr, new_page);
             if (actual_page != new_page) {
                 free_physical_chunk(new_page);
             }
