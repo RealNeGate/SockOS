@@ -53,6 +53,22 @@ inline static size_t align_up(size_t a, size_t b) {
     return a + (b - (a % b)) % b;
 }
 
+static PageTable* get_or_alloc(PageTableContext* ctx, PageTable* table, int index) {
+    if (table->entries[index] == 0) {
+        if (ctx->used + 1 >= ctx->capacity) {
+            panic("Fuck!\n");
+        }
+
+        PageTable* new_table = &ctx->tables[ctx->used++];
+        memset(new_table, 0, sizeof(PageTable));
+
+        table->entries[index] = ((u64)new_table) | 3;
+        return new_table;
+    } else {
+        return (PageTable*)(table->entries[index] & 0xFFFFFFFFF000);
+    }
+}
+
 static void map_pages(PageTableContext* ctx, u64 virt_addr, u64 phys_addr, u64 page_count) {
     PageTable* address_space = &ctx->tables[0];
     if ((phys_addr | virt_addr) & 0xFFFull) {
@@ -61,65 +77,16 @@ static void map_pages(PageTableContext* ctx, u64 virt_addr, u64 phys_addr, u64 p
 
     for (size_t i = 0; i < page_count; i++) {
         // Generate the page table mapping
-        u64 pml4_index  = (virt_addr >> 39) & 0x1FF; // 512GB
-        u64 pdpte_index = (virt_addr >> 30) & 0x1FF; // 1GB
-        u64 pde_index   = (virt_addr >> 21) & 0x1FF; // 2MB
         u64 pte_index   = (virt_addr >> 12) & 0x1FF; // 4KB
 
-        // 512GB
-        PageTable* table_l3;
-        if (address_space->entries[pml4_index] == 0) {
-            // Allocate new L4 entry
-            if (ctx->used + 1 >= ctx->capacity) {
-                panic("Fuck L4!\n");
-            }
-
-            table_l3 = &ctx->tables[ctx->used++];
-            memset(table_l3, 0, sizeof(PageTable));
-
-            address_space->entries[pml4_index] = ((u64)table_l3) | 3;
-        } else {
-            // Used the bits 51:12 as the table address
-            table_l3 = (PageTable*)(address_space->entries[pml4_index] & 0xFFFFFFFFF000);
-        }
-
-        // 1GB
-        PageTable* table_l2;
-        if (table_l3->entries[pdpte_index] == 0) {
-            // Allocate new L3 entry
-            if (ctx->used + 1 >= ctx->capacity) {
-                panic("Fuck L3!\n");
-            }
-
-            table_l2 = &ctx->tables[ctx->used++];
-            memset(table_l2, 0, sizeof(PageTable));
-
-            table_l3->entries[pdpte_index] = ((u64)table_l2) | 3;
-        } else {
-            // Used the bits 51:12 as the table address
-            table_l2 = (PageTable*)(table_l3->entries[pdpte_index] & 0xFFFFFFFFF000);
-        }
-
-        // 2MB
-        PageTable* table_l1;
-        if (table_l2->entries[pde_index] == 0) {
-            // Allocate new L2 entry
-            if (ctx->used + 1 >= ctx->capacity) {
-                panic("Fuck L2!\n");
-            }
-
-            table_l1 = &ctx->tables[ctx->used++];
-            memset(table_l1, 0, sizeof(PageTable));
-
-            table_l2->entries[pde_index] = ((u64)table_l1) | 3;
-        } else {
-            // Used the bits 51:12 as the table address
-            table_l1 = (PageTable*)(table_l2->entries[pde_index] & 0xFFFFFFFFF000);
-        }
+        PageTable* curr = address_space;
+        curr = get_or_alloc(ctx, curr, (virt_addr >> 39) & 0x1FF); // 512GB
+        curr = get_or_alloc(ctx, curr, (virt_addr >> 30) & 0x1FF); // 1GB
+        curr = get_or_alloc(ctx, curr, (virt_addr >> 21) & 0x1FF); // 2MB
 
         // 4KB
         // | 3 is because we make the pages both PRESENT and WRITABLE
-        table_l1->entries[pte_index] = (phys_addr & 0xFFFFFFFFF000) | 3;
+        curr->entries[pte_index] = (phys_addr & 0xFFFFFFFFF000) | 3;
         phys_addr += PAGE_SIZE;
         virt_addr += PAGE_SIZE;
     }
@@ -333,7 +300,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         }
 
         EFI_FILE* kernel_file;
-        status = fs_root->Open(fs_root, &kernel_file, (i16*)KERNEL_FILENAME, EFI_FILE_MODE_READ, 0);
+        status = fs_root->Open(fs_root, &kernel_file, (i16*)KERNEL_FILENAME, EFI_FILE_MODE_READ, EFI_FILE_READ_ONLY);
         if (status != 0) {
             panic("Failed to open kernel file!\nStatus: %X\n", status);
         }
@@ -429,12 +396,31 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         }
     }
 
+    boot_info.identity_map_ptr = (kernel_module.virt_base + kernel_module.size + 0x40000000 - 1) & -0x40000000;
+    printf("Identity map @ %X\n", boot_info.identity_map_ptr);
+
     // Generate the page tables
     // Map everything in the memory map that's ever been allocated
     for(int i = 0; i != mem_map.nregions; ++i) {
         MemRegion region = mem_map.regions[i];
-        map_pages_id(&ctx, region.base, region.pages);
+
+        // mirror the kernel into the higher half
+        if(region.base == kernel_module.phys_base) {
+            if(region.type != MEM_REGION_KERNEL) {
+                panic("Something bad is located at kernel's paddr");
+            }
+            // printf("Making a map %X -> %X (%X pages)\n", kernel_module.virt_base, region.base, region.pages);
+            map_pages(&ctx, kernel_module.virt_base, region.base, region.pages);
+        }
+
+        printf("  Making a map %X -> %X (%X pages)\n", boot_info.identity_map_ptr + region.base, region.base, region.pages);
+        map_pages(&ctx, boot_info.identity_map_ptr + region.base, region.base, region.pages);
     }
+
+    // Map the loader's trampoline page in, when loader.s installs the new address space we need the
+    // code there to stick around long enough to jump away.
+    printf("  Making trampoline mapping %X\n", kernel_module.phys_base + kernel_module.entry_addr);
+    map_pages_id(&ctx, kernel_module.phys_base + kernel_module.entry_addr, 1);
 
     // memset(framebuffer, 0, framebuffer_stride * framebuffer_height * sizeof(u32));
     for (size_t j = 0; j < 50; j++) {
@@ -461,8 +447,9 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     memdump(tss, 16);
     #endif
 
-    printf("Jumping to the kernel: %X (sp=%X)\n", kernel_module.entry_addr, kstack_end);
+    boot_info.elf_virtual_ptr = kernel_module.virt_base;
     boot_info.elf_physical_ptr = kernel_module.phys_base;
+    boot_info.elf_mapped_size = kernel_module.size;
     boot_info.fb = fb;
     boot_info.mem_map = mem_map;
     boot_info.kernel_pml4 = &page_tables[0];
@@ -473,13 +460,10 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     sp[0] = KERNEL_STACK_COOKIE;
     sp[1] = 0;
 
-    // transition to kernel page table
-    #ifdef USE_INTRIN
-    writecr3((uintptr_t) boot_info.kernel_pml4);
-    #else
-    asm volatile("mov cr3, %0" ::"r" (boot_info.kernel_pml4) : "memory");
-    #endif
+    LoaderFunction loader = (LoaderFunction) (boot_info.elf_physical_ptr + kernel_module.entry_addr);
+    printf("Jumping to the kernel: %X (sp=%X)\n", loader, kstack_end);
 
-    ((LoaderFunction) kernel_module.entry_addr)(&boot_info, kstack_end, tss[0], tss[1]);
+    boot_info.elf_virtual_entry = boot_info.elf_virtual_ptr + kernel_module.entry_addr;
+    loader(&boot_info, kstack_end, tss[0], tss[1]);
     return 0;
 }

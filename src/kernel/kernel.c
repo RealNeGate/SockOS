@@ -7,6 +7,10 @@
 BootInfo* boot_info;
 static u16 cursor;
 
+// our identity map is somewhere in the higher half
+static void* paddr2kaddr(uintptr_t p) { return (void*) (boot_info->identity_map_ptr + p); }
+static uintptr_t kaddr2paddr(void* p) { return (uintptr_t) p - boot_info->identity_map_ptr; }
+
 // core components
 #include "str.c"
 
@@ -98,10 +102,13 @@ void kmain(BootInfo* restrict info) {
     boot_info = info;
     boot_info->cores[0].self = &boot_info->cores[0];
 
-    kprintf("Beginning kernel boot...\n");
+    // convert pointers into kernel addresses
+    boot_info->kernel_pml4 = paddr2kaddr((uintptr_t) boot_info->kernel_pml4);
+    for (size_t i = 0; i < boot_info->mem_map.nregions; i++) {
+        boot_info->mem_map.regions[i].base = (uintptr_t) paddr2kaddr(boot_info->mem_map.regions[i].base);
+    }
 
-    // unmap the bottom 64KiB
-    memmap__unview(boot_info->kernel_pml4, 0, 65536);
+    kprintf("Beginning kernel boot... PML4=%p\n", boot_info->kernel_pml4);
 
     if (!has_cpu_support()) {
         panic("Here's a nickel, kid. Buy yourself a computer.\n");
@@ -126,8 +133,6 @@ void kmain(BootInfo* restrict info) {
 
     spall_header();
     spall_begin_event("AAA", 0);
-
-    kprintf("  SYS %p %p\n\n", syscall_table[SYS_sleep], syscall_sleep);
 
     // tiny i know
     /* void* physical_stack = alloc_physical_chunk();

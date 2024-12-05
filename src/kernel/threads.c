@@ -13,6 +13,8 @@ struct Env {
 
     Thread* first_in_env;
     Thread* last_in_env;
+
+    // Handle table
 };
 
 struct Thread {

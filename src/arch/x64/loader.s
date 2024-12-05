@@ -2,7 +2,8 @@ extern kmain, kernel_tss, gdt64
 global _start, kernel_idle
 
 ; We got ourselves boot info in RCX
-section text
+section .text
+align 4096
 _start:
     ; switch to new kernel stack
     mov rsp, rdx
@@ -11,6 +12,21 @@ _start:
     ; write TSS address (R9:R8)
     mov qword [rel gdt64.tss], r8
     mov qword [rel gdt64.tss + 8], r9
+
+    ; switch page tables
+    mov rax, [rcx + 0]
+    mov rdx, [rcx + 8]
+    mov r8,  [rcx + 16]
+    mov cr3, rax
+
+    ; jump to the higher-half form of kmain
+    lea rax, [_start.transition - _start]
+    add rax, rdx
+    jmp rax
+_start.transition:
+    ; move pointers up
+    add rcx, r8
+    add rsp, r8
 
     ; setup GDT descriptor
     lea rax, qword [rel gdt64]
@@ -40,7 +56,7 @@ kernel_idle:
     hlt
     jmp kernel_idle
 
-section data
+section .data
 far_jumper:
     dq 0 ; filled in at runtime
     dw 0x08

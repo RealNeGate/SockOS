@@ -2,6 +2,9 @@
 
 #define KERNEL_VIRTUAL_BASE 0xC0000000
 
+// Physical address
+typedef struct { uintptr_t raw; } PAddr;
+
 typedef struct {
     u32  width, height;
     u32  stride; // in pixels
@@ -94,7 +97,11 @@ struct PerCPU {
 
 // This is all the crap we throw into the loader
 typedef struct {
-    PageTable* kernel_pml4; // mostly identity mapped
+    PageTable* kernel_pml4;
+    uintptr_t elf_virtual_entry;
+    // identity map starts somewhere after the
+    // ELF's loaded position (aligned to 1GiB).
+    uintptr_t identity_map_ptr;
 
     u64 lapic_base;
     u64 tsc_freq;
@@ -106,7 +113,9 @@ typedef struct {
     void* rsdp;
     MemMap mem_map;
 
+    uintptr_t elf_virtual_ptr;
     uintptr_t elf_physical_ptr;
+    size_t elf_mapped_size;
 
     Framebuffer fb;
 
@@ -117,8 +126,9 @@ typedef struct {
 
 // loader.s & irq.s needs these to be here
 _Static_assert(offsetof(BootInfo, kernel_pml4) == 0, "the loader is sad");
+_Static_assert(offsetof(BootInfo, elf_virtual_entry) == 8, "the loader is sad");
+_Static_assert(offsetof(BootInfo, identity_map_ptr) == 16, "the loader is sad");
 _Static_assert(offsetof(PerCPU, kernel_stack_top) == 16, "the irq.s & bootstrap.s is sad");
 _Static_assert(offsetof(PerCPU, user_stack_scratch) == 24, "the irq.s is sad");
 
 PerCPU* cpu_get(void);
-

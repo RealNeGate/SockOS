@@ -1,6 +1,7 @@
 
 typedef struct {
-    void* entry_addr;
+    u64 entry_addr;
+    u64 virt_base;
     u64 phys_base;
     size_t size;
 } ELF_Module;
@@ -42,7 +43,7 @@ static bool elf_load(EFI_SYSTEM_TABLE* st, void* elf_base, ELF_Module *module) {
     // zero our pages
     printf("Phys addr: %X..%X\n", phys_base, phys_base + image_size);
     // Copy the segments into memory at the respective addresses in physical memory
-    u64 virt_base = (u64) phys_base;
+    u64 virt_base = 0xFFFFFF8000000000;
     printf("Virt addr: %X\n", virt_base);
     size_t pages_used = 0;
     for (size_t i = 0; i < segment_count; i++) {
@@ -101,8 +102,9 @@ static bool elf_load(EFI_SYSTEM_TABLE* st, void* elf_base, ELF_Module *module) {
             }
         }
     }
-    module->entry_addr = phys_base + elf_header->e_entry;
+    module->entry_addr = elf_header->e_entry;
     module->phys_base = (u64) phys_base;
+    module->virt_base = virt_base;
     module->size = image_size;
     return true;
 }

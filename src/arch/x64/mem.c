@@ -126,6 +126,9 @@ static PerCPU* get_percpu(void) {
 }
 
 static void init_physical_page_alloc(MemMap* restrict mem_map) {
+    kprintf("MemMap: %p\n", mem_map);
+    kprintf("* %p\n", mem_map->regions[0].base);
+
     size_t total_chunks = 0;
     int biggest = -1;
     FOREACH_N(i, 0, mem_map->nregions) {
@@ -157,8 +160,8 @@ static void init_physical_page_alloc(MemMap* restrict mem_map) {
 
         int aa = (region->pages*PAGE_SIZE) / (1024*1024);
 
-        uintptr_t base = region->base;
-        uintptr_t end  = (region->base + region->pages*PAGE_SIZE) & -CHUNK_SIZE;
+        uintptr_t base = boot_info->identity_map_ptr + region->base;
+        uintptr_t end  = (base + region->pages*PAGE_SIZE) & -CHUNK_SIZE;
 
         // chop off 10% of the biggest memory region for the kernel heap
         if (biggest == i) {
@@ -303,7 +306,7 @@ static u64 canonical_addr(u64 ptr) {
 
 static PageTable* get_pt(PageTable* parent, size_t index) {
     if (parent->entries[index] & PAGE_PRESENT) {
-        return (PageTable*) canonical_addr(parent->entries[index] & 0xFFFFFFFFF000ull);
+        return paddr2kaddr(canonical_addr(parent->entries[index] & 0xFFFFFFFFF000ull));
     } else {
         return NULL;
     }
@@ -311,23 +314,16 @@ static PageTable* get_pt(PageTable* parent, size_t index) {
 
 static PageTable* get_or_alloc_pt(PageTable* parent, size_t index, int depth, PageFlags flags) {
     if (parent->entries[index] & PAGE_PRESENT) {
-        // for (int i = 0; i < depth; i++) kprintf("  ");
-        // kprintf("Get old page %x (%x)\n", index, (int) (uintptr_t) parent);
-
         if (flags) {
             parent->entries[index] |= flags;
         }
 
-        return (PageTable*) canonical_addr(parent->entries[index] & 0xFFFFFFFFF000ull);
+        return paddr2kaddr(canonical_addr(parent->entries[index] & 0xFFFFFFFFF000ull));
     }
-
-    // Allocate new page entry
-    // for (int i = 0; i < depth; i++) kprintf("  ");
-    // kprintf("Alloc new page %x (%x)\n", index, (int) (uintptr_t) parent);
 
     PageTable* new_pt = alloc_physical_page();
     kassert(((uintptr_t) new_pt & 0xFFF) == 0, "page tables must be 4KiB aligned");
-    parent->entries[index] = ((u64) new_pt) | flags | PAGE_PRESENT;
+    parent->entries[index] = kaddr2paddr(new_pt) | flags | PAGE_PRESENT;
     return new_pt;
 }
 
@@ -339,7 +335,7 @@ static Result memmap__view(PageTable* address_space, uintptr_t phys_addr, uintpt
     kassert(flags & 0xFFF, "invalid flags (%x)", flags);
 
     // Generate the page table mapping
-    bool is_current = address_space == x86_get_cr3();
+    bool is_current = kaddr2paddr(address_space) == x86_get_cr3();
     for (size_t i = 0; i < page_count; i++) {
         PageTable* table_l3 = get_or_alloc_pt(address_space, (virt_addr >> 39) & 0x1FF, 0, flags); // 512GiB
         PageTable* table_l2 = get_or_alloc_pt(table_l3,      (virt_addr >> 30) & 0x1FF, 1, flags); // 1GiB
@@ -362,7 +358,7 @@ static void memmap__unview(PageTable* address_space, uintptr_t virt_addr, size_t
     kassert((virt_addr & 0xFFFull) == 0, "virtual address unaligned (%p)", virt_addr);
 
     // Generate the page table mapping
-    bool is_current = address_space == x86_get_cr3();
+    bool is_current = kaddr2paddr(address_space) == x86_get_cr3();
     for (size_t i = 0; i < page_count; i++, virt_addr += PAGE_SIZE) {
         PageTable* table_l3 = get_pt(address_space, (virt_addr >> 39) & 0x1FF); // 512GiB
         if (table_l3 == NULL) { continue; }

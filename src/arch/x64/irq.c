@@ -174,7 +174,7 @@ void irq_startup(int core_id) {
 
     IDT idt;
     idt.limit = sizeof(_idt) - 1;
-    idt.base = (uintptr_t)_idt;
+    idt.base = (uintptr_t) _idt;
     irq_enable(&idt);
 }
 
@@ -190,8 +190,9 @@ void irq_begin_timer(void) {
     APIC(0x3E0) = 0b1011;
 }
 
-PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU* cpu) {
+uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
     u64 now = __rdtsc();
+    PageTable* old_address_space = paddr2kaddr(cr3);
 
     if (state->interrupt_num != 32) {
         kprintf("int %d: error=0x%x\n", state->interrupt_num, state->error);
@@ -299,7 +300,7 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
         }
 
         rwlock_unlock_shared(&addr_space->lock);
-        return old_address_space;
+        return cr3;
     } else if (state->interrupt_num == 32) {
         if (calibrating_apic_timer) {
             apic_freq = (now - apic_freq) / APIC_CALIBRATION_TICKS;
@@ -338,7 +339,7 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
             spall_begin_event("sleep", 0);
             *state = kernel_idle_state;
             cpu->current_thread = NULL;
-            return boot_info->kernel_pml4;
+            return kaddr2paddr(boot_info->kernel_pml4);
         }
 
         // do thread context switch, if we changed
@@ -349,7 +350,6 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
             cpu->current_thread = next;
         } else {
             kprintf("  >> STAY %p (for %d ms, %d ticks) <<\n\n", cpu->current_thread, until_wake / 1000, micros_to_apic_time(until_wake));
-            kprintf("  rip=%p\n", state->rip);
         }
 
         // send EOI
@@ -371,10 +371,10 @@ PageTable* irq_int_handler(CPUState* state, PageTable* old_address_space, PerCPU
         spall_begin_event(str, 0);
 
         PageTable* next_pml4 = next->parent ? next->parent->addr_space.hw_tables : boot_info->kernel_pml4;
-        return next_pml4;
+        return kaddr2paddr(next_pml4);
     } else {
         halt();
-        return old_address_space;
+        return cr3;
     }
 }
 

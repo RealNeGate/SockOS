@@ -27,10 +27,10 @@ static inline u64 x86_get_cr2(void) {
     return result;
 }
 
-static inline PageTable* x86_get_cr3(void) {
+static inline u64 x86_get_cr3(void) {
     u64 result;
     asm volatile ("mov %q0, cr3" : "=a" (result));
-    return (PageTable*) result;
+    return result;
 }
 
 // IO Ports on x86
