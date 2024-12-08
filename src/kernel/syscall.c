@@ -37,7 +37,7 @@ size_t syscall_table_count = SYS_MAX;
 ////////////////////////////////
 SYS_FN(sleep) {
     PageTable* old_address_space = paddr2kaddr(cr3);
-    kprintf("SYS_sleep(%p, %d us)\n", cpu->current_thread, SYS_PARAM0);
+    //kprintf("SYS_sleep(%p, %d us)\n", cpu->current_thread, SYS_PARAM0);
 
     sched_wait(cpu->current_thread, SYS_PARAM0);
 
@@ -49,7 +49,7 @@ SYS_FN(sleep) {
 
 // vaddr paddr size
 SYS_FN(mmap) {
-    kprintf("SYS_mmap(vaddr:%p, paddr:%p, pages:%d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2);
+    //kprintf("SYS_mmap(vaddr:%p, paddr:%p, pages:%d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2);
     vmem_add_range(&cpu->current_thread->parent->addr_space, SYS_PARAM0, SYS_PARAM2, SYS_PARAM1, SYS_PARAM2, VMEM_PAGE_READ | VMEM_PAGE_WRITE | VMEM_PAGE_USER);
     return cr3;
 }

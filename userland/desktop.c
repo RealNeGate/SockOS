@@ -34,7 +34,7 @@ int _start(void) {
             }
         }
 
-        syscall(SYS_sleep, 50*1000);
+        syscall(SYS_sleep, 16*1000);
         mult += 1;
     }
     return 0;

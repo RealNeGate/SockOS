@@ -194,8 +194,8 @@ uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
     u64 now = __rdtsc();
     PageTable* old_address_space = paddr2kaddr(cr3);
 
-    if (1 || state->interrupt_num != 32) {
-        kprintf("int %d: error=0x%x\n", state->interrupt_num, state->error);
+    if (state->interrupt_num != 32) {
+        kprintf("%s (%d): error=0x%x\n", interrupt_names[state->interrupt_num], state->interrupt_num, state->error);
         kprintf("  rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
     }
 
@@ -329,7 +329,7 @@ uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
         }
 
         if (next == NULL) {
-            kprintf("  >> IDLE! (for %d ms, %d ticks) <<\n", until_wake / 1000, micros_to_apic_time(until_wake));
+            //kprintf("  >> IDLE! (for %d ms, %d ticks) <<\n", until_wake / 1000, micros_to_apic_time(until_wake));
 
             // send EOI
             APIC(0xB0) = 0;
@@ -344,12 +344,12 @@ uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
 
         // do thread context switch, if we changed
         if (cpu->current_thread != next) {
-            kprintf("  >> SWITCH %p -> %p (for %d ms, %d ticks) <<\n\n", cpu->current_thread, next, until_wake / 1000, micros_to_apic_time(until_wake));
+            //kprintf("  >> SWITCH %p -> %p (for %d ms, %d ticks) <<\n\n", cpu->current_thread, next, until_wake / 1000, micros_to_apic_time(until_wake));
 
             *state = next->state;
             cpu->current_thread = next;
         } else {
-            kprintf("  >> STAY %p (for %d ms, %d ticks) <<\n\n", cpu->current_thread, until_wake / 1000, micros_to_apic_time(until_wake));
+            //kprintf("  >> STAY %p (for %d ms, %d ticks) <<\n\n", cpu->current_thread, until_wake / 1000, micros_to_apic_time(until_wake));
         }
 
         // send EOI
