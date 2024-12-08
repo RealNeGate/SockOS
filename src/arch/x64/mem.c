@@ -37,6 +37,13 @@ static KernelFreeList* kernelfl_next(KernelFreeList* n) {
     return n->has_next ? (KernelFreeList*) &n->data[n->size - sizeof(KernelFreeList)] : NULL;
 }
 
+static void kernelfl_dump(void) {
+    kprintf("[kheap] dump\n");
+    for (KernelFreeList* list = kernel_free_list; list; list = kernelfl_next(list)) {
+        kprintf("        %p size=%d (%s)\n", &list->data[0], list->size, list->is_free ? "free" : "used");
+    }
+}
+
 static void* kernelfl_alloc(size_t obj_size) {
     // add free list header and 8b padding
     obj_size = (obj_size + 7) & ~7;
@@ -49,20 +56,25 @@ static void* kernelfl_alloc(size_t obj_size) {
                 list->is_free = false;
 
                 kprintf("[kheap] alloc(%d) = %p\n", obj_size, &list->data[0]);
+                kernelfl_dump();
                 return &list->data[0];
             } else if (list->size > obj_size) {
                 size_t full_size = list->size;
 
                 // split
+                bool had_next = list->has_next;
                 KernelFreeList* split = (KernelFreeList*) &list->data[obj_size - sizeof(KernelFreeList)];
-                list->is_free = false;
+                list->is_free  = false;
+                list->has_next = true;
                 list->size = obj_size;
 
                 split->size = full_size - obj_size;
-                split->is_free = false;
+                split->has_next = had_next;
+                split->is_free = true;
                 split->prev = list;
 
                 kprintf("[kheap] alloc(%d) = %p\n", obj_size, &list->data[0]);
+                kernelfl_dump();
                 return &list->data[0];
             }
         }
