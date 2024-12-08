@@ -51,50 +51,6 @@ static void free_physical_page(void* ptr);
 #define STR2(x) #x
 #define STR(x) STR2(x)
 
-static int draw_background(void *arg) {
-    u8 mult = 0;
-
-    for (;;) {
-        // spall_begin_event("draw", 1);
-        u64 gradient_x = (boot_info->fb.width + 255) / 256;
-        u64 gradient_y = (boot_info->fb.height + 255) / 256;
-
-        for (size_t j = 0; j < boot_info->fb.height; j++) {
-            u32 g = ((j / gradient_y) / 2) + 0x7F;
-            g = (g + mult) & 0xFF;
-
-            for (size_t i = 0; i < boot_info->fb.width; i++) {
-                u32 b = ((i / gradient_x) / 2) + 0x7F;
-                b = (b + mult) & 0xFF;
-
-                boot_info->fb.pixels[i + (j * boot_info->fb.stride)] = 0xFF000000 | (g << 16) | (b << 8);
-            }
-        }
-
-        kprintf("A\n");
-        // spall_end_event(1);
-
-        sched_wait(boot_info->cores[0].current_thread, 50000);
-        thread_yield();
-
-        mult += 1;
-    }
-}
-
-static int other_guy(void *arg) {
-    for (;;) {
-        kprintf("A");
-    }
-    return 0;
-}
-
-static int other_other_guy(void *arg) {
-    for (;;) {
-        kprintf("B");
-    }
-    return 0;
-}
-
 // loader.s
 extern int kernel_idle(void* arg);
 
@@ -133,14 +89,6 @@ void kmain(BootInfo* restrict info) {
 
     spall_header();
     spall_begin_event("AAA", 0);
-
-    // tiny i know
-    /* void* physical_stack = alloc_physical_chunk();
-    thread_create(NULL, draw_background, (uintptr_t) physical_stack, CHUNK_SIZE, false);
-    physical_stack = alloc_physical_chunk();
-    thread_create(NULL, other_guy,       (uintptr_t) physical_stack, CHUNK_SIZE, false);
-    physical_stack = alloc_physical_chunk();
-    thread_create(NULL, other_other_guy, (uintptr_t) physical_stack, CHUNK_SIZE, false); */
     spall_end_event(0);
 
     kprintf("GPU: %p (%d * %d), stride=%d\n", boot_info->fb.pixels, boot_info->fb.width, boot_info->fb.height, boot_info->fb.stride);

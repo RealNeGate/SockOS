@@ -26,20 +26,40 @@ typedef enum {
     VMEM_PAGE_USER   = 1u << 3u,
 } VMem_Flags;
 
+// B tree nodes
+enum {
+    VMEM_NODE_DEGREE   = 8,
+    VMEM_NODE_MAX_KEYS = VMEM_NODE_DEGREE*2 - 1,
+    VMEM_NODE_MAX_VALS = VMEM_NODE_DEGREE*2,
+};
+
 typedef struct {
     uint64_t valid : 1;
     uint64_t flags : 7;
+    // file mapping info
+    uintptr_t file_ptr : 56;
+    // virtual range
+    size_t size;
 } VMem_PageDesc;
 
-typedef struct {
-    // [start, end)
-    size_t start, end;
-    VMem_Flags flags;
+typedef struct VMem_Node VMem_Node;
+struct VMem_Node {
+    VMem_Node* next;
 
-    // bootleg file mapping
-    uintptr_t paddr;
-    size_t psize;
-} VMem_Range;
+    uint8_t is_leaf   : 1;
+    uint8_t key_count : 7;
+
+    uintptr_t keys[VMEM_NODE_MAX_KEYS];
+    union {
+        VMem_Node* kids[0];    // [VMEM_NODE_MAX_VALS]
+        VMem_PageDesc vals[0]; // [VMEM_NODE_MAX_VALS]
+    };
+};
+
+typedef struct {
+    VMem_Node* node;
+    size_t index;
+} VMem_Cursor;
 
 // bottom bit means there's an exclusive lock.
 typedef _Atomic(uint32_t) RWLock;
@@ -58,8 +78,7 @@ typedef struct {
     RWLock lock;
 
     // TODO(NeGate): interval trees
-    size_t range_count;
-    VMem_Range ranges[16];
+    VMem_Node* root;
 
     // virtual addresses -> committed pages
     NBHM commit_table;
@@ -119,54 +138,192 @@ void rwlock_unlock_exclusive(RWLock* lock) {
     atomic_store_explicit(lock, 0, memory_order_release);
 }
 
-VMem_Range* vmem_add_range(VMem_AddrSpace* addr_space, uintptr_t vaddr, size_t vsize, uintptr_t paddr, size_t psize, VMem_Flags flags) {
-    kassert((vaddr & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", vaddr);
-    kassert((vsize & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", vsize);
-    kassert((paddr & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", paddr);
-    kassert((psize & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", psize);
-    kassert(addr_space->range_count < 16, "too many ranges");
+static size_t vmem_node_bin_search(VMem_Node* node, uint32_t key, int start_i) {
+    size_t left = start_i, right = node->key_count - 1;
+    while (left != right) {
+        size_t i = (left + right + 1) / 2;
+        if (node->keys[i] > key) { right = i - 1; }
+        else { left = i; }
+    }
 
-    VMem_Range* range = &addr_space->ranges[addr_space->range_count++];
-    range->flags = flags;
-    range->start = vaddr;
-    range->end   = vaddr + vsize;
-    range->paddr = paddr;
-    range->psize = psize;
-    return range;
+    return left;
 }
 
-typedef struct {
-    uintptr_t     translated;
-    VMem_PageDesc desc;
-} VMem_PTEUpdate;
+VMem_Cursor vmem_node_lookup(VMem_AddrSpace* addr_space, uintptr_t key) {
+    VMem_Node* node = addr_space->root;
+    if (node == NULL) {
+        return (VMem_Cursor){ 0 };
+    }
 
-static VMem_Range* vmem_get_page(VMem_AddrSpace* addr_space, uintptr_t addr) {
-    for (size_t i = 0; i < addr_space->range_count; i++) {
-        if (addr >= addr_space->ranges[i].start && addr < addr_space->ranges[i].end) {
-            return &addr_space->ranges[i];
+    // layers of binary search
+    for (;;) {
+        uint32_t left = vmem_node_bin_search(node, key, 0);
+        if (node->is_leaf) {
+            return (VMem_Cursor){ node, left };
+        } else {
+            node = node->kids[left];
+        }
+    }
+}
+
+void vmem_node_split_child(VMem_Node* x, VMem_Node* y, int idx) {
+    VMem_Node* z = kernelfl_alloc(sizeof(VMem_Node) + VMEM_NODE_MAX_VALS*(y->is_leaf ? sizeof(VMem_PageDesc) : sizeof(VMem_Node*)));
+    z->next      = NULL;
+    z->is_leaf   = y->is_leaf;
+    z->key_count = VMEM_NODE_DEGREE - 1;
+
+    for (int i = 0; i < VMEM_NODE_DEGREE; i++) {
+        z->keys[i] = y->keys[VMEM_NODE_DEGREE + i];
+    }
+
+    // copy higher half of y's values (or kid ptrs)
+    if (z->is_leaf) {
+        for (int i = 0; i < VMEM_NODE_DEGREE; i++) {
+            z->vals[i] = y->vals[VMEM_NODE_DEGREE + i];
+        }
+    } else {
+        for (int i = 0; i < VMEM_NODE_DEGREE; i++) {
+            z->kids[i] = y->kids[VMEM_NODE_DEGREE + i];
         }
     }
 
-    return NULL;
+    y->key_count = VMEM_NODE_DEGREE;
+    z->next = y->next;
+    y->next = z;
+
+    // shift up
+    kassert(!x->is_leaf, "jover");
+    for (int i = x->key_count; i >= idx + 1; i--) {
+        x->kids[i + 1] = x->kids[i];
+    }
+    x->kids[idx + 1] = z;
+
+    // A key of y will move to this node. Find the location of
+    // new key and move all greater keys one space ahead
+    for (int i = x->key_count - 1; i >= idx; i--) {
+        x->keys[i + 1] = x->keys[i];
+    }
+
+    // Copy the middle key of y to this node
+    x->keys[idx] = y->keys[VMEM_NODE_DEGREE];
+    x->key_count += 1;
 }
+
+// insert range into B-tree
+VMem_PageDesc* vmem_node_insert(VMem_AddrSpace* addr_space, uintptr_t key) {
+    if (addr_space->root == NULL) {
+        // new leaf root
+        VMem_Node* node = kernelfl_alloc(sizeof(VMem_Node) + sizeof(VMem_PageDesc)*VMEM_NODE_MAX_VALS);
+        node->next      = NULL;
+        node->is_leaf   = 1;
+        node->key_count = 1;
+        node->keys[0] = key;
+        addr_space->root = node;
+        return &node->vals[0];
+    } else {
+        VMem_Node* node = addr_space->root;
+
+        // rotate the root
+        if (addr_space->root->key_count == VMEM_NODE_MAX_KEYS) {
+            VMem_Node* new_node = kernelfl_alloc(sizeof(VMem_Node) + VMEM_NODE_MAX_VALS*sizeof(VMem_Node*));
+            new_node->next      = NULL;
+            new_node->is_leaf   = 0;
+            new_node->key_count = 0;
+
+            // make old root as child of new root
+            new_node->kids[0] = addr_space->root;
+
+            // split the old root and move 1 key to the new root
+            vmem_node_split_child(new_node, addr_space->root, 0);
+
+            // new root has two children now. decide which of the
+            // two children is going to have new key
+            int i = 0;
+            if (new_node->keys[0] < key) {
+                i++;
+            }
+
+            node = new_node->kids[i];
+            addr_space->root = new_node;
+        }
+
+        while (!node->is_leaf) {
+            int left = vmem_node_bin_search(node, key, 0);
+            VMem_Node* kid = node->kids[left];
+
+            if (kid->key_count == VMEM_NODE_MAX_KEYS) {
+                // If the child is full, then split it
+                vmem_node_split_child(node, kid, left);
+
+                // After split, the middle key of C[left] goes up and
+                // C[left] is splitted into two. See which of the two
+                // is going to have the new key
+                if (node->keys[left] < key) {
+                    kid = node->kids[left + 1];
+                }
+            }
+
+            node = kid;
+        }
+
+        // shift up
+        int j = node->key_count;
+        while (j-- && node->keys[j] > key) {
+            node->keys[j + 1] = node->keys[j];
+            node->vals[j + 1] = node->vals[j];
+        }
+
+        kassert(node->key_count < VMEM_NODE_MAX_KEYS, "jover");
+        node->key_count += 1;
+
+        kassert(j + 1 < node->key_count, "jover");
+        node->keys[j + 1] = key;
+        return &node->vals[j + 1];
+    }
+}
+
+void vmem_add_range(VMem_AddrSpace* addr_space, uintptr_t vaddr, size_t vsize, uintptr_t paddr, VMem_Flags flags) {
+    kassert((vaddr & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", vaddr);
+    kassert((vsize & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", vsize);
+    kassert((paddr & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", paddr);
+
+    VMem_PageDesc* desc = vmem_node_insert(addr_space, vaddr);
+    desc->valid    = 1;
+    desc->flags    = flags;
+    desc->file_ptr = (uintptr_t) (paddr >> 12);
+    desc->size     = vsize;
+}
+
+typedef struct {
+    uintptr_t  translated;
+    VMem_Flags flags;
+} VMem_PTEUpdate;
 
 static _Alignas(4096) const uint8_t VMEM_ZERO_PAGE[4096];
 bool vmem_segfault(VMem_AddrSpace* addr_space, uintptr_t access_addr, bool is_write, VMem_PTEUpdate* out_update) {
-    VMem_Range* r = vmem_get_page(addr_space, access_addr);
-
-    if (r == NULL) {
-        // page not nice :(
+    VMem_Cursor cursor = vmem_node_lookup(addr_space, access_addr);
+    if (cursor.node == NULL) {
+        // literally no pages
         return false;
+    }
+
+    // check if we're in range
+    VMem_PageDesc* desc  = &cursor.node->vals[cursor.index];
+    uintptr_t start_addr = cursor.node->keys[cursor.index];
+    uintptr_t end_addr   = start_addr + desc->size;
+    if (!desc->valid || access_addr >= end_addr) {
+        // we're in the gap between page descriptor
+        return NULL;
     }
 
     // attempt to commit page
     uintptr_t actual_page = (uintptr_t) vmem_addrhm_get(&addr_space->commit_table, (void*) access_addr);
     if (actual_page == 0) {
         uintptr_t new_page = 0;
-        if (r->paddr != 0) {
+        if (desc->file_ptr != 0) {
             // we're "file" mapped, just view the address
-            size_t offset = (access_addr & -PAGE_SIZE) - r->start;
-            new_page = r->paddr + offset;
+            size_t offset = (access_addr & -PAGE_SIZE) - start_addr;
+            new_page = (desc->file_ptr << 12ull) + offset;
         } else {
             void* page = alloc_physical_page();
             memset(page, 0, PAGE_SIZE);
@@ -174,7 +331,7 @@ bool vmem_segfault(VMem_AddrSpace* addr_space, uintptr_t access_addr, bool is_wr
         }
 
         actual_page = (uintptr_t) vmem_addrhm_put_if_null(&addr_space->commit_table, (void*) access_addr, (void*) new_page);
-        if (r->paddr != 0) {
+        if (desc->file_ptr != 0) {
             kprintf("[vmem] first touch on file mapped address (%p), paddr=%p\n", access_addr, new_page);
         } else {
             kprintf("[vmem] first touch on private page (%p), paddr=%p\n", access_addr, new_page);
@@ -185,6 +342,6 @@ bool vmem_segfault(VMem_AddrSpace* addr_space, uintptr_t access_addr, bool is_wr
     }
 
     out_update->translated = actual_page;
-    out_update->desc = (VMem_PageDesc){ .valid = 1, .flags = r->flags };
+    out_update->flags = desc->flags;
     return true;
 }

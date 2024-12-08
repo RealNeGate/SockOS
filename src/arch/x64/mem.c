@@ -56,7 +56,6 @@ static void* kernelfl_alloc(size_t obj_size) {
                 list->is_free = false;
 
                 kprintf("[kheap] alloc(%d) = %p\n", obj_size, &list->data[0]);
-                kernelfl_dump();
                 return &list->data[0];
             } else if (list->size > obj_size) {
                 size_t full_size = list->size;
@@ -74,7 +73,6 @@ static void* kernelfl_alloc(size_t obj_size) {
                 split->prev = list;
 
                 kprintf("[kheap] alloc(%d) = %p\n", obj_size, &list->data[0]);
-                kernelfl_dump();
                 return &list->data[0];
             }
         }

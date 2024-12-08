@@ -97,7 +97,6 @@ static void identity_map_kernel_region(VMem_AddrSpace* addr_space, void* p, size
 // and we have executables.
 Env* env_create(void) {
     Env* env = alloc_physical_page();
-    env->addr_space.range_count = 0;
     env->addr_space.hw_tables = alloc_physical_page();
     env->addr_space.commit_table = nbhm_alloc(500);
 
@@ -236,18 +235,18 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
         size_t mem_size  = (segment->p_memsz  + PAGE_SIZE - 1) & -PAGE_SIZE;
 
         if (file_size > 0) {
-            vmem_add_range(&env->addr_space, vaddr, file_size, paddr, file_size, VMEM_PAGE_READ | VMEM_PAGE_WRITE | VMEM_PAGE_USER);
+            vmem_add_range(&env->addr_space, vaddr, file_size, paddr, VMEM_PAGE_READ | VMEM_PAGE_WRITE | VMEM_PAGE_USER);
         }
 
         if (mem_size > file_size) {
             // zero pages
-            vmem_add_range(&env->addr_space, vaddr+mem_size, file_size - mem_size, 0, 0, VMEM_PAGE_READ | VMEM_PAGE_WRITE | VMEM_PAGE_USER);
+            vmem_add_range(&env->addr_space, vaddr+mem_size, file_size - mem_size, 0, VMEM_PAGE_READ | VMEM_PAGE_WRITE | VMEM_PAGE_USER);
         }
     }
     kprintf("[elf] entry=%p\n", elf_header->e_entry);
 
     // tiny i know
-    vmem_add_range(&env->addr_space, 0xA0000000, 8192, 0, 0, VMEM_PAGE_READ | VMEM_PAGE_WRITE | VMEM_PAGE_USER);
+    vmem_add_range(&env->addr_space, 0xA0000000, 8192, 0, VMEM_PAGE_READ | VMEM_PAGE_WRITE | VMEM_PAGE_USER);
 
     return thread_create(env, (ThreadEntryFn*) elf_header->e_entry, 0xA0000000, 4096, true);
 }
