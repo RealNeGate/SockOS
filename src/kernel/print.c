@@ -143,6 +143,16 @@ static void kprintf(const char *fmt, ...) {
                 i64 i = __builtin_va_arg(args, i64);
                 put_number(i, 10);
             } break;
+            case 'z': {
+                goto consume_moar;
+            } break;
+            case 'l': {
+               goto consume_moar;
+            } break;
+            case 'u': {
+                u64 i = __builtin_va_arg(args, u64);
+                put_number(i, 10);
+            } break;
             case 'x': {
                 u64 i = __builtin_va_arg(args, u64);
 
