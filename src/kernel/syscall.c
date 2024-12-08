@@ -47,13 +47,10 @@ SYS_FN(sleep) {
     do_context_switch(state, cr3);
 }
 
-SYS_FN(exit_group) {
-    Env* group = cpu->current_thread->parent;
-    kprintf("SYS_exit_group(%p, %d)\n", group, SYS_PARAM0);
-
-    env_kill(group);
-    thread_yield();
-
+// vaddr paddr size
+SYS_FN(mmap) {
+    kprintf("SYS_mmap(vaddr:%p, paddr:%p, pages:%d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2);
+    vmem_add_range(&cpu->current_thread->parent->addr_space, SYS_PARAM0, SYS_PARAM2, SYS_PARAM1, SYS_PARAM2, VMEM_PAGE_READ | VMEM_PAGE_WRITE | VMEM_PAGE_USER);
     return cr3;
 }
 

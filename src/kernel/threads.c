@@ -99,7 +99,7 @@ Env* env_create(void) {
     Env* env = alloc_physical_page();
     env->addr_space.range_count = 0;
     env->addr_space.hw_tables = alloc_physical_page();
-    env->addr_space.commit_table = nbhm_alloc(64);
+    env->addr_space.commit_table = nbhm_alloc(500);
 
     // copy over the kernel's higher half pages bar for bar.
     for (size_t i = 512; (i--) > 256;) {
@@ -247,8 +247,7 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
     kprintf("[elf] entry=%p\n", elf_header->e_entry);
 
     // tiny i know
-    void* physical_stack = alloc_physical_page();
-    vmem_add_range(&env->addr_space, 0xA0000000, 4096, (uintptr_t) physical_stack, 4096, VMEM_PAGE_READ | VMEM_PAGE_WRITE | VMEM_PAGE_USER);
+    vmem_add_range(&env->addr_space, 0xA0000000, 8192, 0, 0, VMEM_PAGE_READ | VMEM_PAGE_WRITE | VMEM_PAGE_USER);
 
     return thread_create(env, (ThreadEntryFn*) elf_header->e_entry, 0xA0000000, 4096, true);
 }

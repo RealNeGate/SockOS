@@ -143,6 +143,8 @@ void kmain(BootInfo* restrict info) {
     thread_create(NULL, other_other_guy, (uintptr_t) physical_stack, CHUNK_SIZE, false); */
     spall_end_event(0);
 
+    kprintf("GPU: %p (%d * %d), stride=%d\n", boot_info->fb.pixels, boot_info->fb.width, boot_info->fb.height, boot_info->fb.stride);
+
     static _Alignas(4096) const uint8_t desktop_elf[] = {
         #embed "../../userland/desktop.elf"
     };

@@ -212,11 +212,6 @@ uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
             kprintf("  access: %p (NOT PRESENT)\n", access_addr);
         }
 
-        static int times;
-        if (times++ > 2) {
-            halt();
-        }
-
         VMem_AddrSpace* addr_space = NULL;
         if (cpu->current_thread && cpu->current_thread->parent) {
             addr_space = &cpu->current_thread->parent->addr_space;

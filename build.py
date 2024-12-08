@@ -60,6 +60,15 @@ for module in asm_files:
         asm_outputs[module].append(asm_out)
 file.write(f'\n')
 
+if True:
+    # build desktop
+    file.write(f'build objs/desktop.o: cc userland/desktop.c\n')
+    file.write(f'  flags = -target x86_64-linux-gnu -ffreestanding -nostdlib -fpic\n')
+    file.write(f'\n')
+    file.write(f'build userland/desktop.elf: ld objs/desktop.o\n')
+    file.write(f'  flags = -T userland/link.ld\n')
+    file.write(f'\n')
+
 # build EFI app
 file.write(f'build objs/efi.o: cc src/boot/efi_main.c\n')
 file.write(f'  flags = -target x86_64-pc-win32-coff -fuse-ld=lld-link -I src -fno-PIC -fshort-wchar {cflags}\n')
@@ -69,7 +78,7 @@ file.write(f'build bin/efi/boot/bootx64.efi: link objs/efi.o\n')
 file.write(f'  flags = -subsystem:efi_application -nodefaultlib -dll -entry:efi_main\n')
 file.write(f'\n')
 
-file.write(f'build objs/kernel.o: cc src/kernel/kernel.c\n')
+file.write(f'build objs/kernel.o: cc src/kernel/kernel.c | userland/desktop.elf\n')
 file.write(f'  flags = -I src -fPIC -target x86_64-linux-gnu -ffreestanding {cflags}\n')
 file.write(f'\n')
 
