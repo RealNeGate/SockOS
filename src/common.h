@@ -13,6 +13,9 @@ typedef int32_t            i32;
 typedef int16_t            i16;
 typedef int8_t              i8;
 
+#define ELEM_COUNT(a) (sizeof(a) / sizeof((a)[0]))
+#define PAGE_ALIGN(a) (((a) + 0x1000 - 1) & -0x1000)
+
 // common macros
 //   NO_DEFAULT;
 //      basically an unreachable switch statement default

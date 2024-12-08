@@ -41,6 +41,8 @@ static void free_physical_page(void* ptr);
 #endif
 
 #include "syscall.c"
+#include "pci.h"
+#include "ethernet.c"
 #include "pci.c"
 
 // components which depend on architecture stuff
