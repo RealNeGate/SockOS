@@ -182,10 +182,10 @@ syscall_handler:
     mov rsp, gs:[16]
 
     ; ss, rsp, flags, cs, rip
-    push 0x23         ; ss
+    push 0x1B         ; ss
     push qword gs:[24]; user rsp
     push r11          ; rflags
-    push 0x1B         ; cs
+    push 0x23         ; cs
     push rcx          ; rip
 
     ; error & interrupt num

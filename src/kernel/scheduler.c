@@ -136,7 +136,7 @@ Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us) {
         next_waiter->wait_time = 0;
 
         if (active == NULL) {
-            active = next_waiter;
+            active = sched->active.curr = next_waiter;
             active->start_time = active->end_time = 0;
         }
     }

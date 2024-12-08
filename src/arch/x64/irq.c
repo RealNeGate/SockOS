@@ -357,9 +357,6 @@ uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
             kprintf("  >> STAY %p (for %d ms, %d ticks) <<\n\n", cpu->current_thread, until_wake / 1000, micros_to_apic_time(until_wake));
         }
 
-        kprintf("  MANKY rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
-        kprintf("  A=%b, %p\n", state->flags, &state->rip);
-
         // send EOI
         APIC(0xB0) = 0;
         // set new one-shot
