@@ -110,7 +110,7 @@ typedef struct {
     i32 core_count;
     PerCPU cores[256];
 
-    void* rsdp;
+    u64 rsdp_addr;
     MemMap mem_map;
 
     uintptr_t elf_virtual_ptr;
@@ -127,7 +127,7 @@ typedef struct {
 // loader.s & irq.s needs these to be here
 _Static_assert(offsetof(BootInfo, kernel_pml4) == 0, "the loader is sad");
 _Static_assert(offsetof(BootInfo, elf_virtual_entry) == 8, "the loader is sad");
-_Static_assert(offsetof(BootInfo, identity_map_ptr) == 16, "the loader is sad");
+_Static_assert(offsetof(BootInfo, identity_map_ptr) == 16, "the loader.s & irq.s are sad");
 _Static_assert(offsetof(PerCPU, kernel_stack_top) == 16, "the irq.s & bootstrap.s is sad");
 _Static_assert(offsetof(PerCPU, user_stack_scratch) == 24, "the irq.s is sad");
 

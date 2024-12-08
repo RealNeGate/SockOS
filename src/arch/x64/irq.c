@@ -42,7 +42,7 @@ _Static_assert(sizeof(IDT) == 10, "expected sizeof(IDT) to be 10 bytes");
 
 // in irq.asm
 extern void syscall_handler(void);
-extern void do_context_switch(CPUState* state, PageTable* address_space);
+extern _Noreturn void do_context_switch(CPUState* state, uintptr_t address_space);
 
 // this is where all interrupts get pointed to, from there it's redirected to irq_int_handler
 extern void isr_handler(void);
@@ -112,18 +112,6 @@ static uint32_t micros_to_apic_time(uint64_t t) {
     };                                                  \
 } while (0)
 
-// jumping into the scheduler after this
-void calibrate_apic_timer(void) {
-    // calibrate APIC timer
-    calibrating_apic_timer = true;
-    apic_freq = __rdtsc();
-    APIC(0x380) = APIC_CALIBRATION_TICKS;
-
-    while (calibrating_apic_timer) {
-        asm volatile ("hlt");
-    }
-}
-
 void irq_startup(int core_id) {
     if (core_id == 0) {
         FOREACH_N(i, 0, 256) _idt[i] = (IDTEntry){ 0 };
@@ -149,6 +137,9 @@ void irq_startup(int core_id) {
         SET_INTERRUPT(45, false);
         SET_INTERRUPT(46, false);
         SET_INTERRUPT(47, false);
+
+        // allow int3 in ring 3
+        _idt[3].type_attr |= (3 << 5);
     }
 
     irq_disable_pic();
@@ -188,13 +179,22 @@ void irq_begin_timer(void) {
     APIC(0x320) = 0x00000 | 32;
     //   timer divide reg
     APIC(0x3E0) = 0b1011;
+
+    // calibrate APIC timer
+    calibrating_apic_timer = true;
+    apic_freq = __rdtsc();
+    APIC(0x380) = APIC_CALIBRATION_TICKS;
+
+    while (calibrating_apic_timer) {
+        asm volatile ("hlt");
+    }
 }
 
 uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
     u64 now = __rdtsc();
     PageTable* old_address_space = paddr2kaddr(cr3);
 
-    if (state->interrupt_num != 32) {
+    if (1 || state->interrupt_num != 32) {
         kprintf("int %d: error=0x%x\n", state->interrupt_num, state->error);
         kprintf("  rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
     }
@@ -202,7 +202,7 @@ uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
     if (state->interrupt_num == 14) {
         u64 access_addr = x86_get_cr2();
 
-        kprintf("  cr3=%p\n\n", old_address_space);
+        kprintf("  cr3=%p\n\n", cr3);
 
         // print memory access address
         u64 translated;
@@ -210,6 +210,11 @@ uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
             kprintf("  access: %p (translated: %p)\n", access_addr, translated);
         } else {
             kprintf("  access: %p (NOT PRESENT)\n", access_addr);
+        }
+
+        static int times;
+        if (times++ > 2) {
+            halt();
         }
 
         VMem_AddrSpace* addr_space = NULL;
@@ -274,7 +279,7 @@ uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
                         new_pt = alloc_physical_page();
                         memset(new_pt, 0, sizeof(PageTable));
 
-                        new_entry = ((u64) new_pt) | page_flags | PAGE_PRESENT;
+                        new_entry = kaddr2paddr(new_pt) | page_flags | PAGE_PRESENT;
                     }
                     // no progress necessary, it's already behaving
                     if (entry == new_entry) { break; }
@@ -285,7 +290,7 @@ uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
                     if (new_pt == NULL) { free_physical_page(new_pt); }
                 }
 
-                curr = (PageTable*) (entry & ~0x1FF);
+                curr = paddr2kaddr(entry & ~0x1FF);
                 kassert(curr != NULL, "missing page table, didn't we just insert it?");
             }
 
@@ -352,6 +357,9 @@ uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
             kprintf("  >> STAY %p (for %d ms, %d ticks) <<\n\n", cpu->current_thread, until_wake / 1000, micros_to_apic_time(until_wake));
         }
 
+        kprintf("  MANKY rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
+        kprintf("  A=%b, %p\n", state->flags, &state->rip);
+
         // send EOI
         APIC(0xB0) = 0;
         // set new one-shot
@@ -387,7 +395,7 @@ CPUState new_thread_state(void* entrypoint, uintptr_t stack, size_t stack_size, 
     };
 
     if (is_user) {
-        // |3 is for adding the requested privelege level (RPL) to the selectors
+        // |3 is for adding the requested privilege level (RPL) to the selectors
         s.cs = USER_CS | 3;
         s.ss = USER_DS | 3;
     }

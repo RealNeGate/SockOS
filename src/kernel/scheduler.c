@@ -19,6 +19,7 @@ static void tq_remove(ThreadQueue* tq, Thread* t) {
 
     if (tq->first == t) { tq->first = next; }
     if (tq->last == t) { tq->last = t->prev_sched; }
+    if (tq->curr == t) { tq->curr = NULL; }
     if (t->prev_sched != NULL) {
         t->prev_sched->next_sched = next;
     }
@@ -56,7 +57,7 @@ static Thread* tq_advance(ThreadQueue* tq) {
     return (tq->curr = next);
 }
 
-#define kprintf
+// #define kprintf
 void sched_wait(Thread* t, u64 timeout) {
     PerCPU_Scheduler* sched = cpu_get()->sched;
     kassert(sched->active.curr == t, "wtf?");
@@ -122,6 +123,24 @@ Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us) {
     }
     kprintf("  }\n");
 
+    // wake up sleepy guys
+    Thread* next_waiter = sched->waiters.first;
+    if (next_waiter != NULL && now_time >= next_waiter->wake_time) {
+        kprintf("  Thread-%p is awake now\n", next_waiter);
+
+        tq_remove(&sched->waiters, next_waiter);
+        tq_append(&sched->active,  next_waiter);
+
+        // reset wait/wake info
+        next_waiter->wake_time = 0;
+        next_waiter->wait_time = 0;
+
+        if (active == NULL) {
+            active = next_waiter;
+            active->start_time = active->end_time = 0;
+        }
+    }
+
     if (active != NULL) {
         kprintf("  end_time = %d\n", active->end_time);
 
@@ -135,25 +154,6 @@ Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us) {
 
         // move along to the next task
         if (now_time > active->end_time) {
-            // if there's completed waiters, we should try to context switch to
-            // them before the rest of the tasks. this is because waiting would
-            // have required them to have given up their time slice earlier on.
-            Thread* next_waiter = sched->waiters.first;
-            if (next_waiter != NULL) {
-                kprintf("  next_wake=%d\n", next_waiter->wake_time);
-            }
-
-            if (next_waiter && now_time > next_waiter->wake_time) {
-                kprintf("  Thread-%p is awake now\n", next_waiter);
-
-                tq_remove(&sched->waiters, next_waiter);
-                tq_append(&sched->active,  next_waiter);
-
-                // reset wait/wake info
-                next_waiter->wake_time = 0;
-                next_waiter->wait_time = 0;
-            }
-
             // reset start & end
             active->start_time = active->end_time = 0;
 

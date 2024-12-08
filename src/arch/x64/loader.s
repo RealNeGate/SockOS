@@ -40,7 +40,7 @@ _start.transition:
 
     lea rax, [rel _start.reload_cs]
     mov qword [rel far_jumper], rax
-    jmp qword [rel far_jumper]
+    jmp far qword [rel far_jumper]
 _start.reload_cs:
     mov ax, 0x10
     mov ds, ax

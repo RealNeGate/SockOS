@@ -114,9 +114,7 @@ char *entry_to_string(int type) {
 #define APIC(reg_num) ((volatile uint32_t*) boot_info->lapic_base)[(reg_num) >> 2]
 
 void parse_acpi(void) {
-    void *rsdp = boot_info->rsdp;
-
-    ACPI_RSDP_Desc_V2 *header = (ACPI_RSDP_Desc_V2 *)rsdp;
+    ACPI_RSDP_Desc_V2 *header = paddr2kaddr(boot_info->rsdp_addr);
     u8 rsdp_magic[] = {'R', 'S', 'D', ' ', 'P', 'T', 'R', ' ' };
     if (!memeq(header->rsdp_head.signature, rsdp_magic, sizeof(rsdp_magic))) {
         panic("Invalid ACPI header! Got: %.*s || %.*s\n",
@@ -126,7 +124,7 @@ void parse_acpi(void) {
         );
     }
 
-    ACPI_XSDT_Header *xhead = (ACPI_XSDT_Header *)header->xsdt_addr;
+    ACPI_XSDT_Header *xhead = paddr2kaddr(header->xsdt_addr);
     u8 xsdt_magic[] = {'X', 'S', 'D', 'T' };
     if (!memeq(xhead->header.signature, xsdt_magic, sizeof(xsdt_magic))) {
         panic("Invalid XSDT header! Got: %.*s || %.*s\n",
@@ -144,7 +142,7 @@ void parse_acpi(void) {
     u64 remaining_length = xhead->header.length - sizeof(xhead->header);
     int entries = remaining_length / 8;
     for (int i = 0; i < entries; i++) {
-        ACPI_SDT_Header *head = (ACPI_SDT_Header *)xhead->other_headers[i];
+        ACPI_SDT_Header *head = paddr2kaddr(xhead->other_headers[i]);
         char *buf_ptr = (char *)head + sizeof(ACPI_SDT_Header);
 
         // Map the APIC list and build the list of cores
@@ -167,8 +165,11 @@ void parse_acpi(void) {
             // Map out the HPET and get the TSC frequency
         } else if (memeq(head->signature, hpet_magic, sizeof(hpet_magic))) {
             ACPI_HPET_Header *hhead = (ACPI_HPET_Header *)buf_ptr;
-            volatile u64 *hpet_reg = (u64 *)hhead->addr_struct.address;
-            memmap__view(boot_info->kernel_pml4, (uintptr_t)hpet_reg, (uintptr_t)hpet_reg, PAGE_SIZE, PAGE_WRITE);
+            volatile u64 *hpet_reg = paddr2kaddr(hhead->addr_struct.address);
+
+            // Map into relevant "identity" site
+            memmap__view(boot_info->kernel_pml4, hhead->addr_struct.address, (uintptr_t) hpet_reg, PAGE_SIZE, PAGE_WRITE);
+
             u64 gen_cap_reg = hpet_reg[0];
             ACPI_HPET_GenCap gen_cap = *((ACPI_HPET_GenCap *)&gen_cap_reg);
             u64 hpet_period = gen_cap.clock_period_fs;
@@ -189,7 +190,6 @@ void parse_acpi(void) {
             }
             u64 end = __rdtsc();
 
-
             // disable the HPET
             hpet_reg[2] = 0;
             asm ("sti");
@@ -198,6 +198,7 @@ void parse_acpi(void) {
             tsc_freq = (ticks_per_time / us_delay);
         }
     }
+
     if (core_count == 0) {
         panic("Invalid core count from ACPI!\n");
     }

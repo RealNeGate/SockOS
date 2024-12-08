@@ -160,30 +160,31 @@ bool vmem_segfault(VMem_AddrSpace* addr_space, uintptr_t access_addr, bool is_wr
     }
 
     // attempt to commit page
-    void* actual_page = vmem_addrhm_get(&addr_space->commit_table, (void*) access_addr);
-    if (actual_page == NULL) {
-        void* new_page = NULL;
+    uintptr_t actual_page = (uintptr_t) vmem_addrhm_get(&addr_space->commit_table, (void*) access_addr);
+    if (actual_page == 0) {
+        uintptr_t new_page = 0;
         if (r->paddr != 0) {
             // we're "file" mapped, just view the address
             size_t offset = (access_addr & -PAGE_SIZE) - r->start;
-            new_page = (void*) (r->paddr + offset);
+            new_page = r->paddr + offset;
         } else {
-            void* new_page = alloc_physical_page();
-            memset(new_page, 0, PAGE_SIZE);
+            void* page = alloc_physical_page();
+            memset(page, 0, PAGE_SIZE);
+            new_page = kaddr2paddr(page);
         }
 
-        actual_page = vmem_addrhm_put_if_null(&addr_space->commit_table, (void*) access_addr, new_page);
+        actual_page = (uintptr_t) vmem_addrhm_put_if_null(&addr_space->commit_table, (void*) access_addr, (void*) new_page);
         if (r->paddr != 0) {
             kprintf("[vmem] first touch on file mapped address (%p), paddr=%p\n", access_addr, new_page);
         } else {
             kprintf("[vmem] first touch on private page (%p), paddr=%p\n", access_addr, new_page);
             if (actual_page != new_page) {
-                free_physical_chunk(new_page);
+                free_physical_chunk(paddr2kaddr(new_page));
             }
         }
     }
 
-    out_update->translated = (uintptr_t) actual_page;
+    out_update->translated = actual_page;
     out_update->desc = (VMem_PageDesc){ .valid = 1, .flags = r->flags };
     return true;
 }

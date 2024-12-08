@@ -101,22 +101,15 @@ Env* env_create(void) {
     env->addr_space.hw_tables = alloc_physical_page();
     env->addr_space.commit_table = nbhm_alloc(64);
 
-    // identity map essential kernel stuff
-    //   * IRQ handler
-    extern void asm_int_handler(void);
-    extern void syscall_handler(void);
-    extern uint64_t gdt64[];
-    identity_map_kernel_region(&env->addr_space, &asm_int_handler, 4096);
-    identity_map_kernel_region(&env->addr_space, &syscall_handler, 4096);
-    identity_map_kernel_region(&env->addr_space, &gdt64, 4096);
-    identity_map_kernel_region(&env->addr_space, (void*) &_idt[0], sizeof(_idt));
-    identity_map_kernel_region(&env->addr_space, boot_info, sizeof(BootInfo));
-    identity_map_kernel_region(&env->addr_space, &boot_info, sizeof(BootInfo*));
-    identity_map_kernel_region(&env->addr_space, &syscall_table[0], sizeof(syscall_table));
+    // copy over the kernel's higher half pages bar for bar.
+    for (size_t i = 512; (i--) > 256;) {
+        u64 src_page = boot_info->kernel_pml4->entries[i];
+        if (src_page == 0) { break; }
+        env->addr_space.hw_tables->entries[i] = src_page;
+    }
 
-    // TODO(NeGate): uhh... i think we wanna map all their kernel stacks?
-    identity_map_kernel_region(&env->addr_space, boot_info->cores[0].kernel_stack, KERNEL_STACK_SIZE);
-
+    // kprintf("AA\n");
+    // dump_pages(boot_info->kernel_pml4, 0, 0);
     return env;
 }
 
@@ -213,7 +206,7 @@ void thread_kill(Thread* thread) {
 // this is the trusted ELF loader for priveleged programs, normal apps will probably
 // be loaded via a shared object.
 Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
-    kprintf("Loading a program!\n");
+    kprintf("Loading a program! %p\n", env->addr_space.hw_tables);
     Elf64_Ehdr* elf_header = (Elf64_Ehdr*) program;
 
     ////////////////////////////////
@@ -235,7 +228,7 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
         // file offset % page_size == virtual addr % page_size, it allows us to file map
         // awkward offsets because the virtual address is just as awkward :p
         uintptr_t vaddr = (segment->p_vaddr & -PAGE_SIZE);
-        uintptr_t paddr = (uintptr_t) program + (segment->p_offset & -PAGE_SIZE);
+        uintptr_t paddr = kaddr2paddr((u8*) program + (segment->p_offset & -PAGE_SIZE));
 
         kprintf("[elf] segment: %p (%d) => %p (%d)\n", vaddr, segment->p_memsz, paddr, segment->p_filesz);
 

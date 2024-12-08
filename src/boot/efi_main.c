@@ -70,6 +70,8 @@ static PageTable* get_or_alloc(PageTableContext* ctx, PageTable* table, int inde
 }
 
 static void map_pages(PageTableContext* ctx, u64 virt_addr, u64 phys_addr, u64 page_count) {
+    printf("  Making a map %X -> %X .. %X\n", virt_addr, phys_addr, phys_addr + page_count*4096 - 1);
+
     PageTable* address_space = &ctx->tables[0];
     if ((phys_addr | virt_addr) & 0xFFFull) {
         panic("Bad addresses for mapping %X -> %X\n", virt_addr, phys_addr);
@@ -363,7 +365,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         panic("Failed to get RDSP!");
     }
 
-    boot_info.rsdp = (void *)rsdp;
+    boot_info.rsdp_addr = rsdp;
     printf("RSDP: %X\n", rsdp);
     printf("Beginning EFI handoff...\n");
 
@@ -409,11 +411,9 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
             if(region.type != MEM_REGION_KERNEL) {
                 panic("Something bad is located at kernel's paddr");
             }
-            // printf("Making a map %X -> %X (%X pages)\n", kernel_module.virt_base, region.base, region.pages);
             map_pages(&ctx, kernel_module.virt_base, region.base, region.pages);
         }
 
-        printf("  Making a map %X -> %X (%X pages)\n", boot_info.identity_map_ptr + region.base, region.base, region.pages);
         map_pages(&ctx, boot_info.identity_map_ptr + region.base, region.base, region.pages);
     }
 
@@ -421,6 +421,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     // code there to stick around long enough to jump away.
     printf("  Making trampoline mapping %X\n", kernel_module.phys_base + kernel_module.entry_addr);
     map_pages_id(&ctx, kernel_module.phys_base + kernel_module.entry_addr, 1);
+    map_pages(&ctx, boot_info.identity_map_ptr + (uintptr_t) &boot_info, (uintptr_t) &boot_info, (sizeof(BootInfo) + 4095) / 4096);
 
     // memset(framebuffer, 0, framebuffer_stride * framebuffer_height * sizeof(u32));
     for (size_t j = 0; j < 50; j++) {
@@ -429,18 +430,21 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         }
     }
 
-    uintptr_t tss_ptr = (uintptr_t) &boot_info.tss[0];
+    uintptr_t tss_ptr = boot_info.identity_map_ptr + ((uintptr_t) &boot_info.tss[0]);
     u64 tss[2] = {
         //  access    limit
         //    VV        VV
-        0x0000890000000068 | ((tss_ptr & 0xFFFFFF) << 16) | (((tss_ptr >> 24) & 0xF) << 56),
+        0x0000890000000067 | ((tss_ptr & 0xFFFFFF) << 16) | (((tss_ptr >> 24) & 0xFF) << 56),
         (tss_ptr >> 32ull),
     };
 
+    // disable I/O map base
+    ((u16*) boot_info.tss)[0x102 / 4] = 0xDFFF;
+
     // set IST1, when an interrupt happens we'll be using this as the kernel
     // stack.
-    boot_info.tss[0x24 / 4] = ((uintptr_t) kstack_end);
-    boot_info.tss[0x28 / 4] = ((uintptr_t) kstack_end) >> 32;
+    boot_info.tss[0x24 / 4] = (boot_info.identity_map_ptr + (uintptr_t) kstack_end);
+    boot_info.tss[0x28 / 4] = (boot_info.identity_map_ptr + (uintptr_t) kstack_end) >> 32;
 
     #if 0
     printf("TSS descriptor:\n");
@@ -461,6 +465,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     sp[1] = 0;
 
     LoaderFunction loader = (LoaderFunction) (boot_info.elf_physical_ptr + kernel_module.entry_addr);
+    printf("TSS_PTR=%X\n", tss_ptr);
     printf("Jumping to the kernel: %X (sp=%X)\n", loader, kstack_end);
 
     boot_info.elf_virtual_entry = boot_info.elf_virtual_ptr + kernel_module.entry_addr;

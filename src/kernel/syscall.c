@@ -1,8 +1,8 @@
 ////////////////////////////////
 // Syscall table
 ////////////////////////////////
-#define SYS_FN(name) static PageTable* syscall_ ## name(CPUState* state, PageTable* old_address_space, PerCPU* cpu)
-typedef PageTable* SyscallFn(CPUState* state, PageTable* old_address_space, PerCPU* cpu);
+#define SYS_FN(name) static uintptr_t syscall_ ## name(CPUState* state, uintptr_t cr3, PerCPU* cpu)
+typedef uintptr_t SyscallFn(CPUState* state, uintptr_t cr3, PerCPU* cpu);
 
 typedef enum {
     #define X(name, ...) SYS_ ## name,
@@ -12,7 +12,7 @@ typedef enum {
 } SyscallNum;
 
 // forward decls
-#define X(name, ...) static PageTable* syscall_ ## name (CPUState*, PageTable*, PerCPU*);
+#define X(name, ...) static uintptr_t syscall_ ## name (CPUState*, uintptr_t, PerCPU*);
 #include "syscall_table.h"
 
 SyscallFn* syscall_table[] = {
@@ -36,12 +36,15 @@ size_t syscall_table_count = SYS_MAX;
 // Syscall table
 ////////////////////////////////
 SYS_FN(sleep) {
+    PageTable* old_address_space = paddr2kaddr(cr3);
     kprintf("SYS_sleep(%p, %d us)\n", cpu->current_thread, SYS_PARAM0);
 
     sched_wait(cpu->current_thread, SYS_PARAM0);
-    thread_yield();
 
-    return old_address_space;
+    state->interrupt_num = 32;
+    irq_int_handler(state, cr3, cpu);
+
+    do_context_switch(state, cr3);
 }
 
 SYS_FN(exit_group) {
@@ -51,7 +54,7 @@ SYS_FN(exit_group) {
     env_kill(group);
     thread_yield();
 
-    return old_address_space;
+    return cr3;
 }
 
 #undef SYS_PARAM0

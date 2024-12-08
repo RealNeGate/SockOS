@@ -101,12 +101,12 @@ extern int kernel_idle(void* arg);
 void kmain(BootInfo* restrict info) {
     boot_info = info;
     boot_info->cores[0].self = &boot_info->cores[0];
+    boot_info->cores[0].kernel_stack = paddr2kaddr((uintptr_t) boot_info->cores[0].kernel_stack);
+    boot_info->cores[0].kernel_stack_top = paddr2kaddr((uintptr_t) boot_info->cores[0].kernel_stack_top);
 
     // convert pointers into kernel addresses
     boot_info->kernel_pml4 = paddr2kaddr((uintptr_t) boot_info->kernel_pml4);
-    for (size_t i = 0; i < boot_info->mem_map.nregions; i++) {
-        boot_info->mem_map.regions[i].base = (uintptr_t) paddr2kaddr(boot_info->mem_map.regions[i].base);
-    }
+    boot_info->mem_map.regions = paddr2kaddr((uintptr_t) boot_info->mem_map.regions);
 
     kprintf("Beginning kernel boot... PML4=%p\n", boot_info->kernel_pml4);
 
@@ -147,14 +147,15 @@ void kmain(BootInfo* restrict info) {
         #embed "../../userland/desktop.elf"
     };
 
+    void* desktop_elf_ptr = paddr2kaddr(((uintptr_t) desktop_elf - boot_info->elf_virtual_ptr) + boot_info->elf_physical_ptr);
+
     Env* toy = env_create();
-    Thread* mine = env_load_elf(toy, desktop_elf, sizeof(desktop_elf));
+    Thread* mine = env_load_elf(toy, desktop_elf_ptr, sizeof(desktop_elf));
 
     kernel_idle_state = new_thread_state(kernel_idle, 0, 0, false);
 
-    irq_begin_timer();
-
     // jump into timer interrupt, we're going to run tasks now
     spall_begin_event("main", 0);
-    calibrate_apic_timer();
+    irq_begin_timer();
 }
+

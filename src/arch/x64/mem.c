@@ -1,3 +1,4 @@
+
 enum {
     CHUNK_SIZE = 2*1024*1024
 };
@@ -126,9 +127,6 @@ static PerCPU* get_percpu(void) {
 }
 
 static void init_physical_page_alloc(MemMap* restrict mem_map) {
-    kprintf("MemMap: %p\n", mem_map);
-    kprintf("* %p\n", mem_map->regions[0].base);
-
     size_t total_chunks = 0;
     int biggest = -1;
     FOREACH_N(i, 0, mem_map->nregions) {
@@ -160,7 +158,7 @@ static void init_physical_page_alloc(MemMap* restrict mem_map) {
 
         int aa = (region->pages*PAGE_SIZE) / (1024*1024);
 
-        uintptr_t base = boot_info->identity_map_ptr + region->base;
+        uintptr_t base = region->base;
         uintptr_t end  = (base + region->pages*PAGE_SIZE) & -CHUNK_SIZE;
 
         // chop off 10% of the biggest memory region for the kernel heap
@@ -168,7 +166,7 @@ static void init_physical_page_alloc(MemMap* restrict mem_map) {
             size_t kernel_heap_size = ((region->pages + 9) / 10) * PAGE_SIZE;
             kprintf("Kernel heap: %p - %p (%d MiB)\n", base, base + kernel_heap_size - 1, kernel_heap_size / (1024*1024));
 
-            kernel_free_list = (KernelFreeList*) base;
+            kernel_free_list = paddr2kaddr(base);
             kernel_free_list->size = kernel_heap_size;
             kernel_free_list->is_free = 1;
             kernel_free_list->has_next = false;
@@ -182,7 +180,7 @@ static void init_physical_page_alloc(MemMap* restrict mem_map) {
                 continue;
             }
 
-            boot_info->cores[0].alloc.data = (void*) base;
+            boot_info->cores[0].alloc.data = paddr2kaddr(base);
             base += pages_per_queue*PAGE_SIZE;
         }
 
@@ -191,7 +189,7 @@ static void init_physical_page_alloc(MemMap* restrict mem_map) {
             kprintf("Region: %p - %p (%d MiB)\n", i, end - 1, aa);
 
             while (i < end) {
-                atomic_store_explicit(&boot_info->cores[0].alloc.data[c++], (void*) i, memory_order_relaxed);
+                atomic_store_explicit(&boot_info->cores[0].alloc.data[c++], paddr2kaddr(i), memory_order_relaxed);
                 i += CHUNK_SIZE;
             }
         }
@@ -301,7 +299,7 @@ static void* alloc_physical_page(void) {
 }
 
 static u64 canonical_addr(u64 ptr) {
-    return (ptr >> 48) != 0 ? ptr | (0xFFFull << 48) : ptr;
+    return (ptr >> 47) != 0 ? ptr | (0xFFFFull << 48) : ptr;
 }
 
 static PageTable* get_pt(PageTable* parent, size_t index) {
@@ -384,8 +382,8 @@ static void dump_pages(PageTable* pt, int depth, uintptr_t base) {
             uintptr_t vaddr = base + (i << shifts[depth]);
             kprintf("[%d] %p (%p)\n", i, pt->entries[i], vaddr);
 
-            if (depth < 3) {
-                dump_pages((PageTable*) (pt->entries[i] & -PAGE_SIZE), depth + 1, vaddr);
+            if (depth < 1) {
+                dump_pages(paddr2kaddr(pt->entries[i] & -PAGE_SIZE), depth + 1, vaddr);
             }
         }
     }
@@ -429,7 +427,7 @@ static u64 memmap__probe(PageTable* address_space, uintptr_t virt) {
             return 0;
         }
 
-        curr = (PageTable*) canonical_addr(curr->entries[l[i]] & 0xFFFFFFFFF000ull);
+        curr = paddr2kaddr(canonical_addr(curr->entries[l[i]] & 0xFFFFFFFFF000ull));
     }
 
     return curr->entries[l[3]];

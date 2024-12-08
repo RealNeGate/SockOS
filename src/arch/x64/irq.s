@@ -1,5 +1,5 @@
 default rel
-global irq_enable, irq_disable, asm_int_handler, syscall_handler
+global irq_enable, irq_disable, asm_int_handler, syscall_handler, do_context_switch
 global io_in8, io_in16, io_in32, io_out8, io_out16, io_out32
 extern irq_int_handler, syscall_table_count, syscall_table, boot_info
 
@@ -117,8 +117,9 @@ asm_int_handler:
 
     ; switch to kernel PML4
     mov rsi, cr3
-    mov rax, [boot_info]
-    mov rax, [rax + 0]
+    mov rcx, [boot_info]
+    mov rax, [rcx + 0]
+    sub rax, [rcx + 16]
     mov cr3, rax
 
     ; fxsave needs to be aligned to 16bytes
@@ -216,8 +217,9 @@ syscall_handler:
 syscall_handler.has_syscall:
     ; switch to kernel PML4
     mov rsi, cr3
-    mov rdx, [boot_info]
-    mov rdx, [rdx + 0]
+    mov r10, [boot_info]
+    mov rdx, [r10 + 0]
+    sub rdx, [r10 + 16]
     mov cr3, rdx
 
     ; run C syscall stuff & preserve old address space (in callee saved reg)
