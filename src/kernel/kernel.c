@@ -27,8 +27,9 @@ static void free_physical_page(void* ptr);
 
 // forward decls
 #include "print.c"
-#include "vmem.c"
+#include "vmem.h"
 #include "threads.c"
+#include "vmem.c"
 #include "scheduler.c"
 #include "spall.h"
 

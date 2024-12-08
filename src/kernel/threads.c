@@ -98,7 +98,7 @@ static void identity_map_kernel_region(VMem_AddrSpace* addr_space, void* p, size
 Env* env_create(void) {
     Env* env = alloc_physical_page();
     env->addr_space.hw_tables = alloc_physical_page();
-    env->addr_space.commit_table = nbhm_alloc(500);
+    env->addr_space.commit_table = nbhm_alloc(60);
 
     // copy over the kernel's higher half pages bar for bar.
     for (size_t i = 512; (i--) > 256;) {

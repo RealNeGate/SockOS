@@ -79,7 +79,6 @@ struct PerCPU {
     // used for interrupts
     u8* kernel_stack;
     u8* kernel_stack_top;
-
     u8* user_stack_scratch;
 
     u32 core_id, lapic_id;
@@ -89,6 +88,9 @@ struct PerCPU {
 
     // 2MiB heap
     _Alignas(64) PerCPU_PageAllocator alloc;
+
+    // NBHM crap
+    _Alignas(64) _Atomic uint64_t ebr_time;
 
     // Scheduler info
     struct Thread* current_thread;

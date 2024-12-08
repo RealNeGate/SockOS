@@ -24,40 +24,9 @@
 #ifndef NBHM_H
 #define NBHM_H
 
-#if __STDC_HOSTED__
-#include <threads.h>
-#endif
-
 #include <stdint.h>
 #include <stddef.h>
 #include <stdatomic.h>
-
-#ifndef NBHM_VIRTUAL_ALLOC
-// Virtual memory allocation (since the tables are generally nicely page-size friendly)
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-
-#define NBHM_VIRTUAL_ALLOC(size)     VirtualAlloc(NULL, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE)
-#define NBHM_VIRTUAL_FREE(ptr, size) VirtualFree(ptr, size, MEM_RELEASE)
-#else
-#include <sys/mman.h>
-
-#define NBHM_VIRTUAL_ALLOC(size)     mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)
-#define NBHM_VIRTUAL_FREE(ptr, size) munmap(ptr, size)
-#endif
-#endif
-
-// traditional heap ops
-#ifndef NBHM_REALLOC
-#define NBHM_REALLOC(ptr, size) realloc(ptr, size)
-#endif // NBHM_REALLOC
-
-#if __STDC_HOSTED__
-#define NBHM_ASSERT(x) assert(x)
-#elif !defined(NBHM_ASSERT)
-#error "Missing NBHM_ASSERT(x), please define one"
-#endif
 
 // personal debooging stuff
 #define NBHM__DEBOOGING 0
@@ -158,21 +127,8 @@ static void nbhm_compute_size(NBHM_Table* table, size_t cap) {
     table->cap = cap;
 }
 
-static NBHM nbhm_alloc(size_t initial_cap) {
-    size_t cap = nbhm_compute_cap(initial_cap);
-    NBHM_Table* table = NBHM_VIRTUAL_ALLOC(sizeof(NBHM_Table) + cap*sizeof(NBHM_Entry));
-    nbhm_compute_size(table, cap);
-    return (NBHM){ .latest = table };
-}
-
-static void nbhm_free(NBHM* hs) {
-    NBHM_Table* curr = hs->latest;
-    while (curr) {
-        NBHM_Table* next = curr->prev;
-        NBHM_VIRTUAL_FREE(curr, sizeof(NBHM_Table) + curr->cap*sizeof(NBHM_Entry));
-        curr = next;
-    }
-}
+NBHM nbhm_alloc(size_t initial_cap);
+void nbhm_free(NBHM* hs);
 
 // for spooky stuff
 static NBHM_Entry* nbhm_array(NBHM* hs) { return hs->latest->data; }
@@ -183,18 +139,8 @@ static size_t nbhm_capacity(NBHM* hs)   { return hs->latest->cap; }
 #endif // NBHM_H
 
 #ifdef NBHM_IMPL
-#if defined(_WIN32)
-#pragma comment(lib, "synchronization.lib")
-#endif
-
 int NBHM_TOMBSTONE;
 int NBHM_NO_MATCH_OLD;
-
-#if __STDC_HOSTED__
-_Thread_local bool nbhm_ebr_init;
-_Thread_local NBHM_EBREntry nbhm_ebr;
-atomic_int nbhm_ebr_count;
-_Atomic(NBHM_EBREntry*) nbhm_ebr_list;
 
 atomic_flag nbhm_free_thread_init;
 
@@ -206,29 +152,30 @@ _Atomic(NBHM_FreeNode*) nbhm_free_tail = &NBHM_DUMMY;
 _Atomic uint32_t nbhm_free_done;
 _Atomic uint32_t nbhm_free_count;
 
-int nbhm_thread_fn(void* arg) {
-    #if NBHM__DEBOOGING
-    spall_auto_thread_init(111111, SPALL_DEFAULT_BUFFER_SIZE);
-    #endif
+NBHM nbhm_alloc(size_t initial_cap) {
+    size_t cap = nbhm_compute_cap(initial_cap);
+    NBHM_Table* table = NBHM_VIRTUAL_ALLOC(sizeof(NBHM_Table) + cap*sizeof(NBHM_Entry));
+    nbhm_compute_size(table, cap);
+    return (NBHM){ .latest = table };
+}
 
+void nbhm_free(NBHM* hs) {
+    NBHM_Table* curr = hs->latest;
+    while (curr) {
+        NBHM_Table* next = curr->prev;
+        NBHM_VIRTUAL_FREE(curr, sizeof(NBHM_Table) + curr->cap*sizeof(NBHM_Entry));
+        curr = next;
+    }
+}
+
+static uint64_t states[256];
+int nbhm_thread_fn(void* arg) {
     for (;;) retry: {
         // Use a futex to avoid polling too hard
         uint32_t old;
         while (old = nbhm_free_count, old == nbhm_free_done) {
-            #if defined(_WIN32)
-            int WaitOnAddress(volatile void* addr, void* compare_addr, size_t addr_size, unsigned long millis);
-            WaitOnAddress(&nbhm_free_count, &old, 4, -1);
-            #elif defined(__linux__)
-            int futex_rc = futex(SYS_futex, &nbhm_free_count, FUTEX_WAIT, old, NULL, NULL, 0);
-            NBHM_ASSERT(futex_rc >= 0);
-            #elif defined(__APPLE__)
-            int __ulock_wait(uint32_t operation, void *addr, uint64_t value, uint32_t timeout);
-            int res = __ulock_wait(0x01000001, &nbhm_free_count, old, 0);
-            NBHM_ASSERT(res >= 0);
-            #else
             // No futex support, just sleep once we run out of tasks
-            thrd_sleep(&(struct timespec){.tv_nsec=100000000}, NULL);
-            #endif
+            // ...
         }
 
         NBHM_FreeNode* p = atomic_load_explicit(&nbhm_free_head, memory_order_relaxed);
@@ -241,18 +188,12 @@ int nbhm_thread_fn(void* arg) {
         NBHM_Table* table = p->next->table;
 
         // Handling deferred freeing without blocking up the normie threads
-        int state_count  = nbhm_ebr_count;
-        uint64_t* states = NBHM_REALLOC(NULL, state_count * sizeof(uint64_t));
-
         NBHM__BEGIN("scan");
-        NBHM_EBREntry* us = &nbhm_ebr;
         // "snapshot" the current statuses, once the other threads either advance or aren't in the
         // hashset functions we know we can free.
-        for (NBHM_EBREntry* list = atomic_load(&nbhm_ebr_list); list; list = list->next) {
+        for (int i = 0; i < boot_info->core_count; i++) {
             // mark sure no ptrs refer to prev
-            if (list != us && list->id < state_count) {
-                states[list->id] = list->time;
-            }
+            states[i] = boot_info->cores[i].ebr_time;
         }
 
         // important bit is that pointers can't be held across the critical sections, they'd need
@@ -277,20 +218,20 @@ int nbhm_thread_fn(void* arg) {
         //   PINNED(A)   -> PINNED(A)
         //
         // these aren't quite blocking the other threads, we're simply checking what their progress is concurrently.
-        for (NBHM_EBREntry* list = atomic_load(&nbhm_ebr_list); list; list = list->next) {
-            if (list != us && list->id < state_count && (states[list->id] & NBHM_PINNED_BIT)) {
-                uint64_t before_t = states[list->id], now_t;
+        for (int i = 0; i < boot_info->core_count; i++) {
+            uint64_t before_t = states[i];
+            uint64_t now_t = boot_info->cores[i].ebr_time;
+            if (before_t & NBHM_PINNED_BIT) {
                 do {
-                    // idk, maybe this should be a better spinlock
-                    now_t = atomic_load(&list->time);
+                    now_t = boot_info->cores[i].ebr_time;
                 } while (before_t == now_t);
             }
         }
         NBHM__END();
 
         // no more refs, we can immediately free
-        NBHM_VIRTUAL_FREE(table, sizeof(NBHM_Table) + table->cap*sizeof(NBHM_Entry));
-        NBHM_REALLOC(states, 0);
+        // NBHM_VIRTUAL_FREE(table, sizeof(NBHM_Table) + table->cap*sizeof(NBHM_Entry));
+        kprintf("Free %p\n", table);
 
         nbhm_free_done++;
 
@@ -299,20 +240,12 @@ int nbhm_thread_fn(void* arg) {
         #endif
     }
 }
-#endif
-
 #endif // NBHM_IMPL
 
 // Templated implementation
 #ifdef NBHM_FN
 extern int NBHM_TOMBSTONE;
 extern int NBHM_NO_MATCH_OLD;
-
-#if __STDC_HOSTED__
-extern _Thread_local bool nbhm_ebr_init;
-extern _Thread_local NBHM_EBREntry nbhm_ebr;
-extern _Atomic(int) nbhm_ebr_count;
-extern _Atomic(NBHM_EBREntry*) nbhm_ebr_list;
 
 extern atomic_flag nbhm_free_thread_init;
 
@@ -323,7 +256,6 @@ extern _Atomic uint32_t nbhm_free_done;
 extern _Atomic uint32_t nbhm_free_count;
 
 extern int nbhm_thread_fn(void*);
-#endif
 
 static void* NBHM_FN(put_if_match)(NBHM* hs, NBHM_Table* latest, NBHM_Table* prev, void* key, void* val, void* exp);
 
@@ -347,18 +279,16 @@ static size_t NBHM_FN(hash2index)(NBHM_Table* table, uint64_t h) {
 
 // flips the top bit on
 static void NBHM_FN(enter_pinned)(void) {
-    #if __STDC_HOSTED__
-    uint64_t t = atomic_load_explicit(&nbhm_ebr.time, memory_order_relaxed);
-    atomic_store_explicit(&nbhm_ebr.time, t + NBHM_PINNED_BIT, memory_order_release);
-    #endif
+    PerCPU* cpu = cpu_get();
+    uint64_t t = atomic_load_explicit(&cpu->ebr_time, memory_order_relaxed);
+    atomic_store_explicit(&cpu->ebr_time, t + NBHM_PINNED_BIT, memory_order_release);
 }
 
 // flips the top bit off AND increments time by one
 static void NBHM_FN(exit_pinned)(void) {
-    #if __STDC_HOSTED__
-    uint64_t t = atomic_load_explicit(&nbhm_ebr.time, memory_order_relaxed);
-    atomic_store_explicit(&nbhm_ebr.time, t + NBHM_PINNED_BIT + 1, memory_order_release);
-    #endif
+    PerCPU* cpu = cpu_get();
+    uint64_t t = atomic_load_explicit(&cpu->ebr_time, memory_order_relaxed);
+    atomic_store_explicit(&cpu->ebr_time, t + NBHM_PINNED_BIT + 1, memory_order_release);
 }
 
 NBHM_Table* NBHM_FN(move_items)(NBHM* hm, NBHM_Table* latest, NBHM_Table* prev, int items_to_move) {
@@ -409,10 +339,9 @@ NBHM_Table* NBHM_FN(move_items)(NBHM* hm, NBHM_Table* latest, NBHM_Table* prev, 
         NBHM__BEGIN("detach");
         latest->prev = NULL;
 
-        #if __STDC_HOSTED__
         if (!atomic_flag_test_and_set(&nbhm_free_thread_init)) {
-            thrd_t freeing_thread; // don't care to track it
-            thrd_create(&freeing_thread, nbhm_thread_fn, NULL);
+            // spin up kernel thread which does freeing work
+            thread_create(NULL, nbhm_thread_fn, (uintptr_t) alloc_physical_page(), 4096, false);
         }
 
         NBHM_FreeNode* new_node = NBHM_REALLOC(NULL, sizeof(NBHM_FreeNode));
@@ -431,43 +360,13 @@ NBHM_Table* NBHM_FN(move_items)(NBHM* hm, NBHM_Table* latest, NBHM_Table* prev, 
 
         nbhm_free_count++;
 
-        // signal futex
-        #if defined(_WIN32)
-        extern void WakeByAddressSingle(void* addr);
-        WakeByAddressSingle(&nbhm_free_count);
-        #elif defined(__linux__)
-        int futex_rc = futex(SYS_futex, &nbhm_free_count, FUTEX_WAKE, 1, NULL, NULL, 0);
-        NBHM_ASSERT(futex_rc >= 0);
-        #elif defined(__APPLE__)
-        extern int __ulock_wake(uint32_t operation, void* addr, uint64_t wake_value);
-        int res = __ulock_wake(0x01000001, &nbhm_free_count);
-        NBHM_ASSERT(res >= 0);
-        #endif
-        #endif // __STDC_HOSTED__
+        // TODO(NeGate): signal futex
+        // WakeByAddressSingle(&nbhm_free_count);
 
         prev = NULL;
         NBHM__END();
     }
     return prev;
-}
-
-static void NBHM_FN(ebr_try_init)(void) {
-    #if __STDC_HOSTED__
-    if (!nbhm_ebr_init) {
-        NBHM__BEGIN("init");
-        nbhm_ebr_init = true;
-        nbhm_ebr.id = nbhm_ebr_count++;
-
-        // add to ebr list, we never free this because i don't care
-        // TODO(NeGate): i do care, this is a nightmare when threads die figure it out
-        NBHM_EBREntry* old;
-        do {
-            old = atomic_load_explicit(&nbhm_ebr_list, memory_order_relaxed);
-            nbhm_ebr.next = old;
-        } while (!atomic_compare_exchange_strong(&nbhm_ebr_list, &old, &nbhm_ebr));
-        NBHM__END();
-    }
-    #endif
 }
 
 static void* NBHM_FN(raw_lookup)(NBHM* hs, NBHM_Table* table, uint32_t h, void* key) {
@@ -513,8 +412,8 @@ static void* NBHM_FN(put_if_match)(NBHM* hs, NBHM_Table* latest, NBHM_Table* pre
                 prev   = latest;
                 latest = new_top;
 
-                // float s = sizeof(NBHM_Table) + new_cap*sizeof(NBHM_Entry);
-                // printf("Resize: %.2f KiB (cap=%zu)\n", s / 1024.0f, new_cap);
+                size_t s = sizeof(NBHM_Table) + new_cap*sizeof(NBHM_Entry);
+                kprintf("Resize: %x KiB (cap=%d)\n", s, new_cap);
             }
             continue;
         }
@@ -612,8 +511,6 @@ void* NBHM_FN(put)(NBHM* hm, void* key, void* val) {
     NBHM__BEGIN("put");
 
     NBHM_ASSERT(val);
-    NBHM_FN(ebr_try_init)();
-
     NBHM_FN(enter_pinned)();
     NBHM_Table* latest = atomic_load(&hm->latest);
 
@@ -637,8 +534,6 @@ void* NBHM_FN(remove)(NBHM* hm, void* key) {
     NBHM__BEGIN("remove");
 
     NBHM_ASSERT(key);
-    NBHM_FN(ebr_try_init)();
-
     NBHM_FN(enter_pinned)();
     NBHM_Table* latest = atomic_load(&hm->latest);
 
@@ -662,8 +557,6 @@ void* NBHM_FN(get)(NBHM* hm, void* key) {
     NBHM__BEGIN("get");
 
     NBHM_ASSERT(key);
-    NBHM_FN(ebr_try_init)();
-
     NBHM_FN(enter_pinned)();
     NBHM_Table* latest = atomic_load(&hm->latest);
 
@@ -711,8 +604,6 @@ void* NBHM_FN(put_if_null)(NBHM* hm, void* key, void* val) {
     NBHM__BEGIN("put");
 
     NBHM_ASSERT(val);
-    NBHM_FN(ebr_try_init)();
-
     NBHM_FN(enter_pinned)();
     NBHM_Table* latest = atomic_load(&hm->latest);
 
@@ -735,8 +626,6 @@ void* NBHM_FN(put_if_null)(NBHM* hm, void* key, void* val) {
 // waits for all items to be moved up before continuing
 void NBHM_FN(resize_barrier)(NBHM* hm) {
     NBHM__BEGIN("resize_barrier");
-    NBHM_FN(ebr_try_init)();
-
     NBHM_FN(enter_pinned)();
     NBHM_Table *prev, *latest = atomic_load(&hm->latest);
     while (prev = atomic_load(&latest->prev), prev != NULL) {
