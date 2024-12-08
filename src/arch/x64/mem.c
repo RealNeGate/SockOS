@@ -55,7 +55,7 @@ static void* kernelfl_alloc(size_t obj_size) {
                 // perfect fit
                 list->is_free = false;
 
-                kprintf("[kheap] alloc(%d) = %p\n", obj_size, &list->data[0]);
+                ON_DEBUG(KHEAP)(kprintf("[kheap] alloc(%d) = %p\n", obj_size, &list->data[0]));
                 return &list->data[0];
             } else if (list->size > obj_size) {
                 size_t full_size = list->size;
@@ -72,7 +72,7 @@ static void* kernelfl_alloc(size_t obj_size) {
                 split->is_free = true;
                 split->prev = list;
 
-                kprintf("[kheap] alloc(%d) = %p\n", obj_size, &list->data[0]);
+                ON_DEBUG(KHEAP)(kprintf("[kheap] alloc(%d) = %p\n", obj_size, &list->data[0]));
                 return &list->data[0];
             }
         }
@@ -139,7 +139,7 @@ static PerCPU* get_percpu(void) {
 static void init_physical_page_alloc(MemMap* restrict mem_map) {
     size_t total_chunks = 0;
     int biggest = -1;
-    FOREACH_N(i, 0, mem_map->nregions) {
+    FOR_N(i, 0, mem_map->nregions) {
         MemRegion* region = &mem_map->regions[i];
         if (region->type != MEM_REGION_USABLE || region->base < 0x100000) {
             continue;
@@ -160,7 +160,7 @@ static void init_physical_page_alloc(MemMap* restrict mem_map) {
 
     // c is count of chunks handed to a core's queue,
     size_t c = 0;
-    FOREACH_N(i, 0, mem_map->nregions) {
+    FOR_N(i, 0, mem_map->nregions) {
         MemRegion* restrict region = &mem_map->regions[i];
         if (region->type != MEM_REGION_USABLE || region->base < 0x100000) {
             continue;
@@ -220,11 +220,11 @@ static void subdivide_memory(MemMap* restrict mem_map, int num_cores) {
     // kprintf("Core[0] queue has %d entries (split into %d)\n", boot_info->cores[0].alloc.bot, per_core);
 
     int64_t k = t + per_core;
-    FOREACH_N(i, 1, num_cores) {
+    FOR_N(i, 1, num_cores) {
         kassert(pages_per_queue == 1, "TODO: queue too big (we're dumb)");
         boot_info->cores[i].alloc.data = alloc_physical_page();
 
-        FOREACH_N(j, 0, per_core) {
+        FOR_N(j, 0, per_core) {
             void* ptr = atomic_load_explicit(&boot_info->cores[0].alloc.data[k & cpu_alloc_queue_mask], memory_order_relaxed);
 
             // kprintf("Page[%d]: %p\n", k & cpu_alloc_queue_mask, ptr);
@@ -303,7 +303,7 @@ static void* alloc_physical_page(void) {
     PageFreeList* fl = cpu->heap;
     cpu->heap = fl->next;
 
-    kprintf("[kpool] alloc(%d) = %p\n", PAGE_SIZE, fl);
+    ON_DEBUG(KPOOL)(kprintf("[kpool] alloc(%d) = %p\n", PAGE_SIZE, fl));
     memset(fl, 0, PAGE_SIZE);
     return fl;
 }

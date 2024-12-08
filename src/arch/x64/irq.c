@@ -114,7 +114,7 @@ static uint32_t micros_to_apic_time(uint64_t t) {
 
 void irq_startup(int core_id) {
     if (core_id == 0) {
-        FOREACH_N(i, 0, 256) _idt[i] = (IDTEntry){ 0 };
+        FOR_N(i, 0, 256) _idt[i] = (IDTEntry){ 0 };
         SET_INTERRUPT(3,  false);
         SET_INTERRUPT(6,  false);
         SET_INTERRUPT(8,  true);
@@ -197,10 +197,12 @@ uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
     u64 now = __rdtsc();
     PageTable* old_address_space = paddr2kaddr(cr3);
 
+    #if DEBUG_IRQ
     if (state->interrupt_num != 14 && state->interrupt_num != 32) {
         kprintf("%s (%d): error=0x%x\n", interrupt_names[state->interrupt_num], state->interrupt_num, state->error);
         kprintf("  rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
     }
+    #endif
 
     if (state->interrupt_num == 14) {
         u64 access_addr = x86_get_cr2();
@@ -273,7 +275,7 @@ uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
                 u64 new_pte = (update.translated & 0xFFFFFFFFF000) | page_flags | PAGE_PRESENT;
                 if (old_pte != new_pte) {
                     atomic_compare_exchange_strong(&curr->entries[pte_index], &old_pte, new_pte);
-                    kprintf("[vmem] updated PTE %p -> %p!\n", old_pte, new_pte);
+                    ON_DEBUG(VMEM)(kprintf("[vmem] updated PTE %p -> %p!\n", old_pte, new_pte));
                 }
             }
 
@@ -281,6 +283,7 @@ uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
             return cr3;
         }
 
+        #if DEBUG_IRQ
         // just throw error
         kprintf("%s (%d): error=0x%x\n", interrupt_names[state->interrupt_num], state->interrupt_num, state->error);
         kprintf("  rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
@@ -306,6 +309,7 @@ uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
         } else {
             kprintf("  code:   NOT PRESENT\n");
         }
+        #endif
 
         halt();
         return cr3;

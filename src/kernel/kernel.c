@@ -50,9 +50,6 @@ static void free_physical_page(void* ptr);
 #include "threads.c"
 #include "scheduler.c"
 
-#define STR2(x) #x
-#define STR(x) STR2(x)
-
 // loader.s
 extern int kernel_idle(void* arg);
 

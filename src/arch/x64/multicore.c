@@ -46,12 +46,12 @@ void boot_cores(void) {
     int chunk_count = ((boot_info->core_count - 1) + STACKS_PER_CHUNK - 1) / STACKS_PER_CHUNK;
 
     int k = 1;
-    FOREACH_N(i, 0, chunk_count) {
+    FOR_N(i, 0, chunk_count) {
         // subdivide into a few stacks with the bottoms tagged
         char* stack_space = alloc_physical_chunk();
 
         int limit = i == chunk_count ? ((boot_info->core_count - 1) % STACKS_PER_CHUNK) : STACKS_PER_CHUNK;
-        FOREACH_N(j, 0, limit) {
+        FOR_N(j, 0, limit) {
             // we put a unique cookie at the bottom of the kernel thread's stack so it knows what
             // Thread ID it is.
             uint32_t* sp = (uint32_t*) &stack_space[j * KERNEL_STACK_SIZE];
@@ -88,7 +88,7 @@ void boot_cores(void) {
     slots[4] = (u64) 0x1000 + (premain - bootstrap_entry);
 
     // Walk the cores and boot them
-    FOREACH_N(i, 1, boot_info->core_count) {
+    FOR_N(i, 1, boot_info->core_count) {
         u32 lapic_id = boot_info->cores[i].lapic_id;
 
         // Send a CPU INIT

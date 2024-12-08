@@ -48,11 +48,10 @@ static void x86_print_disasm(u8* p, size_t size) {
     while (p < end) {
         // print raw
         kprintf("  ");
-        FOREACH_N(i, 0, 16) {
+        FOR_N(i, 0, 16) {
             kprintf("0x%x ", p[i]);
         }
         kprintf("\n");
-
         kprintf("  ");
 
         // prefixes

@@ -16,6 +16,12 @@ typedef int8_t              i8;
 #define ELEM_COUNT(a) (sizeof(a) / sizeof((a)[0]))
 #define PAGE_ALIGN(a) (((a) + 0x1000 - 1) & -0x1000)
 
+#define CONCAT_(x, y) x ## y
+#define CONCAT(x, y) CONCAT_(x, y)
+
+#define STR2(x) #x
+#define STR(x) STR2(x)
+
 // common macros
 //   NO_DEFAULT;
 //      basically an unreachable switch statement default
@@ -25,17 +31,21 @@ typedef int8_t              i8;
 
 // common iterators (also macros but i logically separate them in my head)
 // FOREACH_N(i, 0, 10) sum += i*i;
-#define FOREACH_N(it, start, end)           for (ptrdiff_t it = (start); it != (end); it++)
-// FOREACH_N_STEP(i, 0, 4) sum += i*i;
-#define FOREACH_N_STEP(it, start, end, inc) for (ptrdiff_t it = (start); it != (end); it += (inc))
+#define FOR_N(it, start, end)           for (ptrdiff_t it = (start); it != (end); it++)
+
+// logging options
+#define DEBUG_SYSCALL 0
+#define DEBUG_IRQ     0
+#define DEBUG_VMEM    0
+#define DEBUG_KHEAP   0
+#define DEBUG_KPOOL   0
+
+#define ON_DEBUG(cond) CONCAT(DO_IF_, CONCAT(DEBUG_, cond))
+
+#define DO_IF(cond) CONCAT(DO_IF_, cond)
+#define DO_IF_0(...)
+#define DO_IF_1(...) __VA_ARGS__
 
 #ifdef __CUIK__
 #define USE_INTRIN 1
 #endif
-
-// used for zig<->c embed communication... or as i like to call them
-// zigma to zigma communication.
-typedef struct {
-    size_t length;
-    const u8* data;
-} Buffer;

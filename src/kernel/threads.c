@@ -216,7 +216,7 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
     kassert(segment_header_bounds < program_size, "segments do not fit into file");
 
     const u8* segments = program + elf_header->e_phoff;
-    FOREACH_N(i, 0, elf_header->e_phnum) {
+    FOR_N(i, 0, elf_header->e_phnum) {
         Elf64_Phdr* segment = (Elf64_Phdr*) (segments + i*segment_size);
         if (segment->p_type != PT_LOAD) continue;
 
@@ -229,7 +229,7 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
         uintptr_t vaddr = (segment->p_vaddr & -PAGE_SIZE);
         uintptr_t paddr = kaddr2paddr((u8*) program + (segment->p_offset & -PAGE_SIZE));
 
-        kprintf("[elf] segment: %p (%d) => %p (%d)\n", vaddr, segment->p_memsz, paddr, segment->p_filesz);
+        // kprintf("[elf] segment: %p (%d) => %p (%d)\n", vaddr, segment->p_memsz, paddr, segment->p_filesz);
 
         size_t file_size = (segment->p_filesz + PAGE_SIZE - 1) & -PAGE_SIZE;
         size_t mem_size  = (segment->p_memsz  + PAGE_SIZE - 1) & -PAGE_SIZE;
@@ -243,12 +243,14 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
             vmem_add_range(&env->addr_space, vaddr+mem_size, file_size - mem_size, 0, VMEM_PAGE_READ | VMEM_PAGE_WRITE | VMEM_PAGE_USER);
         }
     }
-    kprintf("[elf] entry=%p\n", elf_header->e_entry);
 
     // tiny i know
-    vmem_add_range(&env->addr_space, 0xA0000000, 8192, 0, VMEM_PAGE_READ | VMEM_PAGE_WRITE | VMEM_PAGE_USER);
+    uintptr_t stack_ptr = vmem_alloc(&env->addr_space, 8192, 0, VMEM_PAGE_READ | VMEM_PAGE_WRITE | VMEM_PAGE_USER);
 
-    return thread_create(env, (ThreadEntryFn*) elf_header->e_entry, 0xA0000000, 4096, true);
+    kprintf("[elf] entry=%p\n", elf_header->e_entry);
+    kprintf("[elf] stack=%p\n", stack_ptr);
+
+    return thread_create(env, (ThreadEntryFn*) elf_header->e_entry, stack_ptr, 8192, true);
 }
 
 #endif /* IMPL */

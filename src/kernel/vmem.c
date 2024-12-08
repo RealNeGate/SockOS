@@ -282,6 +282,50 @@ VMem_PageDesc* vmem_node_insert(VMem_AddrSpace* addr_space, uintptr_t key) {
     }
 }
 
+uintptr_t vmem_alloc(VMem_AddrSpace* addr_space, size_t size, uintptr_t paddr, VMem_Flags flags) {
+    kassert((size & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", size);
+
+    // walk all regions until we find a gap big enough (SLOW!!!)
+    uintptr_t vaddr = 0xA0000000;
+    VMem_Cursor cursor = vmem_node_lookup(addr_space, vaddr);
+
+    // we only want addresses past vaddr so skip one if we're behind it
+    if (cursor.node && cursor.node->keys[cursor.index] < vaddr) {
+        cursor.index++;
+        if (cursor.index >= cursor.node->key_count) {
+            cursor.index = 0;
+            cursor.node = cursor.node->next;
+        }
+    }
+
+    int i = cursor.index;
+    while (cursor.node) {
+        kassert(cursor.node->is_leaf, "fuck");
+
+        int key_count = cursor.node->key_count;
+        for (; i < key_count; i++) {
+            uintptr_t free_space = cursor.node->keys[i] - vaddr;
+            if (free_space > size) {
+                ON_DEBUG(VMEM)(kprintf("[vmem] found %d bytes between %p and %p\n", free_space, vaddr, cursor.node->keys[i]));
+                goto done;
+            }
+
+            // last known address which is free
+            vaddr = cursor.node->keys[i] + cursor.node->vals[i].size;
+        }
+
+        cursor.node = cursor.node->next;
+        i = 0;
+    }
+
+    ON_DEBUG(VMEM)(kprintf("[vmem] found no allocations past %p\n", vaddr));
+
+    done:
+    VMem_PageDesc* desc = vmem_node_insert(addr_space, vaddr);
+    *desc = (VMem_PageDesc){ .valid = 1, .flags = flags, .file_ptr = paddr >> 12ull, .size = size };
+    return vaddr;
+}
+
 void vmem_add_range(VMem_AddrSpace* addr_space, uintptr_t vaddr, size_t vsize, uintptr_t paddr, VMem_Flags flags) {
     kassert((vaddr & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", vaddr);
     kassert((vsize & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", vsize);
@@ -290,7 +334,7 @@ void vmem_add_range(VMem_AddrSpace* addr_space, uintptr_t vaddr, size_t vsize, u
     VMem_PageDesc* desc = vmem_node_insert(addr_space, vaddr);
     desc->valid    = 1;
     desc->flags    = flags;
-    desc->file_ptr = (uintptr_t) (paddr >> 12);
+    desc->file_ptr = (uintptr_t) (paddr >> 12ull);
     desc->size     = vsize;
 }
 
@@ -332,9 +376,9 @@ bool vmem_segfault(VMem_AddrSpace* addr_space, uintptr_t access_addr, bool is_wr
 
         actual_page = (uintptr_t) vmem_addrhm_put_if_null(&addr_space->commit_table, (void*) access_addr, (void*) new_page);
         if (desc->file_ptr != 0) {
-            kprintf("[vmem] first touch on file mapped address (%p), paddr=%p\n", access_addr, new_page);
+            ON_DEBUG(VMEM)(kprintf("[vmem] first touch on file mapped address (%p), paddr=%p\n", access_addr, new_page));
         } else {
-            kprintf("[vmem] first touch on private page (%p), paddr=%p\n", access_addr, new_page);
+            ON_DEBUG(VMEM)(kprintf("[vmem] first touch on private page (%p), paddr=%p\n", access_addr, new_page));
             if (actual_page != new_page) {
                 free_physical_chunk(paddr2kaddr(new_page));
             }
