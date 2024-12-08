@@ -84,7 +84,7 @@ void kmain(BootInfo* restrict info) {
 
     subdivide_memory(&boot_info->mem_map, boot_info->core_count);
 
-    pci_scan_all();
+    init_pci();
 
     spall_header();
     spall_begin_event("AAA", 0);

@@ -390,7 +390,7 @@ typedef struct {
 } Device_Driver;
 
 #define MAX_DEVICES 10
-static void pci_scan_all(void) {
+static void init_pci(void) {
     Device_Driver drivers[] = {
         {
             .name = "82540EM Gigabit Ethernet Controller",
