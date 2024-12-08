@@ -126,35 +126,7 @@ static inline u32 pci_read_u32(u32 bus, u32 device, u32 func, u32 offs) {
     return io_in32(PCI_VALUE_PORT);
 }
 
-typedef struct {
-	u32 value;
-	u32 size;
-} Raw_BAR;
-
-typedef struct {
-	u16 vendor_id;
-	u16 device_id;
-
-	u8 class;
-	u8 subclass;
-	u8 prog_IF;
-	u8 revision;
-
-	Raw_BAR bars[7];
-	int bar_count;
-
-	u8 irq_line;
-	u8 irq_pin;
-} PCI_Device;
-
-typedef struct {
-	u64 addr;
-	bool prefetch;
-	u8 type;
-
-	bool is_mem;
-} BAR;
-static BAR parse_bar(u32 bar) {
+BAR parse_bar(u32 bar) {
 	BAR b = {};
 	b.is_mem = !(bar & 0x1);
 
@@ -407,8 +379,29 @@ static bool pci_check_device(PCI_Device *dev, u32 bus, u32 device, u8 func) {
 	return true;
 }
 
+typedef struct {
+	char *name;
+
+	int vendor_id;
+	int device_id;
+	
+	bool (*init)(PCI_Device *dev);
+	bool (*exit)(PCI_Device *dev);
+} Device_Driver;
+
 #define MAX_DEVICES 10
 static void pci_scan_all(void) {
+	Device_Driver drivers[] = {
+		{
+			.name = "82540EM Gigabit Ethernet Controller",
+			.vendor_id = 0x8086,
+			.device_id = 0x100E,
+
+			.init = init_eth,
+			.exit = exit_eth,
+		},
+	};
+
 	PCI_Device devs[MAX_DEVICES];
 	int dev_count = 0;
 
@@ -419,13 +412,25 @@ static void pci_scan_all(void) {
 
 			for (u8 func = 0; func < 8; func++) {
 				if (pci_check_device(dev, bus, device, func)) {
+					pci_print_device(dev);
+
+					for (int j = 0; j < ELEM_COUNT(drivers); j++) {
+						Device_Driver *driver = &drivers[j];
+						if (driver->vendor_id == dev->vendor_id && driver->device_id == dev->device_id) {
+							kprintf("[pci] Driver found for: %s\n", driver->name);
+							if (!driver->init(dev)) {
+								kprintf("[pci] Failed to load driver!\n");
+							}
+							goto next_device;
+						}
+					}
+					next_device:
+
 					dev_count += 1;
 					if (dev_count >= MAX_DEVICES) {
 						kprintf("[pci] Hit max devices!\n");
 						goto done_scanning;
 					}
-					kprintf("[pci] bus: %d, device: %d, func: %d\n", bus, device, func);
-					pci_print_device(dev);
 				}
 			}
 		}
