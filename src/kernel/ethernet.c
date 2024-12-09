@@ -2,22 +2,22 @@
 #include "pci.h"
 
 typedef struct {
-	volatile u64 addr;
-	volatile u16 length;
-	volatile u16 checksum;
-	volatile u8  status;
-	volatile u8  errors;
-	volatile u16 special;
+    volatile u64 addr;
+    volatile u16 length;
+    volatile u16 checksum;
+    volatile u8  status;
+    volatile u8  errors;
+    volatile u16 special;
 } __attribute__((packed)) e1000_rx_desc;
 
 typedef struct {
-	volatile u64 addr;
-	volatile u16 length;
-	volatile u8  cso;
-	volatile u8  cmd;
-	volatile u8  status;
-	volatile u8  css;
-	volatile u16 special;
+    volatile u64 addr;
+    volatile u16 length;
+    volatile u8  checksum_offset;
+    volatile u8  cmd;
+    volatile u8  status;
+    volatile u8  checksum_start;
+    volatile u16 special;
 } __attribute__((packed)) e1000_tx_desc;
 
 static void print_mac(u8 *mac) {
@@ -79,93 +79,93 @@ static e1000_tx_desc *tx_descs[8];
 #define INT_MASK 0xD0 // Interrupt Mask Set/Read
 
 void write_cmd(u64 addr, u32 val) {
-	(*(volatile u32 *)(addr)) = val;
+    (*(volatile u32 *)(addr)) = val;
 }
 u32 read_cmd(u64 addr) {
-	return (*(volatile u32 *)(addr));
+    return (*(volatile u32 *)(addr));
 }
 
 static bool init_eth(PCI_Device *eth_dev) {
-	BAR mem_bar = parse_bar(eth_dev->bar[0].value);
-	u64 mem_base = mem_bar.addr;
+    BAR mem_bar = parse_bar(eth_dev->bar[0]);
+    u64 mem_base = mem_bar.addr;
 
     uintptr_t end_addr = PAGE_ALIGN(mem_base + 0x5400);
     u64 size = end_addr - mem_base;
 
-	void *reg_ptr = paddr2kaddr(mem_base);
-	uintptr_t reg_base = (uintptr_t)reg_ptr;
-	memmap_view(boot_info->kernel_pml4, mem_base, reg_base, size, VMEM_PAGE_WRITE);
+    void *reg_ptr = paddr2kaddr(mem_base);
+    uintptr_t reg_base = (uintptr_t)reg_ptr;
+    memmap_view(boot_info->kernel_pml4, mem_base, reg_base, size, VMEM_PAGE_WRITE);
 
-	u32 stat = read_cmd(reg_base + 0);
-	u32 ctrl = read_cmd(reg_base + 8);
+    u32 stat = read_cmd(reg_base + 0);
+    u32 ctrl = read_cmd(reg_base + 8);
 
-	write_cmd(reg_base + 0xD0, 0);            // disable interrupts
-	write_cmd(reg_base + 0, ctrl | 0x400000); // add reset flag
-	write_cmd(reg_base + 0xD0, 0);            // re-disable interrupts
+    write_cmd(reg_base + 0xD0, 0);            // disable interrupts
+    write_cmd(reg_base + 0, ctrl | 0x400000); // add reset flag
+    write_cmd(reg_base + 0xD0, 0);            // re-disable interrupts
 
-	u32 mac_addr_lo = *(u32 *)(reg_ptr + 0x5400);
-	u16 mac_addr_hi = *(u16 *)(reg_ptr + 0x5400 + 4);
+    u32 mac_addr_lo = *(u32 *)(reg_ptr + 0x5400);
+    u16 mac_addr_hi = *(u16 *)(reg_ptr + 0x5400 + 4);
 
-	// Get Mac Address
-	u8 mac[6];
-	mac[0] = mac_addr_lo & 0xFF;
-	mac[1] = (mac_addr_lo >> 8) & 0xFF;
-	mac[2] = (mac_addr_lo >> 16) & 0xFF;
-	mac[3] = (mac_addr_lo >> 24) & 0xFF;
-	mac[4] = mac_addr_hi & 0xFF;
-	mac[5] = (mac_addr_hi >> 8) & 0xFF;
-	print_mac(mac);
+    // Get Mac Address
+    u8 mac[6];
+    mac[0] = mac_addr_lo & 0xFF;
+    mac[1] = (mac_addr_lo >> 8) & 0xFF;
+    mac[2] = (mac_addr_lo >> 16) & 0xFF;
+    mac[3] = (mac_addr_lo >> 24) & 0xFF;
+    mac[4] = mac_addr_hi & 0xFF;
+    mac[5] = (mac_addr_hi >> 8) & 0xFF;
+    print_mac(mac);
 
-	// Setup RX Ring
-	void *rx_virt_ptr = kheap_alloc(sizeof(rx_descs) + 16);
-	uintptr_t rx_phys_addr = kaddr2paddr(rx_virt_ptr);
+    // Setup RX Ring
+    void *rx_virt_ptr = kheap_alloc(sizeof(rx_descs) + 16);
+    uintptr_t rx_phys_addr = kaddr2paddr(rx_virt_ptr);
 
-	e1000_rx_desc *r_descs = (e1000_rx_desc *)rx_virt_ptr;
-	for (int i = 0; i < ELEM_COUNT(rx_descs); i++) {
-		rx_descs[i] = (e1000_rx_desc *)((u8 *)(r_descs + i*16));
+    e1000_rx_desc *r_descs = (e1000_rx_desc *)rx_virt_ptr;
+    for (int i = 0; i < ELEM_COUNT(rx_descs); i++) {
+        rx_descs[i] = (e1000_rx_desc *)((u8 *)(r_descs + i*16));
 
-		uintptr_t ring_addr = kaddr2paddr(kheap_alloc(8192 + 16));
-		rx_descs[i]->addr = (u64)ring_addr;
-		rx_descs[i]->status = 0;
-	}
+        uintptr_t ring_addr = kaddr2paddr(kheap_alloc(8192 + 16));
+        rx_descs[i]->addr = (u64)ring_addr;
+        rx_descs[i]->status = 0;
+    }
 
-	write_cmd(reg_base + RXD_BASE_LO, rx_phys_addr >> 32);
-	write_cmd(reg_base + RXD_BASE_HI, rx_phys_addr & 0xFFFFFFFF);
+    write_cmd(reg_base + RXD_BASE_LO, rx_phys_addr >> 32);
+    write_cmd(reg_base + RXD_BASE_HI, rx_phys_addr & 0xFFFFFFFF);
 
-	write_cmd(reg_base + RXD_LEN, ELEM_COUNT(rx_descs) * 16);
-	write_cmd(reg_base + RXD_HEAD, 0);
-	write_cmd(reg_base + RXD_TAIL, ELEM_COUNT(rx_descs) - 1);
+    write_cmd(reg_base + RXD_LEN, ELEM_COUNT(rx_descs) * 16);
+    write_cmd(reg_base + RXD_HEAD, 0);
+    write_cmd(reg_base + RXD_TAIL, ELEM_COUNT(rx_descs) - 1);
 
-	write_cmd(reg_base + RX_CTRL, RCTL_EN | RCTL_SBP | RCTL_UPE |
+    write_cmd(reg_base + RX_CTRL, RCTL_EN | RCTL_SBP | RCTL_UPE |
         RCTL_MPE | RCTL_LBM_NONE | RCTL_RDMTS_HALF |
         RCTL_BAM | RCTL_SECRC | RCTL_BSIZE_8192);
-	kprintf("[eth] RX ring configured\n");
+    kprintf("[eth] RX ring configured\n");
 
-	// Setup TX Ring
-	void *tx_virt_ptr = kheap_alloc(sizeof(tx_descs) + 16);
-	uintptr_t tx_phys_addr = kaddr2paddr(tx_virt_ptr);
+    // Setup TX Ring
+    void *tx_virt_ptr = kheap_alloc(sizeof(tx_descs) + 16);
+    uintptr_t tx_phys_addr = kaddr2paddr(tx_virt_ptr);
 
-	e1000_tx_desc *t_descs = (e1000_tx_desc *)tx_virt_ptr;
-	for (int i = 0; i < ELEM_COUNT(tx_descs); i++) {
-		tx_descs[i] = (e1000_tx_desc *)((u8 *)(t_descs + i*16));
-		tx_descs[i]->addr = 0;
-		tx_descs[i]->cmd = 0;
-		tx_descs[i]->status = 1;
-	}
-	write_cmd(reg_base + TXD_BASE_LO, tx_phys_addr >> 32);
-	write_cmd(reg_base + TXD_BASE_HI, tx_phys_addr & 0xFFFFFFFF);
+    e1000_tx_desc *t_descs = (e1000_tx_desc *)tx_virt_ptr;
+    for (int i = 0; i < ELEM_COUNT(tx_descs); i++) {
+        tx_descs[i] = (e1000_tx_desc *)((u8 *)(t_descs + i*16));
+        tx_descs[i]->addr = 0;
+        tx_descs[i]->cmd = 0;
+        tx_descs[i]->status = 1;
+    }
+    write_cmd(reg_base + TXD_BASE_LO, tx_phys_addr >> 32);
+    write_cmd(reg_base + TXD_BASE_HI, tx_phys_addr & 0xFFFFFFFF);
 
-	write_cmd(reg_base + TXD_LEN, ELEM_COUNT(tx_descs) * 16);
-	write_cmd(reg_base + TXD_HEAD, 0);
-	write_cmd(reg_base + TXD_TAIL, 0);
+    write_cmd(reg_base + TXD_LEN, ELEM_COUNT(tx_descs) * 16);
+    write_cmd(reg_base + TXD_HEAD, 0);
+    write_cmd(reg_base + TXD_TAIL, 0);
 
-	write_cmd(reg_base + TX_CTRL, TCTL_EN | TCTL_PSP | (15 << TCTL_CT_SHIFT) | (64 << TCTL_COLD_SHIFT) | TCTL_RTLC);
-	kprintf("[eth] TX ring configured\n");
+    write_cmd(reg_base + TX_CTRL, TCTL_EN | TCTL_PSP | (15 << TCTL_CT_SHIFT) | (64 << TCTL_COLD_SHIFT) | TCTL_RTLC);
+    kprintf("[eth] TX ring configured\n");
 
-	// Enable Interrupts
-	// write_cmd(reg_base + INT_MASK, ????);
+    // Enable Interrupts
+    // write_cmd(reg_base + INT_MASK, ????);
 
-	return false;
+    return false;
 }
 
 static bool exit_eth(PCI_Device *eth_dev) {
@@ -179,4 +179,3 @@ __attribute__((section(".driver"))) Device_Driver driver = {
     .init = init_eth,
     .exit = exit_eth,
 };
-

@@ -25,6 +25,7 @@ typedef struct {
 
 typedef struct {
 	u64 addr;
+    u64 size;
 	bool prefetch;
 	u8 type;
 
@@ -41,4 +42,4 @@ typedef struct {
     bool (*exit)(PCI_Device *dev);
 } Device_Driver;
 
-BAR parse_bar(u32 bar);
+BAR parse_bar(Raw_BAR bar);
