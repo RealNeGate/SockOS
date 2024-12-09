@@ -231,7 +231,7 @@ int nbhm_thread_fn(void* arg) {
 
         // no more refs, we can immediately free
         // NBHM_VIRTUAL_FREE(table, sizeof(NBHM_Table) + table->cap*sizeof(NBHM_Entry));
-        kprintf("Free %p\n", table);
+        ON_DEBUG(NBHM)(kprintf("[nbhm] free %p\n", table));
 
         nbhm_free_done++;
 
@@ -412,8 +412,8 @@ static void* NBHM_FN(put_if_match)(NBHM* hs, NBHM_Table* latest, NBHM_Table* pre
                 prev   = latest;
                 latest = new_top;
 
-                size_t s = sizeof(NBHM_Table) + new_cap*sizeof(NBHM_Entry);
-                kprintf("Resize: 0x%x bytes (cap=%d)\n", s, new_cap);
+                size_t s = sizeof(KernelFreeList) + sizeof(NBHM_Table) + new_cap*sizeof(NBHM_Entry);
+                ON_DEBUG(NBHM)(kprintf("[nbhm] resize to %d bytes (cap=%d)\n", s, new_cap));
             }
             continue;
         }

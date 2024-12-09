@@ -43,7 +43,7 @@ void x86_set_kernel_gs(int core_id) {
     asm volatile ("swapgs");
 }
 
-void pci_scan_all(void);
+void pci_init(void);
 void arch_init(int core_id) {
     // Stuff we only handle once
     spall_begin_event("init", 0);
@@ -68,7 +68,7 @@ void arch_init(int core_id) {
 
         kpool_subdivide(boot_info->core_count);
 
-        pci_scan_all();
+        pci_init();
 
         static _Alignas(4096) const uint8_t desktop_elf[] = {
             #embed "../../../userland/desktop.elf"
