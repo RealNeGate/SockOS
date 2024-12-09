@@ -1,89 +1,7 @@
-#pragma once
+#include "x64.h"
 
-#include <stdint.h>
-#include <common.h>
-
-typedef struct CPUState {
-    // u8  fxsave[512 + 16];
-    u64 r15, r14, r13, r12, r11, r10, r9, r8;
-    u64 rdi, rsi, rbp, rbx, rdx, rcx, rax;
-    u64 interrupt_num, error;
-    u64 rip, cs, flags, rsp, ss;
-} CPUState;
-
-static inline void x86_invalidate_page(unsigned long addr) {
-    asm volatile("invlpg [%0]" ::"r" (addr) : "memory");
-}
-
-PerCPU* cpu_get(void) {
-    u64 result;
-    asm volatile ("mov %q0, gs:[0]" : "=a" (result));
-    return (PerCPU*) result;
-}
-
-static inline u64 x86_get_cr2(void) {
-    u64 result;
-    asm volatile ("mov %q0, cr2" : "=a" (result));
-    return result;
-}
-
-static inline u64 x86_get_cr3(void) {
-    u64 result;
-    asm volatile ("mov %q0, cr3" : "=a" (result));
-    return result;
-}
-
-// IO Ports on x86
-u8 io_in8(u16 port);
-u16 io_in16(u16 port);
-u32 io_in32(u16 port);
-
-void io_out8(u16 port, u8 value);
-void io_out16(u16 port, u16 value);
-void io_out32(u16 port, u32 value);
-
-static inline void io_wait(void) {
-    asm volatile(
-        "jmp 1f;"
-        "1:jmp 1f;"
-        "1:"
-    );
-}
-
-static inline u64 __readmsr(u32 r) {
-    u32 edx, eax;
-    asm volatile ("rdmsr" : "=d"(edx), "=a"(eax) : "c"(r));
-    return (((u64) edx) << 32) | (u64) eax;
-}
-
-static inline void __writemsr(u32 r, u64 v) {
-    u32 eax = v & 0xffffffff;
-    u32 edx = v >> 32;
-    asm volatile ("wrmsr" : : "c" (r), "a" (eax), "d" (edx));
-}
-
-void x86_swapgs(void) {
-    asm volatile ("swapgs");
-}
-
-static inline void x86_cli() {
-    asm volatile ("cli");
-}
-
-static inline void x86_sti() {
-    asm volatile ("sti");
-}
-
-static inline void x86_hlt() {
-    asm volatile ("hlt");
-}
-
-static inline void halt() {
-    x86_cli();
-    for(;;) {
-        x86_hlt();
-    }
-}
+// loader.s
+extern int kernel_idle(void* arg);
 
 static inline int x86_get_cpuid(unsigned int leaf, unsigned int *eax, unsigned int *ebx, unsigned int *ecx, unsigned int *edx) {
     asm volatile ("cpuid" : "=a" (*eax), "=b" (*ebx), "=c" (*ecx), "=d" (*edx) : "0" (leaf));
@@ -117,6 +35,107 @@ static void get_cpu_str(char *str) {
     x86_get_cpuid(0x80000004, &eax, &ebx, &ecx, &edx);
     cpuid_regcpy(str+32, eax, ebx, ecx, edx);
     return;
+}
+
+void x86_set_kernel_gs(int core_id) {
+    // fill GS base with PerCPU*
+    x86_writemsr(IA32_KERNEL_GS_BASE, (uintptr_t) &boot_info->cores[core_id]);
+    asm volatile ("swapgs");
+}
+
+void pci_scan_all(void);
+void arch_init(int core_id) {
+    // Stuff we only handle once
+    spall_begin_event("init", 0);
+    x86_set_kernel_gs(core_id);
+
+    if (core_id == 0) {
+        if (!has_cpu_support()) {
+            panic("Here's a nickel, kid. Buy yourself a computer.\n");
+        }
+
+        char brand_str[128] = {};
+        get_cpu_str(brand_str);
+        kprintf("Booting %s\n", brand_str);
+
+        kpool_init(&boot_info->mem_map);
+
+        x86_parse_acpi();
+        kprintf("ACPI processed...\n");
+
+        x86_enable_apic();
+        kprintf("Found %d cores | TSC freq %d MHz\n", boot_info->core_count, boot_info->tsc_freq);
+
+        kpool_subdivide(boot_info->core_count);
+
+        pci_scan_all();
+
+        static _Alignas(4096) const uint8_t desktop_elf[] = {
+            #embed "../../../userland/desktop.elf"
+        };
+
+        void* desktop_elf_ptr = paddr2kaddr(((uintptr_t) desktop_elf - boot_info->elf_virtual_ptr) + boot_info->elf_physical_ptr);
+
+        Thread* mine = env_load_elf(env_create(), desktop_elf_ptr, sizeof(desktop_elf));
+        kernel_idle_state = new_thread_state(kernel_idle, 0, 0, false);
+    }
+
+    // jump into timer interrupt, we're going to run tasks now
+    spall_begin_event("main", 0);
+    x86_irq_startup(core_id);
+}
+
+void put_char(int ch) {
+    io_out8(0x3f8, ch);
+}
+
+PerCPU* cpu_get(void) {
+    u64 result;
+    asm volatile ("mov %q0, gs:[0]" : "=a" (result));
+    return (PerCPU*) result;
+}
+
+u64 x86_get_cr2(void) {
+    u64 result;
+    asm volatile ("mov %q0, cr2" : "=a" (result));
+    return result;
+}
+
+u64 x86_get_cr3(void) {
+    u64 result;
+    asm volatile ("mov %q0, cr3" : "=a" (result));
+    return result;
+}
+
+void x86_halt(void) {
+    asm volatile ("cli");
+    for(;;) {
+        asm volatile ("hlt");
+    }
+}
+
+u64 x86_readmsr(u32 r) {
+    u32 edx, eax;
+    asm volatile ("rdmsr" : "=d"(edx), "=a"(eax) : "c"(r));
+    return (((u64) edx) << 32) | (u64) eax;
+}
+
+void x86_writemsr(u32 r, u64 v) {
+    u32 eax = v & 0xffffffff;
+    u32 edx = v >> 32;
+    asm volatile ("wrmsr" : : "c" (r), "a" (eax), "d" (edx));
+}
+
+static inline void x86_cli() {
+    asm volatile ("cli");
+}
+
+static inline void x86_sti() {
+    asm volatile ("sti");
+}
+
+static inline void x86_hlt() {
+    asm volatile ("hlt");
 }
 
 static void thread_yield(void) {

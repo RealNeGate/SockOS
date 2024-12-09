@@ -19,6 +19,8 @@ typedef struct {
 
 	u8 irq_line;
 	u8 irq_pin;
+
+    u32 status;
 } PCI_Device;
 
 typedef struct {
@@ -28,5 +30,15 @@ typedef struct {
 
 	bool is_mem;
 } BAR;
+
+typedef struct {
+    char *name;
+
+    int vendor_id;
+    int device_id;
+
+    bool (*init)(PCI_Device *dev);
+    bool (*exit)(PCI_Device *dev);
+} Device_Driver;
 
 BAR parse_bar(u32 bar);

@@ -1,7 +1,7 @@
 default rel
 global irq_enable, irq_disable, asm_int_handler, syscall_handler, do_context_switch
 global io_in8, io_in16, io_in32, io_out8, io_out16, io_out32
-extern irq_int_handler, syscall_table_count, syscall_table, boot_info
+extern x86_irq_int_handler, syscall_table_count, syscall_table, boot_info
 
 section .text
 irq_enable:
@@ -131,7 +131,7 @@ asm_int_handler:
 
     mov rdi, rsp
     mov rdx, gs:[0]
-    call irq_int_handler
+    call x86_irq_int_handler
 
     ; fxrstor also needs to be aligned to 16bytes
     ; add rsp, 512 + 16

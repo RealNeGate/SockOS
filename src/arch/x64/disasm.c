@@ -1,3 +1,4 @@
+#include "x64.h"
 
 enum {
     X86_OP_DIR   = 1, // if set, we go from r/m, reg => reg, r/m

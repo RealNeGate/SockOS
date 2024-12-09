@@ -1,20 +1,16 @@
-#ifndef IMPL
-typedef struct {
-    Thread *curr, *first, *last;
-} ThreadQueue;
+#include <kernel.h>
 
-struct PerCPU_Scheduler {
-    ThreadQueue active;
-    ThreadQueue waiters;
-};
+#ifdef __x86_64__
+#include "../arch/x64/x64.h"
+#endif
 
-static void tq_append(ThreadQueue* tq, Thread* t);
-#else
-static Thread* tq_peek(ThreadQueue* tq) {
+#define SCHED_QUANTA 15625 // 64Hz
+
+Thread* tq_peek(ThreadQueue* tq) {
     return tq->curr;
 }
 
-static void tq_remove(ThreadQueue* tq, Thread* t) {
+void tq_remove(ThreadQueue* tq, Thread* t) {
     Thread* next = t->next_sched;
 
     if (tq->first == t) { tq->first = next; }
@@ -35,7 +31,7 @@ static void tq_insert_after(ThreadQueue* tq, Thread* at, Thread* t) {
     at->next_sched = t;
 }
 
-static void tq_append(ThreadQueue* tq, Thread* t) {
+void tq_append(ThreadQueue* tq, Thread* t) {
     t->next_sched = NULL;
 
     if (tq->first == NULL) {
@@ -113,7 +109,7 @@ void sched_wait(Thread* t, u64 timeout) {
 // We need this function to behave in a relatively fast and bounded fashion, it's generally called
 // in a context switch interrupt after all.
 Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us) {
-    PerCPU_Scheduler* sched = get_sched();
+    PerCPU_Scheduler* sched = cpu_get()->sched;
     kprintf("sched_try_switch(now=%d):\n", now_time);
 
     Thread* active = tq_peek(&sched->active);
@@ -182,5 +178,3 @@ Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us) {
     }
 }
 #undef kprintf
-#endif
-

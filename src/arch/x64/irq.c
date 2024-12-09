@@ -1,3 +1,4 @@
+#include "x64.h"
 
 #define PIC1_COMMAND 0x20
 #define PIC1_DATA    0x21
@@ -5,21 +6,6 @@
 #define PIC2_DATA    0xA1
 
 enum {
-    // syscall related MSRs
-    IA32_EFER  = 0xC0000080,
-    IA32_STAR  = 0xC0000081,
-    IA32_LSTAR = 0xC0000082,
-    I32_GS_BASE = 0xC0000101,
-    IA32_KERNEL_GS_BASE = 0xC0000102,
-
-    IA32_TSC_DEADLINE = 0x6E0,
-
-    // LAPIC interrupts
-    INTR_LAPIC_TIMER      = 0xF0,
-    INTR_LAPIC_SPURIOUS   = 0xF1,
-    INTR_LAPIC_IPI        = 0xF2,
-    INTR_LAPIC_RESCHEDULE = 0xF3,
-
     APIC_CALIBRATION_TICKS = 1000000,
 };
 
@@ -57,7 +43,7 @@ static const char* interrupt_names[] = {
 };
 
 volatile IDTEntry _idt[256];
-static CPUState kernel_idle_state;
+CPUState kernel_idle_state;
 
 static volatile bool calibrating_apic_timer;
 static u64 apic_freq;
@@ -85,8 +71,12 @@ static void irq_disable_pic(void) {
     io_out8(PIC1_DATA, 0xFF);
     io_out8(PIC2_DATA, 0xFF);
 
-    // PIC mask
-    io_wait();
+    // Wait for IO
+    asm volatile(
+        "jmp 1f;"
+        "1:jmp 1f;"
+        "1:"
+    );
 }
 
 // access MMIO registers
@@ -112,7 +102,7 @@ static uint32_t micros_to_apic_time(uint64_t t) {
     };                                                  \
 } while (0)
 
-void irq_startup(int core_id) {
+void x86_irq_startup(int core_id) {
     if (core_id == 0) {
         FOR_N(i, 0, 256) _idt[i] = (IDTEntry){ 0 };
         SET_INTERRUPT(3,  false);
@@ -146,30 +136,25 @@ void irq_startup(int core_id) {
 
     // enable syscall/sysret
     {
-        u64 x = __readmsr(IA32_EFER);
-        __writemsr(IA32_EFER, x | 1);
+        u64 x = x86_readmsr(IA32_EFER);
+        x86_writemsr(IA32_EFER, x | 1);
         // the location where syscall will throw the user to
-        __writemsr(IA32_LSTAR, (uintptr_t) &syscall_handler);
+        x86_writemsr(IA32_LSTAR, (uintptr_t) &syscall_handler);
         // syscall and sysret segments
         _Static_assert(KERNEL_CS + 8  == KERNEL_DS, "SYSCALL expectations");
         _Static_assert(0x10      + 16 == USER_CS,   "SYSRET expectations");
         _Static_assert(0x10      + 8  == USER_DS,   "SYSRET expectations");
-        __writemsr(IA32_STAR, ((u64)KERNEL_CS << 32ull) | (0x10ull << 48ull));
-
-        __writemsr(IA32_KERNEL_GS_BASE, (uintptr_t) &boot_info->cores[core_id]);
-        x86_swapgs();
+        x86_writemsr(IA32_STAR, ((u64)KERNEL_CS << 32ull) | (0x10ull << 48ull));
 
         // we're storing the per_cpu info here, syscall will use this
-        __writemsr(IA32_KERNEL_GS_BASE, (uintptr_t) &boot_info->cores[core_id]);
+        x86_writemsr(IA32_KERNEL_GS_BASE, (uintptr_t) &boot_info->cores[core_id]);
     }
 
     IDT idt;
     idt.limit = sizeof(_idt) - 1;
     idt.base = (uintptr_t) _idt;
     irq_enable(&idt);
-}
 
-void irq_begin_timer(void) {
     // Enable APIC timer
     //   0xF0 - Spurious Interrupt Vector Register
     //   Punting spurious interrupts (see PIC/CPU race condition, this is a fake interrupt)
@@ -190,7 +175,7 @@ void irq_begin_timer(void) {
     }
 }
 
-uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
+uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
     spall_end_event(0);
     spall_begin_event(interrupt_names[state->interrupt_num], 0);
 
@@ -198,7 +183,7 @@ uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
     PageTable* old_address_space = paddr2kaddr(cr3);
 
     #if DEBUG_IRQ
-    if (state->interrupt_num != 14 && state->interrupt_num != 32) {
+    if (state->interrupt_num != 32) {
         kprintf("%s (%d): error=0x%x\n", interrupt_names[state->interrupt_num], state->interrupt_num, state->error);
         kprintf("  rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
     }
@@ -207,18 +192,18 @@ uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
     if (state->interrupt_num == 14) {
         u64 access_addr = x86_get_cr2();
 
-        VMem_AddrSpace* addr_space = NULL;
+        Env* env = NULL;
         if (cpu->current_thread && cpu->current_thread->parent) {
-            addr_space = &cpu->current_thread->parent->addr_space;
+            env = cpu->current_thread->parent;
         }
 
-        if (addr_space != NULL) {
-            rwlock_lock_shared(&addr_space->lock);
+        if (env != NULL) {
+            rwlock_lock_shared(&env->addr_space.lock);
 
             // update hardware page tables to match
             VMem_PTEUpdate update;
             bool is_write = state->error & 2;
-            if (vmem_segfault(addr_space, access_addr, is_write, &update)) {
+            if (vmem_segfault(env, access_addr, is_write, &update)) {
                 // there's two events:
                 //   update software PTEs => update hardware PTEs
                 //
@@ -234,7 +219,7 @@ uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
                 if (update.flags & VMEM_PAGE_USER)  { page_flags |= PAGE_USER;  }
                 if (update.flags & VMEM_PAGE_WRITE) { page_flags |= PAGE_WRITE; }
 
-                PageTable* curr = addr_space->hw_tables;
+                PageTable* curr = env->addr_space.hw_tables;
                 kassert(curr == old_address_space, "aren't we editting the old_address_space?");
 
                 for (size_t i = 0; i < 3; i++) {
@@ -251,7 +236,7 @@ uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
                             // bits missing? add one
                             new_entry |= page_flags;
                         } else {
-                            new_pt = alloc_physical_page();
+                            new_pt = kpool_alloc_page();
                             memset(new_pt, 0, sizeof(PageTable));
 
                             new_entry = kaddr2paddr(new_pt) | page_flags | PAGE_PRESENT;
@@ -262,7 +247,7 @@ uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
                         // physical page (so we don't spam allocations as much)
                         if (atomic_compare_exchange_strong(&curr->entries[index], &entry, new_entry)) { entry = new_entry; break; }
                         // throw away our new_pt
-                        if (new_pt == NULL) { free_physical_page(new_pt); }
+                        if (new_pt == NULL) { kpool_free_page(new_pt); }
                     }
 
                     curr = paddr2kaddr(entry & ~0x1FF);
@@ -279,7 +264,7 @@ uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
                 }
             }
 
-            rwlock_unlock_shared(&addr_space->lock);
+            rwlock_unlock_shared(&env->addr_space.lock);
             return cr3;
         }
 
@@ -291,14 +276,14 @@ uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
 
         // print memory access address
         u64 translated;
-        if (memmap__translate(old_address_space, access_addr, &translated)) {
+        if (memmap_translate(old_address_space, access_addr, &translated)) {
             kprintf("  access: %p (translated: %p)\n", access_addr, translated);
         } else {
             kprintf("  access: %p (NOT PRESENT)\n", access_addr);
         }
 
         // dissassemble code
-        if (memmap__translate(old_address_space, state->rip, &translated)) {
+        if (memmap_translate(old_address_space, state->rip, &translated)) {
             // relocate higher half addresses to the ELF in physical memory
             if (state->rip >= 0xFFFFFFFF80000000ull) {
                 translated = state->rip;
@@ -311,7 +296,7 @@ uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
         }
         #endif
 
-        halt();
+        x86_halt();
         return cr3;
     } else if (state->interrupt_num == 32) {
         if (calibrating_apic_timer) {
@@ -322,12 +307,10 @@ uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
         }
 
         spall_end_event(0);
-        PerCPU* cpu = get_percpu();
+        PerCPU* cpu = cpu_get();
 
         u64 next_wake;
-        spin_lock(&threads_lock);
         Thread* next = sched_try_switch(now / boot_info->tsc_freq, &next_wake);
-        spin_unlock(&threads_lock);
 
         uint64_t new_now_time = (__rdtsc() / boot_info->tsc_freq);
         uint64_t until_wake = 1;
@@ -341,7 +324,7 @@ uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
         }
 
         if (next == NULL) {
-            //kprintf("  >> IDLE! (for %d ms, %d ticks) <<\n", until_wake / 1000, micros_to_apic_time(until_wake));
+            ON_DEBUG(IRQ)(kprintf("  >> IDLE! (for %d ms, %d ticks) <<\n", until_wake / 1000, micros_to_apic_time(until_wake)));
 
             // send EOI
             APIC(0xB0) = 0;
@@ -356,12 +339,12 @@ uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
 
         // do thread context switch, if we changed
         if (cpu->current_thread != next) {
-            //kprintf("  >> SWITCH %p -> %p (for %d ms, %d ticks) <<\n\n", cpu->current_thread, next, until_wake / 1000, micros_to_apic_time(until_wake));
+            ON_DEBUG(IRQ)(kprintf("  >> SWITCH %p -> %p (for %d ms, %d ticks) <<\n\n", cpu->current_thread, next, until_wake / 1000, micros_to_apic_time(until_wake)));
 
             *state = next->state;
             cpu->current_thread = next;
         } else {
-            //kprintf("  >> STAY %p (for %d ms, %d ticks) <<\n\n", cpu->current_thread, until_wake / 1000, micros_to_apic_time(until_wake));
+            ON_DEBUG(IRQ)(kprintf("  >> STAY %p (for %d ms, %d ticks) <<\n\n", cpu->current_thread, until_wake / 1000, micros_to_apic_time(until_wake)));
         }
 
         // send EOI
@@ -385,7 +368,7 @@ uintptr_t irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
         PageTable* next_pml4 = next->parent ? next->parent->addr_space.hw_tables : boot_info->kernel_pml4;
         return kaddr2paddr(next_pml4);
     } else {
-        halt();
+        x86_halt();
         return cr3;
     }
 }

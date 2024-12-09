@@ -1,6 +1,6 @@
-#include <common.h>
+#pragma once
 
-#define KERNEL_VIRTUAL_BASE 0xC0000000
+#include <common.h>
 
 // Physical address
 typedef struct { uintptr_t raw; } PAddr;
@@ -133,4 +133,9 @@ _Static_assert(offsetof(BootInfo, identity_map_ptr) == 16, "the loader.s & irq.s
 _Static_assert(offsetof(PerCPU, kernel_stack_top) == 16, "the irq.s & bootstrap.s is sad");
 _Static_assert(offsetof(PerCPU, user_stack_scratch) == 24, "the irq.s is sad");
 
-PerCPU* cpu_get(void);
+extern BootInfo* boot_info;
+
+// our identity map is somewhere in the higher half
+static void* paddr2kaddr(uintptr_t p) { return (void*) (boot_info->identity_map_ptr + p); }
+static uintptr_t kaddr2paddr(void* p) { return (uintptr_t) p - boot_info->identity_map_ptr; }
+

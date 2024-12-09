@@ -3,6 +3,7 @@
 import os
 import platform
 import subprocess
+from pathlib import Path
 
 NINJA_SCRIPT: str = "build.ninja"
 
@@ -31,7 +32,6 @@ asm_files = {
 }
 
 # Ninja build script output
-
 file = open(NINJA_SCRIPT, "w")
 file.write(f'rule cc\n')
 file.write(f'  depfile = $out.d\n')
@@ -69,6 +69,20 @@ if True:
     file.write(f'  flags = -T userland/link.ld\n')
     file.write(f'\n')
 
+# Compile arch-specific objects
+objs = []
+for path in Path("src/arch/x64/").rglob("*.c"):
+    file.write(f'build objs/{path.name}.o: cc {path}\n')
+    file.write(f'  flags = -I src -fPIC -target x86_64-linux-gnu -ffreestanding {cflags}\n')
+    file.write(f'\n')
+    objs.append("objs/" + path.name + ".o")
+
+for path in Path("src/kernel/").rglob("*.c"):
+    file.write(f'build objs/{path.name}.o: cc {path}\n')
+    file.write(f'  flags = -I src -fPIC -target x86_64-linux-gnu -ffreestanding {cflags}\n')
+    file.write(f'\n')
+    objs.append("objs/" + path.name + ".o")
+
 # build EFI app
 file.write(f'build objs/efi.o: cc src/boot/efi_main.c\n')
 file.write(f'  flags = -target x86_64-pc-win32-coff -fuse-ld=lld-link -I src -fno-PIC -fshort-wchar {cflags}\n')
@@ -78,13 +92,14 @@ file.write(f'build bin/efi/boot/bootx64.efi: link objs/efi.o\n')
 file.write(f'  flags = -subsystem:efi_application -nodefaultlib -dll -entry:efi_main\n')
 file.write(f'\n')
 
-file.write(f'build objs/kernel.o: cc src/kernel/kernel.c | userland/desktop.elf\n')
-file.write(f'  flags = -I src -fPIC -target x86_64-linux-gnu -ffreestanding {cflags}\n')
-file.write(f'\n')
+# file.write(f'build objs/kernel.o: cc src/kernel/kernel.c | userland/desktop.elf\n')
+# file.write(f'  flags = -I src -fPIC -target x86_64-linux-gnu -ffreestanding {cflags}\n')
+# file.write(f'\n')
 
-kernel_asm = ' '.join(asm_outputs['kernel'])
-file.write(f'build bin/kernel.so | output.map: ld objs/kernel.o {kernel_asm}\n')
-file.write(f'  flags = -nostdlib -Map=output.map -pie\n')
+kernel_asm = " ".join(asm_outputs["kernel"])
+objs_str = " ".join(objs)
+file.write(f'build bin/kernel.so | output.map: ld {objs_str} {kernel_asm} | link.ld\n')
+file.write(f'  flags = -T link.ld -nostdlib -Map=output.map -pie\n')
 file.write(f'\n')
 
 file.close()

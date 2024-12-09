@@ -1,3 +1,6 @@
+#include <kernel.h>
+#include "pci.h"
+
 #define PCI_BASE_ADDR 0x80000000
 #define PCI_VALUE_PORT 0xCFC
 #define PCI_ADDR_PORT  0xCF8
@@ -379,29 +382,11 @@ static bool pci_check_device(PCI_Device *dev, u32 bus, u32 device, u8 func) {
     return true;
 }
 
-typedef struct {
-    char *name;
-
-    int vendor_id;
-    int device_id;
-
-    bool (*init)(PCI_Device *dev);
-    bool (*exit)(PCI_Device *dev);
-} Device_Driver;
+extern Device_Driver _DRIVER_START[];
+extern Device_Driver _DRIVER_END[];
 
 #define MAX_DEVICES 10
-static void pci_scan_all(void) {
-    Device_Driver drivers[] = {
-        {
-            .name = "82540EM Gigabit Ethernet Controller",
-            .vendor_id = 0x8086,
-            .device_id = 0x100E,
-
-            .init = init_eth,
-            .exit = exit_eth,
-        },
-    };
-
+void pci_scan_all(void) {
     PCI_Device devs[MAX_DEVICES];
     int dev_count = 0;
 
@@ -414,8 +399,7 @@ static void pci_scan_all(void) {
                 if (pci_check_device(dev, bus, device, func)) {
                     pci_print_device(dev);
 
-                    for (int j = 0; j < ELEM_COUNT(drivers); j++) {
-                        Device_Driver *driver = &drivers[j];
+                    for (Device_Driver* driver = _DRIVER_START; driver != _DRIVER_END; driver++) {
                         if (driver->vendor_id == dev->vendor_id && driver->device_id == dev->device_id) {
                             kprintf("[pci] Driver found for: %s\n", driver->name);
                             if (!driver->init(dev)) {

@@ -1,7 +1,4 @@
-#pragma once
-
-#include <stdint.h>
-#include <stdbool.h>
+#include <kernel.h>
 
 #define SPALL_MIN(a, b) (((a) < (b)) ? (a) : (b))
 
@@ -57,7 +54,7 @@ typedef struct SpallPadSkipEvent {
 } SpallPadSkipEvent;
 #pragma pack(pop)
 
-static _Atomic(int) spall_lock;
+static Lock spall_lock;
 
 static void spall_write(const void* p, size_t n) {
     spin_lock(&spall_lock);
@@ -71,7 +68,7 @@ static void spall_write(const void* p, size_t n) {
     spin_unlock(&spall_lock);
 }
 
-static void spall_header(void) {
+void spall_header(void) {
     SpallHeader header = {
         .magic_header = 0x0BADF00D,
         .version = 1,
@@ -81,7 +78,7 @@ static void spall_header(void) {
     spall_write(&header, sizeof(SpallHeader));
 }
 
-static void spall_begin_event(const char* name, int tid) {
+void spall_begin_event(const char* name, int tid) {
     int name_len = 0;
     while (name[name_len]) { name_len++; }
 
@@ -101,7 +98,7 @@ static void spall_begin_event(const char* name, int tid) {
     spall_write(&ev, ev_size);
 }
 
-static void spall_end_event(int tid) {
+void spall_end_event(int tid) {
     double when = __rdtsc();
     SpallEndEvent ev = {
         .type = SpallEventType_End,

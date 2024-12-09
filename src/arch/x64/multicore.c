@@ -1,19 +1,16 @@
+#include "x64.h"
+
 // Toaruos SMP boot for reference
 // https://github.com/klange/toaruos/blob/master/kernel/arch/x86_64/smp.c
-static _Atomic(int) print_lock;
+static Lock print_lock;
 
 void smp_main(PerCPU* cpu) {
     spin_lock(&print_lock);
     kprintf("Hello Mr. CPU! %p %d\n", cpu, cpu->core_id);
     spin_unlock(&print_lock);
 
-    // set up the GS, interrupts, and paging
-
-    // add the idle task to the job queue
-
-    // boot the scheduler
-
-	halt();
+    arch_init(cpu->core_id);
+    x86_halt();
 }
 
 u32 apic_get_errors(void) {
@@ -42,30 +39,15 @@ void boot_cores(void) {
         return;
     }
 
-    enum { STACKS_PER_CHUNK = CHUNK_SIZE / KERNEL_STACK_SIZE };
-    int chunk_count = ((boot_info->core_count - 1) + STACKS_PER_CHUNK - 1) / STACKS_PER_CHUNK;
+    FOR_N(k, 1, boot_info->core_count) {
+        char* sp = kpool_alloc_page();
+        kprintf("KernelStack[%d]: %p - %p\n", k, sp, sp + 4095);
 
-    int k = 1;
-    FOR_N(i, 0, chunk_count) {
-        // subdivide into a few stacks with the bottoms tagged
-        char* stack_space = alloc_physical_chunk();
-
-        int limit = i == chunk_count ? ((boot_info->core_count - 1) % STACKS_PER_CHUNK) : STACKS_PER_CHUNK;
-        FOR_N(j, 0, limit) {
-            // we put a unique cookie at the bottom of the kernel thread's stack so it knows what
-            // Thread ID it is.
-            uint32_t* sp = (uint32_t*) &stack_space[j * KERNEL_STACK_SIZE];
-            sp[0] = KERNEL_STACK_COOKIE;
-            sp[1] = k;
-
-            kprintf("KernelStack[%d]: %p - %p\n", k, sp, sp + KERNEL_STACK_SIZE - 1);
-
-            // if windows can get away with small kernel stacks so can we
-            PerCPU* restrict cpu = &boot_info->cores[k++];
-            cpu->self = cpu;
-            cpu->kernel_stack     = (uint8_t*) sp;
-            cpu->kernel_stack_top = (uint8_t*) sp + KERNEL_STACK_SIZE;
-        }
+        // if windows can get away with small kernel stacks so can we
+        PerCPU* restrict cpu = &boot_info->cores[k++];
+        cpu->self = cpu;
+        cpu->kernel_stack     = (uint8_t*) sp;
+        cpu->kernel_stack_top = (uint8_t*) sp + 4096;
     }
 
     // map the bootstrap code
@@ -104,5 +86,5 @@ void boot_cores(void) {
     }
 
     powernap(1000000);
-    halt();
+    x86_halt();
 }

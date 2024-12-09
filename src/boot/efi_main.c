@@ -10,6 +10,7 @@
 #include "term.c"
 #include "printf.c"
 
+#undef panic
 #define panic(fmt, ...)       \
 do {                          \
     printf(fmt, # __VA_ARGS__); \
@@ -47,7 +48,7 @@ static size_t estimate_page_table_count(size_t size) {
     return count;
 }
 
-static alignas(4096) BootInfo boot_info;
+static alignas(4096) BootInfo kernel_boot_info;
 
 inline static size_t align_up(size_t a, size_t b) {
     return a + (b - (a % b)) % b;
@@ -365,7 +366,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         panic("Failed to get RDSP!");
     }
 
-    boot_info.rsdp_addr = rsdp;
+    kernel_boot_info.rsdp_addr = rsdp;
     printf("RSDP: %X\n", rsdp);
     printf("Beginning EFI handoff...\n");
 
@@ -398,8 +399,8 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         }
     }
 
-    boot_info.identity_map_ptr = (kernel_module.virt_base + kernel_module.size + 0x40000000 - 1) & -0x40000000;
-    printf("Identity map @ %X\n", boot_info.identity_map_ptr);
+    kernel_boot_info.identity_map_ptr = (kernel_module.virt_base + kernel_module.size + 0x40000000 - 1) & -0x40000000;
+    printf("Identity map @ %X\n", kernel_boot_info.identity_map_ptr);
 
     // Generate the page tables
     // Map everything in the memory map that's ever been allocated
@@ -414,14 +415,14 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
             map_pages(&ctx, kernel_module.virt_base, region.base, region.pages);
         }
 
-        map_pages(&ctx, boot_info.identity_map_ptr + region.base, region.base, region.pages);
+        map_pages(&ctx, kernel_boot_info.identity_map_ptr + region.base, region.base, region.pages);
     }
 
     // Map the loader's trampoline page in, when loader.s installs the new address space we need the
     // code there to stick around long enough to jump away.
     printf("  Making trampoline mapping %X\n", kernel_module.phys_base + kernel_module.entry_addr);
     map_pages_id(&ctx, kernel_module.phys_base + kernel_module.entry_addr, 1);
-    map_pages(&ctx, boot_info.identity_map_ptr + (uintptr_t) &boot_info, (uintptr_t) &boot_info, (sizeof(BootInfo) + 4095) / 4096);
+    map_pages(&ctx, kernel_boot_info.identity_map_ptr + (uintptr_t) &kernel_boot_info, (uintptr_t) &kernel_boot_info, (sizeof(BootInfo) + 4095) / 4096);
 
     // memset(framebuffer, 0, framebuffer_stride * framebuffer_height * sizeof(u32));
     for (size_t j = 0; j < 50; j++) {
@@ -430,7 +431,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         }
     }
 
-    uintptr_t tss_ptr = boot_info.identity_map_ptr + ((uintptr_t) &boot_info.tss[0]);
+    uintptr_t tss_ptr = kernel_boot_info.identity_map_ptr + ((uintptr_t) &kernel_boot_info.tss[0]);
     u64 tss[2] = {
         //  access    limit
         //    VV        VV
@@ -439,36 +440,36 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     };
 
     // disable I/O map base
-    ((u16*) boot_info.tss)[0x102 / 4] = 0xDFFF;
+    ((u16*) kernel_boot_info.tss)[0x102 / 4] = 0xDFFF;
 
     // set IST1, when an interrupt happens we'll be using this as the kernel
     // stack.
-    boot_info.tss[0x24 / 4] = (boot_info.identity_map_ptr + (uintptr_t) kstack_end);
-    boot_info.tss[0x28 / 4] = (boot_info.identity_map_ptr + (uintptr_t) kstack_end) >> 32;
+    kernel_boot_info.tss[0x24 / 4] = (kernel_boot_info.identity_map_ptr + (uintptr_t) kstack_end);
+    kernel_boot_info.tss[0x28 / 4] = (kernel_boot_info.identity_map_ptr + (uintptr_t) kstack_end) >> 32;
 
     #if 0
     printf("TSS descriptor:\n");
     memdump(tss, 16);
     #endif
 
-    boot_info.elf_virtual_ptr = kernel_module.virt_base;
-    boot_info.elf_physical_ptr = kernel_module.phys_base;
-    boot_info.elf_mapped_size = kernel_module.size;
-    boot_info.fb = fb;
-    boot_info.mem_map = mem_map;
-    boot_info.kernel_pml4 = &page_tables[0];
-    boot_info.cores[0].kernel_stack = kstack_base;
-    boot_info.cores[0].kernel_stack_top = kstack_end;
+    kernel_boot_info.elf_virtual_ptr = kernel_module.virt_base;
+    kernel_boot_info.elf_physical_ptr = kernel_module.phys_base;
+    kernel_boot_info.elf_mapped_size = kernel_module.size;
+    kernel_boot_info.fb = fb;
+    kernel_boot_info.mem_map = mem_map;
+    kernel_boot_info.kernel_pml4 = &page_tables[0];
+    kernel_boot_info.cores[0].kernel_stack = kstack_base;
+    kernel_boot_info.cores[0].kernel_stack_top = kstack_end;
 
     uint32_t* sp = (uint32_t*) kstack_base;
     sp[0] = KERNEL_STACK_COOKIE;
     sp[1] = 0;
 
-    LoaderFunction loader = (LoaderFunction) (boot_info.elf_physical_ptr + kernel_module.entry_addr);
-    printf("TSS_PTR=%X\n", tss_ptr);
-    printf("Jumping to the kernel: %X (sp=%X)\n", loader, kstack_end);
+    LoaderFunction loader = (LoaderFunction) (kernel_boot_info.elf_physical_ptr + kernel_module.entry_addr);
+    // printf("TSS_PTR=%X\n", tss_ptr);
+    // printf("Jumping to the kernel: %X (sp=%X)\n", loader, kstack_end);
 
-    boot_info.elf_virtual_entry = boot_info.elf_virtual_ptr + kernel_module.entry_addr;
-    loader(&boot_info, kstack_end, tss[0], tss[1]);
+    kernel_boot_info.elf_virtual_entry = kernel_boot_info.elf_virtual_ptr + kernel_module.entry_addr;
+    loader(&kernel_boot_info, kstack_end, tss[0], tss[1]);
     return 0;
 }

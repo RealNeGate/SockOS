@@ -16,10 +16,10 @@
 //
 // The exported functions are:
 //
-//   void* NBHM_FN(get)(NBHM* hs, void* key);
-//   void* NBHM_FN(put)(NBHM* hs, void* key, void* val);
-//   void* NBHM_FN(put_if_null)(NBHM* hs, void* key, void* val);
-//   void NBHM_FN(resize_barrier)(NBHM* hs);
+//   void* NBHM_FN(get)(NBHM* hm, void* key);
+//   void* NBHM_FN(put)(NBHM* hm, void* key, void* val);
+//   void* NBHM_FN(put_if_null)(NBHM* hm, void* key, void* val);
+//   void NBHM_FN(resize_barrier)(NBHM* hm);
 //
 #ifndef NBHM_H
 #define NBHM_H
@@ -154,7 +154,7 @@ _Atomic uint32_t nbhm_free_count;
 
 NBHM nbhm_alloc(size_t initial_cap) {
     size_t cap = nbhm_compute_cap(initial_cap);
-    NBHM_Table* table = NBHM_VIRTUAL_ALLOC(sizeof(NBHM_Table) + cap*sizeof(NBHM_Entry));
+    NBHM_Table* table = kheap_zalloc(sizeof(NBHM_Table) + cap*sizeof(NBHM_Entry));
     nbhm_compute_size(table, cap);
     return (NBHM){ .latest = table };
 }
@@ -163,7 +163,7 @@ void nbhm_free(NBHM* hs) {
     NBHM_Table* curr = hs->latest;
     while (curr) {
         NBHM_Table* next = curr->prev;
-        NBHM_VIRTUAL_FREE(curr, sizeof(NBHM_Table) + curr->cap*sizeof(NBHM_Entry));
+        kheap_free(curr);
         curr = next;
     }
 }
@@ -341,10 +341,10 @@ NBHM_Table* NBHM_FN(move_items)(NBHM* hm, NBHM_Table* latest, NBHM_Table* prev, 
 
         if (!atomic_flag_test_and_set(&nbhm_free_thread_init)) {
             // spin up kernel thread which does freeing work
-            thread_create(NULL, nbhm_thread_fn, (uintptr_t) alloc_physical_page(), 4096, false);
+            thread_create(NULL, nbhm_thread_fn, (uintptr_t) kpool_alloc_page(), 4096, false);
         }
 
-        NBHM_FreeNode* new_node = NBHM_REALLOC(NULL, sizeof(NBHM_FreeNode));
+        NBHM_FreeNode* new_node = kheap_alloc(sizeof(NBHM_FreeNode));
         new_node->table = prev;
         new_node->next  = NULL;
 
@@ -400,20 +400,20 @@ static void* NBHM_FN(put_if_match)(NBHM* hs, NBHM_Table* latest, NBHM_Table* pre
             // make resized table, we'll amortize the moves upward
             size_t new_cap = nbhm_compute_cap(limit*2);
 
-            NBHM_Table* new_top = NBHM_VIRTUAL_ALLOC(sizeof(NBHM_Table) + new_cap*sizeof(NBHM_Entry));
+            NBHM_Table* new_top = kheap_zalloc(sizeof(NBHM_Table) + new_cap*sizeof(NBHM_Entry));
             nbhm_compute_size(new_top, new_cap);
 
             // CAS latest -> new_table, if another thread wins the race we'll use its table
             new_top->prev = latest;
             if (!atomic_compare_exchange_strong(&hs->latest, &latest, new_top)) {
-                NBHM_VIRTUAL_FREE(new_top, sizeof(NBHM_Table) + new_cap*sizeof(NBHM_Entry));
+                kheap_free(new_top);
                 prev = atomic_load(&latest->prev);
             } else {
                 prev   = latest;
                 latest = new_top;
 
                 size_t s = sizeof(NBHM_Table) + new_cap*sizeof(NBHM_Entry);
-                kprintf("Resize: %x KiB (cap=%d)\n", s, new_cap);
+                kprintf("Resize: 0x%x bytes (cap=%d)\n", s, new_cap);
             }
             continue;
         }

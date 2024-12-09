@@ -1,8 +1,4 @@
-
-enum {
-    IA32_APIC_BASE = 0x1B,
-    IA32_APIC_BASE_MSR_BSP = 0x100, // Processor is a BSP
-};
+#include "x64.h"
 
 typedef struct __attribute__((packed)) {
     char signature[8];
@@ -98,7 +94,7 @@ typedef enum {
     APIC_ENTRY_LOCAL_X2APIC                      = 9,
 } APIC_Entry_Type;
 
-char *entry_to_string(int type) {
+const char* entry_to_string(int type) {
     switch (type) {
         case APIC_ENTRY_LAPIC:                            return "Local APIC";
         case APIC_ENTRY_IOAPIC:                           return "I/O APIC";
@@ -107,13 +103,11 @@ char *entry_to_string(int type) {
         case APIC_ENTRY_LAPIC_NONMASKABLE_INTERRUPTS:     return "Local APIC Non-Maskable Interrupts";
         case APIC_ENTRY_LAPIC_ADDRESS_OVERRIDE:           return "Local APIC Address Override";
         case APIC_ENTRY_LOCAL_X2APIC:                     return "Local x2APIC";
+        default:                                          return "(unknown)";
     }
-    return "(unknown)";
 }
 
-#define APIC(reg_num) ((volatile uint32_t*) boot_info->lapic_base)[(reg_num) >> 2]
-
-void parse_acpi(void) {
+void x86_parse_acpi(void) {
     ACPI_RSDP_Desc_V2 *header = paddr2kaddr(boot_info->rsdp_addr);
     u8 rsdp_magic[] = {'R', 'S', 'D', ' ', 'P', 'T', 'R', ' ' };
     if (!memeq(header->rsdp_head.signature, rsdp_magic, sizeof(rsdp_magic))) {
@@ -168,7 +162,7 @@ void parse_acpi(void) {
             volatile u64 *hpet_reg = paddr2kaddr(hhead->addr_struct.address);
 
             // Map into relevant "identity" site
-            memmap__view(boot_info->kernel_pml4, hhead->addr_struct.address, (uintptr_t) hpet_reg, PAGE_SIZE, PAGE_WRITE);
+            memmap_view(boot_info->kernel_pml4, hhead->addr_struct.address, (uintptr_t) hpet_reg, PAGE_SIZE, VMEM_PAGE_WRITE);
 
             u64 gen_cap_reg = hpet_reg[0];
             ACPI_HPET_GenCap gen_cap = *((ACPI_HPET_GenCap *)&gen_cap_reg);
@@ -209,17 +203,15 @@ void parse_acpi(void) {
     kassert(boot_info->lapic_base, "We don't have APIC?");
     kprintf("Found the APIC: %p\n", boot_info->lapic_base);
 
-    if (memmap__view(boot_info->kernel_pml4, boot_info->lapic_base, boot_info->lapic_base, PAGE_SIZE, PAGE_WRITE)) {
-        kprintf("Could not map view of local ACPI!!!\n");
-        return;
-    }
+    memmap_view(boot_info->kernel_pml4, boot_info->lapic_base, boot_info->lapic_base, PAGE_SIZE, VMEM_PAGE_WRITE);
 }
 
 // Enable APIC
-void enable_apic(void) {
-    u64 x = __readmsr(IA32_APIC_BASE);
+void x86_enable_apic(void) {
+    u64 x = x86_readmsr(IA32_APIC_BASE);
     x |= (1u << 11u); // enable APIC
-    __writemsr(IA32_APIC_BASE, x);
+    x86_writemsr(IA32_APIC_BASE, x);
+
     if (x & IA32_APIC_BASE_MSR_BSP) {
         kprintf("We're the main core\n");
     }

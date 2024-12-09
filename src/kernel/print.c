@@ -1,14 +1,6 @@
-#pragma once
+#include <common.h>
 
-static void kprintf(const char *fmt, ...);
-static void put_char(int ch);
-static void put_string(const char* str);
-static void put_number(u64 x, u8 base);
-
-#define kassert(cond, ...) ((cond) ? 0 : (kprintf("%s:%d: assertion failed!\n  %s\n  ", __FILE__, __LINE__, #cond), kprintf(__VA_ARGS__), kprintf("\n\n"), __builtin_trap()))
-#define panic(...) (kprintf("%s:%d: panic!\n", __FILE__, __LINE__), kprintf(__VA_ARGS__), __builtin_trap())
-
-static int itoa(u64 i, u8 base, u8 *buf) {
+int itoa(u64 i, u8 base, u8 *buf) {
     static const char bchars[] = "0123456789ABCDEF";
 
     int      pos   = 0;
@@ -37,57 +29,31 @@ static int itoa(u64 i, u8 base, u8 *buf) {
     return o_pos + 1;
 }
 
-static void put_number(u64 number, u8 base) {
+void put_number(u64 number, u8 base) {
     u8 buffer[65];
     itoa(number, base, buffer);
     buffer[64] = 0;
 
     // serial port writing
     for (int i = 0; buffer[i]; i++) {
-        while ((io_in8(0x3f8+5) & 0x20) == 0) {}
-
-        io_out8(0x3f8, buffer[i]);
+        put_char(buffer[i]);
     }
 }
 
-static void put_string(const char* str) {
-    for (; *str; str++) io_out8(0x3f8, *str);
+void put_string(const char* str) {
+    for (; *str; str++) put_char(*str);
 }
 
 static void put_buffer(const u8* buf, int size) {
     if (size >= 0) {
-        for (int i = 0; i < size; i++) io_out8(0x3f8, buf[i]);
+        for (int i = 0; i < size; i++) put_char(buf[i]);
     } else {
-        for (int i = 0; buf[i]; i++) io_out8(0x3f8, buf[i]);
+        for (int i = 0; buf[i]; i++) put_char(buf[i]);
     }
-}
-
-static void put_char(int ch) {
-    io_out8(0x3f8, ch);
-}
-
-static void draw_sprite(u32 color, int ch) {
-    int columns = (boot_info->fb.width - 16) / 16;
-    int rows = (boot_info->fb.height - 16) / 16;
-
-    int x = (cursor % columns) * 16;
-    int y = (cursor / columns) * 16;
-
-    const u8* bitmap = FONT[(int)ch];
-
-    for (size_t yy = 0; yy < 16; yy++) {
-        for (size_t xx = 0; xx < 16; xx++) {
-            if (bitmap[yy / 2] & (1 << (xx / 2))) {
-                boot_info->fb.pixels[(8 + x + xx) + ((8 + y + yy) * boot_info->fb.stride)] = color;
-            }
-        }
-    }
-
-    cursor = (cursor + 1) % (columns * rows);
 }
 
 #define _PRINT_BUFFER_LEN 128
-static void kprintf(const char *fmt, ...) {
+void kprintf(const char *fmt, ...) {
     __builtin_va_list args;
     __builtin_va_start(args, fmt);
 
@@ -147,7 +113,7 @@ static void kprintf(const char *fmt, ...) {
                 goto consume_moar;
             } break;
             case 'l': {
-               goto consume_moar;
+                goto consume_moar;
             } break;
             case 'u': {
                 u64 i = __builtin_va_arg(args, u64);

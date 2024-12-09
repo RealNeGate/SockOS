@@ -1,4 +1,4 @@
-#include "vmem.h"
+#include <kernel.h>
 
 uint32_t vmem_addrhm_hash(const void* k) {
     uint32_t* addr = (uint32_t*) &k;
@@ -26,31 +26,6 @@ bool vmem_addrhm_cmp(const void* a, const void* b) {
 #define NBHM_IMPL
 #include <nbhm.h>
 
-void rwlock_lock_shared(RWLock* lock) {
-    uint32_t old;
-    do {
-        old = atomic_load_explicit(lock, memory_order_acquire);
-        // spin lock until exclusive hold is gone
-        if (old == 1) { continue; }
-        // if there's no hold, let's take it (or if there's one we should tick up)
-    } while (!atomic_compare_exchange_strong(lock, &old, old + 2));
-}
-
-void rwlock_unlock_shared(RWLock* lock) {
-    atomic_fetch_sub_explicit(lock, 2, memory_order_acq_rel);
-}
-
-void rwlock_lock_exclusive(RWLock* lock) {
-    while (!atomic_compare_exchange_strong(lock, &(uint32_t){ 0 }, 1)) {
-        // spin lock...
-        asm volatile ("pause");
-    }
-}
-
-void rwlock_unlock_exclusive(RWLock* lock) {
-    atomic_store_explicit(lock, 0, memory_order_release);
-}
-
 static size_t vmem_node_bin_search(VMem_Node* node, uint32_t key, int start_i) {
     size_t left = start_i, right = node->key_count - 1;
     while (left != right) {
@@ -62,8 +37,8 @@ static size_t vmem_node_bin_search(VMem_Node* node, uint32_t key, int start_i) {
     return left;
 }
 
-VMem_Cursor vmem_node_lookup(VMem_AddrSpace* addr_space, uintptr_t key) {
-    VMem_Node* node = addr_space->root;
+VMem_Cursor vmem_node_lookup(Env* env, uintptr_t key) {
+    VMem_Node* node = env->addr_space.root;
     if (node == NULL) {
         return (VMem_Cursor){ 0 };
     }
@@ -80,7 +55,7 @@ VMem_Cursor vmem_node_lookup(VMem_AddrSpace* addr_space, uintptr_t key) {
 }
 
 void vmem_node_split_child(VMem_Node* x, VMem_Node* y, int idx) {
-    VMem_Node* z = kernelfl_alloc(sizeof(VMem_Node) + VMEM_NODE_MAX_VALS*(y->is_leaf ? sizeof(VMem_PageDesc) : sizeof(VMem_Node*)));
+    VMem_Node* z = kheap_alloc(sizeof(VMem_Node) + VMEM_NODE_MAX_VALS*(y->is_leaf ? sizeof(VMem_PageDesc) : sizeof(VMem_Node*)));
     z->next      = NULL;
     z->is_leaf   = y->is_leaf;
     z->key_count = VMEM_NODE_DEGREE - 1;
@@ -123,31 +98,31 @@ void vmem_node_split_child(VMem_Node* x, VMem_Node* y, int idx) {
 }
 
 // insert range into B-tree
-VMem_PageDesc* vmem_node_insert(VMem_AddrSpace* addr_space, uintptr_t key) {
-    if (addr_space->root == NULL) {
+VMem_PageDesc* vmem_node_insert(Env* env, uintptr_t key) {
+    if (env->addr_space.root == NULL) {
         // new leaf root
-        VMem_Node* node = kernelfl_alloc(sizeof(VMem_Node) + sizeof(VMem_PageDesc)*VMEM_NODE_MAX_VALS);
+        VMem_Node* node = kheap_alloc(sizeof(VMem_Node) + sizeof(VMem_PageDesc)*VMEM_NODE_MAX_VALS);
         node->next      = NULL;
         node->is_leaf   = 1;
         node->key_count = 1;
         node->keys[0] = key;
-        addr_space->root = node;
+        env->addr_space.root = node;
         return &node->vals[0];
     } else {
-        VMem_Node* node = addr_space->root;
+        VMem_Node* node = env->addr_space.root;
 
         // rotate the root
-        if (addr_space->root->key_count == VMEM_NODE_MAX_KEYS) {
-            VMem_Node* new_node = kernelfl_alloc(sizeof(VMem_Node) + VMEM_NODE_MAX_VALS*sizeof(VMem_Node*));
+        if (env->addr_space.root->key_count == VMEM_NODE_MAX_KEYS) {
+            VMem_Node* new_node = kheap_alloc(sizeof(VMem_Node) + VMEM_NODE_MAX_VALS*sizeof(VMem_Node*));
             new_node->next      = NULL;
             new_node->is_leaf   = 0;
             new_node->key_count = 0;
 
             // make old root as child of new root
-            new_node->kids[0] = addr_space->root;
+            new_node->kids[0] = env->addr_space.root;
 
             // split the old root and move 1 key to the new root
-            vmem_node_split_child(new_node, addr_space->root, 0);
+            vmem_node_split_child(new_node, env->addr_space.root, 0);
 
             // new root has two children now. decide which of the
             // two children is going to have new key
@@ -157,7 +132,7 @@ VMem_PageDesc* vmem_node_insert(VMem_AddrSpace* addr_space, uintptr_t key) {
             }
 
             node = new_node->kids[i];
-            addr_space->root = new_node;
+            env->addr_space.root = new_node;
         }
 
         while (!node->is_leaf) {
@@ -195,12 +170,12 @@ VMem_PageDesc* vmem_node_insert(VMem_AddrSpace* addr_space, uintptr_t key) {
     }
 }
 
-uintptr_t vmem_alloc(VMem_AddrSpace* addr_space, size_t size, uintptr_t paddr, VMem_Flags flags) {
+uintptr_t vmem_alloc(Env* env, size_t size, uintptr_t paddr, VMem_Flags flags) {
     kassert((size & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", size);
 
     // walk all regions until we find a gap big enough (SLOW!!!)
     uintptr_t vaddr = 0xA0000000;
-    VMem_Cursor cursor = vmem_node_lookup(addr_space, vaddr);
+    VMem_Cursor cursor = vmem_node_lookup(env, vaddr);
 
     // we only want addresses past vaddr so skip one if we're behind it
     if (cursor.node && cursor.node->keys[cursor.index] < vaddr) {
@@ -234,31 +209,30 @@ uintptr_t vmem_alloc(VMem_AddrSpace* addr_space, size_t size, uintptr_t paddr, V
     ON_DEBUG(VMEM)(kprintf("[vmem] found no allocations past %p\n", vaddr));
 
     done:
-    VMem_PageDesc* desc = vmem_node_insert(addr_space, vaddr);
+    VMem_PageDesc* desc = vmem_node_insert(env, vaddr);
     *desc = (VMem_PageDesc){ .valid = 1, .flags = flags, .file_ptr = paddr >> 12ull, .size = size };
     return vaddr;
 }
 
-void vmem_add_range(VMem_AddrSpace* addr_space, uintptr_t vaddr, size_t vsize, uintptr_t paddr, VMem_Flags flags) {
+bool vmem_protect(Env* env, uintptr_t addr, size_t size, VMem_Flags flags) {
+    return false;
+}
+
+void vmem_add_range(Env* env, uintptr_t vaddr, size_t vsize, uintptr_t paddr, VMem_Flags flags) {
     kassert((vaddr & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", vaddr);
     kassert((vsize & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", vsize);
     kassert((paddr & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", paddr);
 
-    VMem_PageDesc* desc = vmem_node_insert(addr_space, vaddr);
+    VMem_PageDesc* desc = vmem_node_insert(env, vaddr);
     desc->valid    = 1;
     desc->flags    = flags;
     desc->file_ptr = (uintptr_t) (paddr >> 12ull);
     desc->size     = vsize;
 }
 
-typedef struct {
-    uintptr_t  translated;
-    VMem_Flags flags;
-} VMem_PTEUpdate;
-
 static _Alignas(4096) const uint8_t VMEM_ZERO_PAGE[4096];
-bool vmem_segfault(VMem_AddrSpace* addr_space, uintptr_t access_addr, bool is_write, VMem_PTEUpdate* out_update) {
-    VMem_Cursor cursor = vmem_node_lookup(addr_space, access_addr);
+bool vmem_segfault(Env* env, uintptr_t access_addr, bool is_write, VMem_PTEUpdate* out_update) {
+    VMem_Cursor cursor = vmem_node_lookup(env, access_addr);
     if (cursor.node == NULL) {
         // literally no pages
         return false;
@@ -274,7 +248,7 @@ bool vmem_segfault(VMem_AddrSpace* addr_space, uintptr_t access_addr, bool is_wr
     }
 
     // attempt to commit page
-    uintptr_t actual_page = (uintptr_t) vmem_addrhm_get(&addr_space->commit_table, (void*) access_addr);
+    uintptr_t actual_page = (uintptr_t) vmem_addrhm_get(&env->addr_space.commit_table, (void*) access_addr);
     if (actual_page == 0) {
         uintptr_t new_page = 0;
         if (desc->file_ptr != 0) {
@@ -282,18 +256,18 @@ bool vmem_segfault(VMem_AddrSpace* addr_space, uintptr_t access_addr, bool is_wr
             size_t offset = (access_addr & -PAGE_SIZE) - start_addr;
             new_page = (desc->file_ptr << 12ull) + offset;
         } else {
-            void* page = alloc_physical_page();
+            void* page = kpool_alloc_page();
             memset(page, 0, PAGE_SIZE);
             new_page = kaddr2paddr(page);
         }
 
-        actual_page = (uintptr_t) vmem_addrhm_put_if_null(&addr_space->commit_table, (void*) access_addr, (void*) new_page);
+        actual_page = (uintptr_t) vmem_addrhm_put_if_null(&env->addr_space.commit_table, (void*) access_addr, (void*) new_page);
         if (desc->file_ptr != 0) {
             ON_DEBUG(VMEM)(kprintf("[vmem] first touch on file mapped address (%p), paddr=%p\n", access_addr, new_page));
         } else {
             ON_DEBUG(VMEM)(kprintf("[vmem] first touch on private page (%p), paddr=%p\n", access_addr, new_page));
             if (actual_page != new_page) {
-                free_physical_chunk(paddr2kaddr(new_page));
+                kpool_free_page(paddr2kaddr(new_page));
             }
         }
     }

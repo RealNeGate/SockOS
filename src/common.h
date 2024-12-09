@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdatomic.h>
 
 typedef unsigned long long u64;
 typedef uint32_t           u32;
@@ -49,3 +50,19 @@ typedef int8_t              i8;
 #ifdef __CUIK__
 #define USE_INTRIN 1
 #endif
+
+// bootleg string.h
+void* memset(void* buffer, int c, size_t n);
+void* memcpy(void* dest, const void* src, size_t n);
+int memcmp(const void* a, const void* b, size_t n);
+bool memeq(const void* a, const void* b, size_t n);
+
+// bootleg stdio.h
+void kprintf(const char *fmt, ...);
+void put_char(int ch);
+void put_string(const char* str);
+void put_number(u64 x, u8 base);
+
+#define kassert(cond, ...) ((cond) ? 0 : (kprintf("%s:%d: assertion failed!\n  %s\n  ", __FILE__, __LINE__, #cond), kprintf(__VA_ARGS__), kprintf("\n\n"), __builtin_trap()))
+#define panic(...) (kprintf("%s:%d: panic!\n", __FILE__, __LINE__), kprintf(__VA_ARGS__), __builtin_trap())
+

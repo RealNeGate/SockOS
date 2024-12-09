@@ -12,6 +12,11 @@ SECTIONS
 	.data : {
 		 *(.data)
 	}
+	.driver : {
+		_DRIVER_START = .;
+		 *(.driver)
+		_DRIVER_END   = .;
+	}
 	.bss : {
 		*(.bss)
 		*(COMMON)
