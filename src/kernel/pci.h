@@ -14,7 +14,7 @@ typedef struct {
 	u8 prog_IF;
 	u8 revision;
 
-	Raw_BAR bars[7];
+	Raw_BAR bar[7];
 	int bar_count;
 
 	u8 irq_line;

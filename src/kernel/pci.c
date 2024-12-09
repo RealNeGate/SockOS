@@ -133,7 +133,7 @@ BAR parse_bar(u32 bar) {
     if (b.is_mem) {
         b.type = (bar >> 1) & 0x3;
         b.addr = (bar >> 4) << 4;
-        kassert(b.type == 0, "TODO: Only supports BAR 32-bit");
+        //kassert(b.type == 0, "TODO: Only supports BAR 32-bit");
         b.prefetch = (bar >> 3) & 0x1;
     } else {
         b.addr = (bar >> 2) << 2;
@@ -179,11 +179,11 @@ static void pci_print_device(PCI_Device *dev) {
         dev->revision
     );
     for (int i = 0; i < dev->bar_count; i++) {
-        if (dev->bars[i].value == 0) {
+        if (dev->bar[i].value == 0) {
             continue;
         }
 
-        BAR bar = parse_bar(dev->bars[i].value);
+        BAR bar = parse_bar(dev->bar[i].value);
         kprintf("\t - BAR%d %s addr: %p\n", i, bar.is_mem ? "mem" : "io", bar.addr);
     }
 
@@ -193,180 +193,139 @@ static void pci_print_device(PCI_Device *dev) {
 }
 
 typedef struct {
-    union {
+	union {
         struct {
             u16 vendor_id;
             u16 device_id;
-        };
-        u32 reg0;
-    };
-    union {
-        struct {
+
             u16 command;
             u16 status;
-        };
-        u32 reg1;
-    };
-    union {
-        struct {
+
             u8 rev_id;
             u8 prog_IF;
             u8 subclass;
             u8 class;
-        };
-        u32 reg2;
-    };
-    union {
-        struct {
-            u8 bist;
-            u8 header_type;
-            u8 latency_timer;
+
             u8 cache_line_size;
-        };
-        u32 reg3;
+            u8 latency_timer;
+            u8 header_type;
+            u8 bist;
+		};
+		u32 regs[4];
     };
-} PCI_Header;
+} __attribute__((packed)) PCI_Header;
 
 typedef struct {
-    u32 bar[6];
-    u32 cardbus_cis_ptr;
+	union {
+		struct {
+			u32 bar[6];
+			u32 cardbus_cis_ptr;
 
-    union {
-        struct {
-            u16 subsystem_id;
-            u16 subsystem_vendor_id;
-        };
-        u32 regB;
-    };
+			u16 subsystem_id;
+			u16 subsystem_vendor_id;
 
-    u32 expansion_rom_base_addr;
+			u32 expansion_rom_base_addr;
 
-    union {
-        struct {
-            u16 reserved_1;
-            u8  reserved_2;
-            u8  cap_ptr;
-        };
-        u32 regD;
-    };
+			u16 reserved_1;
+			u8  reserved_2;
+			u8  cap_ptr;
 
-    u32 reserved_3;
+			u32 reserved_3;
 
-    union {
-        struct {
-            u8 interrupt_line;
-            u8 interrupt_pin;
-            u8 max_latency;
-            u8 min_grant;
-        };
-        u32 regF;
-    };
+			u8 interrupt_line;
+			u8 interrupt_pin;
+			u8 max_latency;
+			u8 min_grant;
+		};
+		u32 regs[12];
+	};
 } PCI_Header_0;
 
 typedef struct {
-    u32 bar[2];
+	union {
+		struct {
+			u32 bar[2];
 
-    union {
-        struct {
-            u8 secondary_latency_timer;
-            u8 subordinate_bus_number;
-            u8 secondary_bus_number;
-            u8 primary_bus_number;
-        };
-        u32 reg6;
-    };
-    union {
-        struct {
-            u16 secondary_status;
-            u8 io_limit;
-            u8 io_base;
-        };
-        u32 reg7;
-    };
-    union {
-        struct {
-            u16 memory_limit;
-            u16 memory_base;
-        };
-        u32 reg8;
-    };
-    union {
-        struct {
-            u16 prefetch_memory_limit;
-            u16 prefetch_memory_base;
-        };
-        u32 reg9;
-    };
-    u32 prefetch_memory_base_upper;
-    u32 prefetch_memory_limit_upper;
-    union {
-        struct {
-            u16 io_limit_upper;
-            u16 io_base_upper;
-        };
-        u32 regC;
-    };
+			u8 secondary_latency_timer;
+			u8 subordinate_bus_number;
+			u8 secondary_bus_number;
+			u8 primary_bus_number;
 
-    union {
-        struct {
-            u16 reserved_1;
-            u8  reserved_2;
-            u8  cap_ptr;
-        };
-        u32 regD;
-    };
+			u16 secondary_status;
+			u8 io_limit;
+			u8 io_base;
 
-    u32 expansion_rom_base_addr;
+			u16 memory_limit;
+			u16 memory_base;
 
-    union {
-        struct {
-            u16 bridge_ctrl;
-            u8  interrupt_pin;
-            u8  interrupt_line;
-        };
-        u32 regF;
-    };
+			u16 prefetch_memory_limit;
+			u16 prefetch_memory_base;
+
+			u32 prefetch_memory_base_upper;
+
+			u32 prefetch_memory_limit_upper;
+
+			u16 io_limit_upper;
+			u16 io_base_upper;
+
+			u16 reserved_1;
+			u8  reserved_2;
+			u8  cap_ptr;
+
+			u32 expansion_rom_base_addr;
+
+			u16 bridge_ctrl;
+			u8  interrupt_pin;
+			u8  interrupt_line;
+		};
+		u32 regs[12];
+	};
 } PCI_Header_1;
 
 static bool pci_check_device(PCI_Device *dev, u32 bus, u32 device, u8 func) {
     PCI_Header hdr = {};
-    hdr.reg0 = pci_read_u32(bus, device, func, 0x0);
+    hdr.regs[0] = pci_read_u32(bus, device, func, 0x0);
 
     if (hdr.vendor_id == PCI_NONE) return false;
 
-    hdr.reg1 = pci_read_u32(bus, device, func, 0x4);
-    hdr.reg2 = pci_read_u32(bus, device, func, 0x8);
-    hdr.reg3 = pci_read_u32(bus, device, func, 0xc);
+	for (int i = 1; i < ELEM_COUNT(hdr.regs); i++) {
+		hdr.regs[i] = pci_read_u32(bus, device, func, i * 0x4);
+	}
 
     dev->device_id = hdr.device_id;
     dev->vendor_id = hdr.vendor_id;
-    dev->class = hdr.class;
+    dev->class    = hdr.class;
     dev->subclass = hdr.subclass;
-    dev->prog_IF = hdr.prog_IF;
+    dev->prog_IF  = hdr.prog_IF;
     dev->revision = hdr.rev_id;
 
-    switch (hdr.header_type) {
+	u8 hdr_type = hdr.header_type & 0b1111111;
+    switch (hdr_type) {
     	case 0: {
     		PCI_Header_0 hdr0 = {};
+			for (int i = 0; i < ELEM_COUNT(hdr0.regs); i++) {
+				hdr0.regs[i] = pci_read_u32(bus, device, func, 0x10 + (i * sizeof(u32)));
+			}
 
-    		dev->bar_count = 6;
-    		for (int i = 0; i < dev->bar_count; i++) {
-    			u32 addr = 0x10 + (i * sizeof(u32));
-    			dev->bars[i].value = pci_read_u32(bus, device, func, addr);
-    		}
-    		hdr0.regF = pci_read_u32(bus, device, func, 0x3C);
-
+			dev->bar_count = ELEM_COUNT(hdr0.bar);
+			for (int i = 0; i < dev->bar_count; i++) {
+				dev->bar[i].value = hdr0.bar[i];
+			}
     		dev->irq_line = hdr0.interrupt_line;
     		dev->irq_pin = hdr0.interrupt_pin;
+
+			kprintf("status: %b, command: %b\n", hdr.status, hdr.command);
     	} break;
     	case 0x1: {
     		PCI_Header_1 hdr1 = {};
+			for (int i = 0; i < ELEM_COUNT(hdr1.regs); i++) {
+				hdr1.regs[i] = pci_read_u32(bus, device, func, 0x10 + (i * sizeof(u32)));
+			}
 
-    		dev->bar_count = 2;
-    		for (int i = 0; i < dev->bar_count; i++) {
-    			u32 addr = 0x4 + (i * sizeof(u32));
-    			dev->bars[i].value = pci_read_u32(bus, device, func, addr);
-    		}
+			dev->bar_count = ELEM_COUNT(hdr1.bar);
+			for (int i = 0; i < dev->bar_count; i++) {
+				dev->bar[i].value = hdr1.bar[i];
+			}
     		dev->irq_line = hdr1.interrupt_line;
     		dev->irq_pin  = hdr1.interrupt_pin;
     	} break;
@@ -402,7 +361,7 @@ static void init_pci(void) {
         },
     };
 
-    PCI_Device devs[MAX_DEVICES];
+    PCI_Device devs[MAX_DEVICES] = {};
     int dev_count = 0;
 
     kprintf("[pci] Scanning for devices!\n");

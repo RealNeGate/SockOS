@@ -83,7 +83,7 @@ u32 read_cmd(u64 addr) {
 }
 
 static bool init_eth(PCI_Device *eth_dev) {
-	BAR mem_bar = parse_bar(eth_dev->bars[0].value);
+	BAR mem_bar = parse_bar(eth_dev->bar[0].value);
 	u64 mem_base = mem_bar.addr;
 
 	uintptr_t end_addr = PAGE_ALIGN(mem_base + 0x5400);
@@ -92,6 +92,13 @@ static bool init_eth(PCI_Device *eth_dev) {
 	void *reg_ptr = paddr2kaddr(mem_base);
 	uintptr_t reg_base = (uintptr_t)reg_ptr;
 	memmap__view(boot_info->kernel_pml4, mem_base, reg_base, size, PAGE_WRITE);
+
+	u32 stat = read_cmd(reg_base + 0);
+	u32 ctrl = read_cmd(reg_base + 8);
+
+	write_cmd(reg_base + 0xD0, 0);            // disable interrupts
+	write_cmd(reg_base + 0, ctrl | 0x400000); // add reset flag
+	write_cmd(reg_base + 0xD0, 0);            // re-disable interrupts
 
 	u32 mac_addr_lo = *(u32 *)(reg_ptr + 0x5400);
 	u16 mac_addr_hi = *(u16 *)(reg_ptr + 0x5400 + 4);
