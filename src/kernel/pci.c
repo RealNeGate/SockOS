@@ -34,12 +34,12 @@ X(PCI_CLASS_UNASSIGNED,          0xFF,  "Unassigned")
 static const char *pci_class_names[] = {
     #define X(tag, id, name) [id] = name,
     PCI_CLASS
-    	#undef X
+    #undef X
 };
 typedef enum {
     #define X(tag, id, name) tag = id,
     PCI_CLASS
-    	#undef X
+    #undef X
 } PCI_Class;
 
 #define PCI_SUBCLASS_BR                                                 \
@@ -58,12 +58,12 @@ X(PCI_SUBCLASS_BR_INFINBAND2PCI, 0xA,  "Infiniband-to-PCI Host Bridge")
 static const char *pci_subclass_bridge_names[] = {
     #define X(tag, id, name) [id] = name,
     PCI_SUBCLASS_BR
-    	#undef X
+    #undef X
 };
 typedef enum {
     #define X(tag, id, name) tag = id,
     PCI_SUBCLASS_BR
-    	#undef X
+    #undef X
 } PCI_Subclass_Bridge;
 
 #define PCI_SUBCLASS_NET                                                       \
@@ -80,12 +80,12 @@ X(PCI_SUBCLASS_NET_FABRIC,      0x8,  "Fabric Controller")
 static const char *pci_subclass_net_names[] = {
     #define X(tag, id, name) [id] = name,
     PCI_SUBCLASS_NET
-    	#undef X
+    #undef X
 };
 typedef enum {
     #define X(tag, id, name) tag = id,
     PCI_SUBCLASS_NET
-    	#undef X
+    #undef X
 } PCI_Subclass_Network;
 
 #define PCI_SUBCLASS_DISP                        \
@@ -96,12 +96,12 @@ X(PCI_SUBCLASS_DISP_3D,  0x2,  "3D Controller")
 static const char *pci_subclass_display_names[] = {
     #define X(tag, id, name) [id] = name,
     PCI_SUBCLASS_DISP
-    	#undef X
+    #undef X
 };
 typedef enum {
     #define X(tag, id, name) tag = id,
     PCI_SUBCLASS_DISP
-    	#undef X
+    #undef X
 } PCI_Subclass_Display;
 
 #define PCI_SUBCLASS_STR                        \
@@ -112,18 +112,24 @@ X(PCI_SUBCLASS_STR_FLOPPY,  0x2,  "Floppy Disk Controller")
 static const char *pci_subclass_storage_names[] = {
     #define X(tag, id, name) [id] = name,
     PCI_SUBCLASS_STR
-    	#undef X
+    #undef X
 };
 typedef enum {
     #define X(tag, id, name) tag = id,
     PCI_SUBCLASS_STR
-    	#undef X
+    #undef X
 } PCI_Subclass_Storage;
 
 static inline u32 pci_read_u32(u32 bus, u32 device, u32 func, u32 offs) {
-    u32 address = PCI_BASE_ADDR | (bus << 16) | (device << 11) | (func << 8) | offs;
+    u32 address = PCI_BASE_ADDR | (bus << 16) | (device << 11) | (func << 8) | (offs & 0xFC);
     io_out32(PCI_ADDR_PORT, address);
     return io_in32(PCI_VALUE_PORT);
+}
+
+static inline void pci_write_u32(u32 bus, u32 device, u32 func, u32 offs, u32 value) {
+    u32 address = PCI_BASE_ADDR | (bus << 16) | (device << 11) | (func << 8) | (offs & 0xFC);
+    io_out32(PCI_ADDR_PORT, address);
+    io_out32(PCI_VALUE_PORT, value);
 }
 
 BAR parse_bar(u32 bar) {
@@ -133,7 +139,7 @@ BAR parse_bar(u32 bar) {
     if (b.is_mem) {
         b.type = (bar >> 1) & 0x3;
         b.addr = (bar >> 4) << 4;
-        //kassert(b.type == 0, "TODO: Only supports BAR 32-bit");
+        kassert(b.type == 0, "TODO: Only supports BAR 32-bit");
         b.prefetch = (bar >> 3) & 0x1;
     } else {
         b.addr = (bar >> 2) << 2;
@@ -221,14 +227,14 @@ typedef struct {
 			u32 bar[6];
 			u32 cardbus_cis_ptr;
 
-			u16 subsystem_id;
 			u16 subsystem_vendor_id;
+			u16 subsystem_id;
 
 			u32 expansion_rom_base_addr;
 
-			u16 reserved_1;
-			u8  reserved_2;
 			u8  cap_ptr;
+			u8  reserved_1;
+			u16 reserved_2;
 
 			u32 reserved_3;
 
@@ -289,15 +295,15 @@ static bool pci_check_device(PCI_Device *dev, u32 bus, u32 device, u8 func) {
     if (hdr.vendor_id == PCI_NONE) return false;
 
 	for (int i = 1; i < ELEM_COUNT(hdr.regs); i++) {
-		hdr.regs[i] = pci_read_u32(bus, device, func, i * 0x4);
+		hdr.regs[i] = pci_read_u32(bus, device, func, i * sizeof(u32));
 	}
 
     dev->device_id = hdr.device_id;
     dev->vendor_id = hdr.vendor_id;
-    dev->class    = hdr.class;
-    dev->subclass = hdr.subclass;
-    dev->prog_IF  = hdr.prog_IF;
-    dev->revision = hdr.rev_id;
+    dev->class     = hdr.class;
+    dev->subclass  = hdr.subclass;
+    dev->prog_IF   = hdr.prog_IF;
+    dev->revision  = hdr.rev_id;
 
 	u8 hdr_type = hdr.header_type & 0b1111111;
     switch (hdr_type) {
@@ -312,9 +318,7 @@ static bool pci_check_device(PCI_Device *dev, u32 bus, u32 device, u8 func) {
 				dev->bar[i].value = hdr0.bar[i];
 			}
     		dev->irq_line = hdr0.interrupt_line;
-    		dev->irq_pin = hdr0.interrupt_pin;
-
-			kprintf("status: %b, command: %b\n", hdr.status, hdr.command);
+    		dev->irq_pin  = hdr0.interrupt_pin;
     	} break;
     	case 0x1: {
     		PCI_Header_1 hdr1 = {};
