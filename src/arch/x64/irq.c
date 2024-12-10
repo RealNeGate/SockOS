@@ -262,16 +262,18 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
                     atomic_compare_exchange_strong(&curr->entries[pte_index], &old_pte, new_pte);
                     ON_DEBUG(VMEM)(kprintf("[vmem] updated PTE %p -> %p!\n", old_pte, new_pte));
                 }
-            }
 
-            rwlock_unlock_shared(&env->addr_space.lock);
-            return cr3;
+                rwlock_unlock_shared(&env->addr_space.lock);
+                return cr3;
+            } else {
+                rwlock_unlock_shared(&env->addr_space.lock);
+            }
         }
 
         #if DEBUG_IRQ
         // just throw error
-        kprintf("%s (%d): error=0x%x\n", interrupt_names[state->interrupt_num], state->interrupt_num, state->error);
-        kprintf("  rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
+        // kprintf("%s (%d): error=0x%x\n", interrupt_names[state->interrupt_num], state->interrupt_num, state->error);
+        // kprintf("  rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
         kprintf("  cr3=%p\n\n", cr3);
 
         // print memory access address

@@ -72,7 +72,10 @@ if True:
 # Compile arch-specific objects
 objs = []
 for path in Path("src/arch/x64/").rglob("*.c"):
-    file.write(f'build objs/{path.name}.o: cc {path}\n')
+    if path.name == "x64.c":
+        file.write(f'build objs/{path.name}.o: cc {path} | userland/desktop.elf\n')
+    else:
+        file.write(f'build objs/{path.name}.o: cc {path}\n')
     file.write(f'  flags = -I src -fPIC -target x86_64-linux-gnu -ffreestanding {cflags}\n')
     file.write(f'\n')
     objs.append("objs/" + path.name + ".o")

@@ -8,12 +8,12 @@ typedef uint64_t Handle;
 enum {
     // sleep(micros)
     SYS_sleep = 0,
-    // mmap(paddr, size)
+    // mmap(vmo, offset, size)
     SYS_mmap  = 1,
 };
 
 int _start(void) {
-    uint32_t* pixels = (uint32_t*) syscall(SYS_mmap, 0x80000000, 800 * 600 * sizeof(uint32_t));
+    uint32_t* pixels = (uint32_t*) syscall(SYS_mmap, 0x80000000, 0, 800 * 600 * sizeof(uint32_t));
 
     uint8_t mult = 0;
     int width = 800, height = 600, stride = 800;

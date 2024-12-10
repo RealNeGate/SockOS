@@ -46,7 +46,6 @@ void x86_set_kernel_gs(int core_id) {
 void pci_init(void);
 void arch_init(int core_id) {
     // Stuff we only handle once
-    spall_begin_event("init", 0);
     x86_set_kernel_gs(core_id);
 
     if (core_id == 0) {
@@ -81,6 +80,7 @@ void arch_init(int core_id) {
     }
 
     // jump into timer interrupt, we're going to run tasks now
+    spall_header();
     spall_begin_event("main", 0);
     x86_irq_startup(core_id);
 }
@@ -138,6 +138,7 @@ static inline void x86_hlt() {
     asm volatile ("hlt");
 }
 
-static void thread_yield(void) {
+void sched_yield(void) {
     asm volatile ("int 32");
 }
+

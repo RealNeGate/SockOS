@@ -22,8 +22,11 @@ static PerCPU_Scheduler* get_sched(void) {
 // and we have executables.
 Env* env_create(void) {
     Env* env = kheap_zalloc(sizeof(Env));
-    env->addr_space.hw_tables = kpool_alloc_page();
     env->addr_space.commit_table = nbhm_alloc(60);
+
+    env->handles = kheap_zalloc(sizeof(KHandleTable) + 2*sizeof(KHandleEntry));
+    env->handles->capacity = 2;
+    env->handles->entries[0].open = 1;
 
     #ifdef __x86_64__
     // copy over the kernel's higher half pages bar for bar.
@@ -133,8 +136,11 @@ void thread_kill(Thread* thread) {
 // this is the trusted ELF loader for priveleged programs, normal apps will probably
 // be loaded via a shared object.
 Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
-    kprintf("Loading a program! %p\n", env->addr_space.hw_tables);
+    kprintf("Loading a program! %p\n", program);
     Elf64_Ehdr* elf_header = (Elf64_Ehdr*) program;
+
+    KObject_VMO* vmo_ptr = vmo_create_physical(kaddr2paddr((void*) program), program_size);
+    KHandle elf_vmo = env_open_handle(env, 0, &vmo_ptr->super);
 
     ////////////////////////////////
     // map segments
@@ -154,8 +160,8 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
 
         // file offset % page_size == virtual addr % page_size, it allows us to file map
         // awkward offsets because the virtual address is just as awkward :p
-        uintptr_t vaddr = (segment->p_vaddr & -PAGE_SIZE);
-        uintptr_t paddr = kaddr2paddr((u8*) program + (segment->p_offset & -PAGE_SIZE));
+        uintptr_t vaddr = segment->p_vaddr & -PAGE_SIZE;
+        size_t offset   = segment->p_offset & -PAGE_SIZE;
 
         // kprintf("[elf] segment: %p (%d) => %p (%d)\n", vaddr, segment->p_memsz, paddr, segment->p_filesz);
 
@@ -163,20 +169,20 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
         size_t mem_size  = (segment->p_memsz  + PAGE_SIZE - 1) & -PAGE_SIZE;
 
         if (file_size > 0) {
-            vmem_add_range(env, vaddr, file_size, paddr, VMEM_PAGE_WRITE | VMEM_PAGE_USER);
+            vmem_add_range(env, elf_vmo, vaddr, offset, file_size, VMEM_PAGE_WRITE | VMEM_PAGE_USER);
         }
 
         if (mem_size > file_size) {
             // zero pages
-            vmem_add_range(env, vaddr+mem_size, file_size - mem_size, 0, VMEM_PAGE_WRITE | VMEM_PAGE_USER);
+            vmem_add_range(env, 0, vaddr+mem_size, file_size - mem_size, 0, VMEM_PAGE_WRITE | VMEM_PAGE_USER);
         }
     }
 
     // tiny i know
-    uintptr_t stack_ptr = vmem_alloc(env, 8192, 0, VMEM_PAGE_WRITE | VMEM_PAGE_USER);
+    uintptr_t stack_ptr = vmem_map(env, 0, 0, 16384, VMEM_PAGE_WRITE | VMEM_PAGE_USER);
 
     kprintf("[elf] entry=%p\n", elf_header->e_entry);
     kprintf("[elf] stack=%p\n", stack_ptr);
 
-    return thread_create(env, (ThreadEntryFn*) elf_header->e_entry, stack_ptr, 8192, true);
+    return thread_create(env, (ThreadEntryFn*) elf_header->e_entry, stack_ptr, 16384, true);
 }

@@ -12,8 +12,6 @@ void kmain(BootInfo* restrict info) {
     boot_info->kernel_pml4 = paddr2kaddr((uintptr_t) boot_info->kernel_pml4);
     boot_info->mem_map.regions = paddr2kaddr((uintptr_t) boot_info->mem_map.regions);
 
-    spall_header();
-
     kprintf("Beginning kernel boot...\n");
     arch_init(0);
 }

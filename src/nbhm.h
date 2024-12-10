@@ -29,11 +29,11 @@
 #include <stdatomic.h>
 
 // personal debooging stuff
-#define NBHM__DEBOOGING 0
+#define NBHM__DEBOOGING 1
 
 #if NBHM__DEBOOGING
-#define NBHM__BEGIN(name)      spall_auto_buffer_begin(name, sizeof(name) - 1, NULL, 0)
-#define NBHM__END()            spall_auto_buffer_end()
+#define NBHM__BEGIN(name)      spall_begin_event(name, 0)
+#define NBHM__END()            spall_end_event(0)
 #else
 #define NBHM__BEGIN(name)
 #define NBHM__END()
@@ -168,15 +168,25 @@ void nbhm_free(NBHM* hs) {
     }
 }
 
+void sleep(uint64_t);
 static uint64_t states[256];
 int nbhm_thread_fn(void* arg) {
     for (;;) retry: {
+        #if NBHM__DEBOOGING
+        spall_begin_event("wait", 666);
+        #endif
+
         // Use a futex to avoid polling too hard
         uint32_t old;
         while (old = nbhm_free_count, old == nbhm_free_done) {
             // No futex support, just sleep once we run out of tasks
             // ...
+            sleep(10000);
         }
+
+        #if NBHM__DEBOOGING
+        spall_end_event(666);
+        #endif
 
         NBHM_FreeNode* p = atomic_load_explicit(&nbhm_free_head, memory_order_relaxed);
         do {
@@ -188,7 +198,9 @@ int nbhm_thread_fn(void* arg) {
         NBHM_Table* table = p->next->table;
 
         // Handling deferred freeing without blocking up the normie threads
-        NBHM__BEGIN("scan");
+        #if NBHM__DEBOOGING
+        spall_begin_event("scan", 666);
+        #endif
         // "snapshot" the current statuses, once the other threads either advance or aren't in the
         // hashset functions we know we can free.
         for (int i = 0; i < boot_info->core_count; i++) {
@@ -227,17 +239,15 @@ int nbhm_thread_fn(void* arg) {
                 } while (before_t == now_t);
             }
         }
-        NBHM__END();
+        #if NBHM__DEBOOGING
+        spall_end_event(666);
+        #endif
 
         // no more refs, we can immediately free
         // NBHM_VIRTUAL_FREE(table, sizeof(NBHM_Table) + table->cap*sizeof(NBHM_Entry));
         ON_DEBUG(NBHM)(kprintf("[nbhm] free %p\n", table));
 
         nbhm_free_done++;
-
-        #if NBHM__DEBOOGING
-        spall_auto_buffer_flush();
-        #endif
     }
 }
 #endif // NBHM_IMPL

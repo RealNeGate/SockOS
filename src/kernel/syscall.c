@@ -43,7 +43,7 @@ size_t syscall_table_count = SYS_MAX;
 SYS_FN(sleep) {
     ON_DEBUG(SYSCALL)(kprintf("SYS_sleep(t=%d us)\n", SYS_PARAM0));
 
-    sched_wait(cpu->current_thread, SYS_PARAM0);
+    sched_wait(SYS_PARAM0);
     state->interrupt_num = 32;
     uintptr_t new_cr3 = x86_irq_int_handler(state, cr3, cpu);
 
@@ -51,10 +51,10 @@ SYS_FN(sleep) {
 }
 
 SYS_FN(mmap) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_mmap(paddr=%p, size=%d)\n", SYS_PARAM0, SYS_PARAM1));
+    ON_DEBUG(SYSCALL)(kprintf("SYS_mmap(vmo=%p, offset=%d, size=%d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2));
 
     size_t page_aligned_size = (SYS_PARAM1 + PAGE_SIZE - 1) & -PAGE_SIZE;
-    SYS_RET = vmem_alloc(cpu->current_thread->parent, page_aligned_size, SYS_PARAM0, VMEM_PAGE_WRITE | VMEM_PAGE_USER);
+    SYS_RET = vmem_map(cpu->current_thread->parent, SYS_PARAM0, SYS_PARAM1, page_aligned_size, VMEM_PAGE_WRITE | VMEM_PAGE_USER);
 
     return cr3;
 }

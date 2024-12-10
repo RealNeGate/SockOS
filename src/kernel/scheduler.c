@@ -53,10 +53,15 @@ static Thread* tq_advance(ThreadQueue* tq) {
     return (tq->curr = next);
 }
 
+void sleep(u64 timeout) {
+    sched_wait(timeout);
+    sched_yield();
+}
+
 #define kprintf
-void sched_wait(Thread* t, u64 timeout) {
+void sched_wait(u64 timeout) {
     PerCPU_Scheduler* sched = cpu_get()->sched;
-    kassert(sched->active.curr == t, "wtf?");
+    Thread* t = sched->active.curr;
 
     uint64_t now_time = __rdtsc() / boot_info->tsc_freq;
 

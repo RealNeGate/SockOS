@@ -170,7 +170,7 @@ VMem_PageDesc* vmem_node_insert(Env* env, uintptr_t key) {
     }
 }
 
-uintptr_t vmem_alloc(Env* env, size_t size, uintptr_t paddr, VMem_Flags flags) {
+uintptr_t vmem_map(Env* env, KHandle vmo, size_t offset, size_t size, VMem_Flags flags) {
     kassert((size & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", size);
 
     // walk all regions until we find a gap big enough (SLOW!!!)
@@ -210,7 +210,7 @@ uintptr_t vmem_alloc(Env* env, size_t size, uintptr_t paddr, VMem_Flags flags) {
 
     done:
     VMem_PageDesc* desc = vmem_node_insert(env, vaddr);
-    *desc = (VMem_PageDesc){ .valid = 1, .flags = flags, .file_ptr = paddr >> 12ull, .size = size };
+    *desc = (VMem_PageDesc){ .valid = 1, .flags = flags, .vmo_handle = vmo, .offset = offset, .size = size };
     return vaddr;
 }
 
@@ -218,16 +218,22 @@ bool vmem_protect(Env* env, uintptr_t addr, size_t size, VMem_Flags flags) {
     return false;
 }
 
-void vmem_add_range(Env* env, uintptr_t vaddr, size_t vsize, uintptr_t paddr, VMem_Flags flags) {
+void vmem_add_range(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_t vsize, VMem_Flags flags) {
     kassert((vaddr & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", vaddr);
     kassert((vsize & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", vsize);
-    kassert((paddr & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", paddr);
 
     VMem_PageDesc* desc = vmem_node_insert(env, vaddr);
-    desc->valid    = 1;
-    desc->flags    = flags;
-    desc->file_ptr = (uintptr_t) (paddr >> 12ull);
-    desc->size     = vsize;
+    desc->valid      = 1;
+    desc->flags      = flags;
+    desc->vmo_handle = 0;
+    desc->offset     = offset;
+    desc->size       = vsize;
+
+    if (vmo != 0) {
+        KObject_VMO* vmo_ptr = env_get_handle(env, vmo, NULL);
+        kassert(vmo_ptr->super.tag == KOBJECT_VMO, "expected object to be a VMO");
+        desc->vmo_handle = vmo;
+    }
 }
 
 static _Alignas(4096) const uint8_t VMEM_ZERO_PAGE[4096];
@@ -242,19 +248,26 @@ bool vmem_segfault(Env* env, uintptr_t access_addr, bool is_write, VMem_PTEUpdat
     VMem_PageDesc* desc  = &cursor.node->vals[cursor.index];
     uintptr_t start_addr = cursor.node->keys[cursor.index];
     uintptr_t end_addr   = start_addr + desc->size;
-    if (!desc->valid || access_addr >= end_addr) {
+    if (!desc->valid || access_addr < start_addr || access_addr >= end_addr) {
         // we're in the gap between page descriptor
         return NULL;
     }
+
+    ON_DEBUG(VMEM)(kprintf("[vmem] first touch %p, landed in range %p-%p\n", access_addr, start_addr, end_addr-1));
 
     // attempt to commit page
     uintptr_t actual_page = (uintptr_t) vmem_addrhm_get(&env->addr_space.commit_table, (void*) access_addr);
     if (actual_page == 0) {
         uintptr_t new_page = 0;
-        if (desc->file_ptr != 0) {
-            // we're "file" mapped, just view the address
+        if (desc->vmo_handle != 0) {
+            // we're mapped to a VMO, just view the address
+            // TODO(NeGate): implement pager behavior.
+            KObject_VMO* vmo_ptr = env_get_handle(env, desc->vmo_handle, NULL);
+
             size_t offset = (access_addr & -PAGE_SIZE) - start_addr;
-            new_page = (desc->file_ptr << 12ull) + offset;
+            new_page = vmo_ptr->paddr + offset;
+
+            ON_DEBUG(VMEM)(kprintf("[vmem] first touch on VMO (%p), paddr=%p\n", access_addr, new_page));
         } else {
             void* page = kpool_alloc_page();
             memset(page, 0, PAGE_SIZE);
@@ -262,13 +275,9 @@ bool vmem_segfault(Env* env, uintptr_t access_addr, bool is_write, VMem_PTEUpdat
         }
 
         actual_page = (uintptr_t) vmem_addrhm_put_if_null(&env->addr_space.commit_table, (void*) access_addr, (void*) new_page);
-        if (desc->file_ptr != 0) {
-            ON_DEBUG(VMEM)(kprintf("[vmem] first touch on file mapped address (%p), paddr=%p\n", access_addr, new_page));
-        } else {
+        if (actual_page != new_page && desc->vmo_handle == 0) {
             ON_DEBUG(VMEM)(kprintf("[vmem] first touch on private page (%p), paddr=%p\n", access_addr, new_page));
-            if (actual_page != new_page) {
-                kpool_free_page(paddr2kaddr(new_page));
-            }
+            kpool_free_page(paddr2kaddr(new_page));
         }
     }
 

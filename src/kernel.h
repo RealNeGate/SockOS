@@ -17,6 +17,11 @@ typedef struct Env Env;
 typedef struct Thread Thread;
 typedef struct CPUState CPUState;
 
+typedef struct KObject_VMO KObject_VMO;
+typedef struct KObject KObject;
+
+typedef unsigned int KHandle;
+
 ////////////////////////////////
 // Profiling
 ////////////////////////////////
@@ -98,10 +103,10 @@ enum {
 typedef struct {
     uint64_t valid : 1;
     uint64_t flags : 7;
-    // file mapping info
-    uintptr_t file_ptr : 56;
-    // virtual range
-    size_t size;
+    uint64_t vmo_handle : 32;
+
+    // range
+    size_t offset, size;
 } VMem_PageDesc;
 
 typedef struct VMem_Node VMem_Node;
@@ -128,11 +133,66 @@ typedef struct {
     VMem_Flags flags;
 } VMem_PTEUpdate;
 
-uintptr_t vmem_alloc(Env* env, size_t size, uintptr_t paddr, VMem_Flags flags);
-bool vmem_protect(Env* env, uintptr_t addr, size_t size, VMem_Flags flags);
-void vmem_add_range(Env* env, uintptr_t vaddr, size_t vsize, uintptr_t paddr, VMem_Flags flags);
+uintptr_t vmem_map(Env* env, KHandle vmo, size_t offset, size_t size, VMem_Flags flags);
+void vmem_add_range(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_t vsize, VMem_Flags flags);
 
+bool vmem_protect(Env* env, uintptr_t addr, size_t size, VMem_Flags flags);
 bool vmem_segfault(Env* env, uintptr_t access_addr, bool is_write, VMem_PTEUpdate* out_update);
+
+////////////////////////////////
+// Kernel objects
+////////////////////////////////
+typedef enum {
+    KACCESS_,
+} KAccessRights;
+
+// these exist beyond environments (and can be shared across them), this is
+// the header for all of them.
+struct KObject {
+    enum {
+        // processes
+        KOBJECT_ENV,
+        KOBJECT_THREAD,
+        // memory
+        KOBJECT_VMO,
+        // IPC
+        KOBJECT_CHANNEL,
+    } tag;
+
+    int ref_count;
+};
+
+// chunk of virtual memory which can be shared across environments
+struct KObject_VMO {
+    KObject super;
+
+    // page-aligned
+    size_t size;
+
+    // simple physical mapping
+    uintptr_t paddr;
+};
+
+// 10 cache lines worth of handles
+typedef struct {
+    // each bit (except MSB) represents whether or not one of the handles is alive.
+    // MSB represents the bitfield can no longer be written to because it has been
+    // moved.
+    _Atomic(u64) open;
+
+    // each ptr is tagged on the top 16bits
+    _Atomic(u64) objects[63];
+} KHandleEntry;
+
+typedef struct KHandleTable KHandleTable;
+struct KHandleTable {
+    KHandleTable* prev;
+
+    size_t capacity;
+    KHandleEntry entries[];
+};
+
+KObject_VMO* vmo_create_physical(uintptr_t addr, size_t size);
 
 ////////////////////////////////
 // Environment (memory + resources accessible bound to some set of threads)
@@ -156,7 +216,7 @@ struct Env {
         //   to acknowledge it or else the data might be corrupted, miss an important segfault.
         RWLock lock;
 
-        // TODO(NeGate): interval trees
+        // B+ tree for intervals
         VMem_Node* root;
 
         // virtual addresses -> committed pages
@@ -167,11 +227,16 @@ struct Env {
     } addr_space;
 
     // Handle table
+    _Atomic(KHandleTable*) handles;
 };
 
 Env* env_create(void);
 void env_kill(Env* env);
 Thread* env_load_elf(Env* env, const u8* program, size_t program_size);
+
+void* env_get_handle(Env* env, KHandle handle, KAccessRights* rights);
+KHandle env_open_handle(Env* env, KAccessRights rights, KObject* obj);
+bool env_close_handle(Env* env, KHandle handle);
 
 ////////////////////////////////
 // Threads
@@ -193,7 +258,9 @@ struct PerCPU_Scheduler {
     ThreadQueue waiters;
 };
 
-void sched_wait(Thread* t, u64 timeout);
+void sched_yield(void);
+void sched_wait(u64 timeout);
+
 Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us);
 
 void tq_append(ThreadQueue* tq, Thread* t);
@@ -202,7 +269,9 @@ void tq_append(ThreadQueue* tq, Thread* t);
 // Arch-specific
 ////////////////////////////////
 PerCPU* cpu_get(void);
+
 void arch_init(int core_id);
+uintptr_t arch_canonical_addr(uintptr_t p);
 
 CPUState new_thread_state(void* entrypoint, uintptr_t stack, size_t stack_size, bool is_user);
 _Noreturn void do_context_switch(CPUState* state, uintptr_t addr_space);

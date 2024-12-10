@@ -1,12 +1,12 @@
 #include "x64.h"
 
-static u64 canonical_addr(u64 ptr) {
+uintptr_t arch_canonical_addr(uintptr_t ptr) {
     return (ptr >> 47) != 0 ? ptr | (0xFFFFull << 48) : ptr;
 }
 
 static PageTable* get_pt(PageTable* parent, size_t index) {
     if (parent->entries[index] & PAGE_PRESENT) {
-        return paddr2kaddr(canonical_addr(parent->entries[index] & 0xFFFFFFFFF000ull));
+        return paddr2kaddr(arch_canonical_addr(parent->entries[index] & 0xFFFFFFFFF000ull));
     } else {
         return NULL;
     }
@@ -18,7 +18,7 @@ static PageTable* get_or_alloc_pt(PageTable* parent, size_t index, int depth, Pa
             parent->entries[index] |= flags;
         }
 
-        return paddr2kaddr(canonical_addr(parent->entries[index] & 0xFFFFFFFFF000ull));
+        return paddr2kaddr(arch_canonical_addr(parent->entries[index] & 0xFFFFFFFFF000ull));
     }
 
     PageTable* new_pt = kpool_alloc_page();
@@ -132,7 +132,7 @@ static u64 memmap__probe(PageTable* address_space, uintptr_t virt) {
             return 0;
         }
 
-        curr = paddr2kaddr(canonical_addr(curr->entries[l[i]] & 0xFFFFFFFFF000ull));
+        curr = paddr2kaddr(arch_canonical_addr(curr->entries[l[i]] & 0xFFFFFFFFF000ull));
     }
 
     return curr->entries[l[3]];
