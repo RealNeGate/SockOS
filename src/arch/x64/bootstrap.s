@@ -26,28 +26,27 @@ bootstrap_start:
     mov ebx, 0x80000011
     mov cr0, ebx
 
-    ; use GDT
-    lgdt [data_start + 40]
-
-bits 64
-    ; jump to the higher-half form of kmain
-    mov rax, [data_start + 32]
-    mov [rel far_jumper2], rax
-    jmp [rel far_jumper2]
-
-far_jumper2:
-    dq 0 ; filled in at runtime
-    dw 0x08
-
-bootstrap_transition:
-    ; set TSS
-    mov ax, 0x28
-    ltr ax
+    lgdt [0x1000 + (bootstrap_gdt64_pointer - bootstrap_start)]
 
     ; there's a weird bug around far jumps in Intel assembly syntax
-    lea rax, [rel premain]
+    jmp 0x8:0x1100
+
+bits 64
+align 256
+gdt_jump:
+    ; use GDT
+    mov rax, [data_start + 40]
+    lgdt [rax]
+
+    ; there's a weird bug around far jumps in Intel assembly syntax
+    mov rax, data_start + 32
+    mov rax, [rax]
     mov qword [rel far_jumper], rax
     jmp far qword [rel far_jumper]
+
+far_jumper:
+    dq 0 ; filled in at runtime
+    dw 0x08
 
 bits 64
 align 8
@@ -59,18 +58,28 @@ bootstrap_data_start:
     dq 0 ; [32] bootstrap_transition
     dq 0 ; [40] gdt64_pointer
 
-far_jumper:
-    dq 0 ; filled in at runtime
-    dw 0x08
+bootstrap_gdt64:
+    ; zero entry
+    dq 0
+    ; CS
+    dd 0xFFFF
+    db 0
+    dw 0xAF9A
+    db 0
+bootstrap_gdt64_pointer:
+    dw 0xF ; length
+    dq 0x1000 + (bootstrap_gdt64 - bootstrap_start) ; base
 
-align 512
 bits 64
 premain:
-    ; set up the TSS?
     mov ax, 0x10
     mov ds, ax
     mov es, ax
     mov ss, ax
+
+    ; set TSS
+    ; mov ax, 0x28
+    ; ltr ax
 
     ; get core number
     mov eax, 1

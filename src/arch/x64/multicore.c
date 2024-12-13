@@ -54,7 +54,6 @@ void x86_boot_cores(void) {
     //   we just copy it to 0x1000 (with the data going before that) because
     //   we're silly and goofy and need it available somewhere the 16bit stuff can go
     extern char bootstrap_data_start[];
-    extern char bootstrap_transition[];
     extern char bootstrap_start[];
     extern char bootstrap_end[];
     extern char premain[];
@@ -75,7 +74,7 @@ void x86_boot_cores(void) {
     slots[1] = (u64) &smp_main;
     slots[2] = (u64) &boot_info->cores[0];
     slots[3] = (u64) sizeof(PerCPU);
-    slots[4] = (u64) bootstrap_transition;
+    slots[4] = (u64) premain;
     slots[5] = gdt64_paddr;
 
     kprintf("A %x %x\n", gdt64_paddr, *(u64*) gdt64_paddr);
