@@ -1,4 +1,9 @@
+global gdt64, gdt64_pointer, gdt64.tss
+
 %define GDT_SIZE 0x38
+
+section .data
+align 4096
 gdt64:
     dq 0 ; zero entry
 gdt64.kernel_code_segment:
@@ -24,6 +29,6 @@ gdt64.user_code_segment:
 gdt64.tss:
     dq 0x00000000
     dq 0x00000000
-gdt64.pointer:
+gdt64_pointer:
     dw GDT_SIZE - 1 ; length
-    dq 0 ; a.intress
+    dq 0            ; base

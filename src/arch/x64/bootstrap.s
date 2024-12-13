@@ -9,7 +9,7 @@ bits 16
 bootstrap_start:
     cli
 
-    ; Enable PAE
+    ; Enable PAE & PGE
     mov eax, 0xA0
     mov cr4, eax
 
@@ -26,14 +26,20 @@ bootstrap_start:
     mov ebx, 0x80000011
     mov cr0, ebx
 
+    ; use GDT
+    lgdt [data_start + 40]
+
 bits 64
     ; jump to the higher-half form of kmain
-    jmp [data_start + 32]
+    mov rax, [data_start + 32]
+    mov [rel far_jumper2], rax
+    jmp [rel far_jumper2]
+
+far_jumper2:
+    dq 0 ; filled in at runtime
+    dw 0x08
 
 bootstrap_transition:
-    ; use GDT
-    lgdt [rel gdt64.pointer]
-
     ; set TSS
     mov ax, 0x28
     ltr ax
@@ -51,6 +57,7 @@ bootstrap_data_start:
     dq 0 ; [16] cores
     dq 0 ; [24] sizeof_core
     dq 0 ; [32] bootstrap_transition
+    dq 0 ; [40] gdt64_pointer
 
 far_jumper:
     dq 0 ; filled in at runtime

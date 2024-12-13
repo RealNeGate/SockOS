@@ -66,7 +66,7 @@ void arch_init(int core_id) {
         kprintf("Found %d cores | TSC freq %d MHz\n", boot_info->core_count, boot_info->tsc_freq);
 
         kpool_subdivide(boot_info->core_count);
-        // x86_boot_cores();
+        x86_boot_cores();
 
         sched_init();
         pci_init();

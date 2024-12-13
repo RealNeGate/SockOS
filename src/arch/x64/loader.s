@@ -1,5 +1,5 @@
-extern kmain, kernel_tss
-global _start, kernel_idle, gdt64, gdt64.pointer
+extern kmain, kernel_tss, gdt64, gdt64_pointer, gdt64.tss
+global _start, kernel_idle
 
 ; We got ourselves boot info in RCX
 section .text
@@ -30,9 +30,9 @@ _start.transition:
 
     ; setup GDT descriptor
     lea rax, qword [rel gdt64]
-    mov [rel gdt64.pointer + 2], rax
+    mov [rel gdt64_pointer + 2], rax
 
-    lgdt [rel gdt64.pointer]
+    lgdt [rel gdt64_pointer]
 
     ; set TSS
     mov ax, 0x28
@@ -60,5 +60,3 @@ section .data
 far_jumper:
     dq 0 ; filled in at runtime
     dw 0x08
-
-%include "src/arch/x64/gdt.s"
