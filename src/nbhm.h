@@ -168,7 +168,8 @@ void nbhm_free(NBHM* hs) {
     }
 }
 
-void sleep(uint64_t);
+void sleep(u64 timeout);
+
 static uint64_t states[256];
 int nbhm_thread_fn(void* arg) {
     for (;;) retry: {
@@ -351,7 +352,7 @@ NBHM_Table* NBHM_FN(move_items)(NBHM* hm, NBHM_Table* latest, NBHM_Table* prev, 
 
         if (!atomic_flag_test_and_set(&nbhm_free_thread_init)) {
             // spin up kernel thread which does freeing work
-            thread_create(NULL, nbhm_thread_fn, (uintptr_t) kpool_alloc_page(), 4096, false);
+            thread_create(NULL, nbhm_thread_fn, 0, (uintptr_t) kpool_alloc_page(), 4096, false);
         }
 
         NBHM_FreeNode* new_node = kheap_alloc(sizeof(NBHM_FreeNode));

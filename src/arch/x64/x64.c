@@ -66,17 +66,27 @@ void arch_init(int core_id) {
         kprintf("Found %d cores | TSC freq %d MHz\n", boot_info->core_count, boot_info->tsc_freq);
 
         kpool_subdivide(boot_info->core_count);
+        // x86_boot_cores();
 
+        sched_init();
         pci_init();
 
-        static _Alignas(4096) const uint8_t desktop_elf[] = {
-            #embed "../../../userland/desktop.elf"
-        };
+        kernel_idle_state = new_thread_state(kernel_idle, 0, 0, 0, false);
 
-        void* desktop_elf_ptr = paddr2kaddr(((uintptr_t) desktop_elf - boot_info->elf_virtual_ptr) + boot_info->elf_physical_ptr);
+        { // Spawn desktop
+            static _Alignas(4096) const uint8_t desktop_elf[] = {
+                #embed "../../../userland/desktop.elf"
+            };
 
-        Thread* mine = env_load_elf(env_create(), desktop_elf_ptr, sizeof(desktop_elf));
-        kernel_idle_state = new_thread_state(kernel_idle, 0, 0, false);
+            Env* env = env_create();
+
+            // framebuffer passed along
+            KObject_VMO* fb_vmo = vmo_create_physical(0x80000000, 800 * 600 * sizeof(uint32_t));
+            KHandle fb = env_open_handle(env, 0, &fb_vmo->super);
+
+            void* desktop_elf_ptr = paddr2kaddr(((uintptr_t) desktop_elf - boot_info->elf_virtual_ptr) + boot_info->elf_physical_ptr);
+            Thread* mine = env_load_elf(env, desktop_elf_ptr, sizeof(desktop_elf));
+        }
     }
 
     // jump into timer interrupt, we're going to run tasks now

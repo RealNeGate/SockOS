@@ -1,4 +1,5 @@
 #include "x64.h"
+#include "../../kernel/threads.h"
 
 #define PIC1_COMMAND 0x20
 #define PIC1_DATA    0x21
@@ -47,8 +48,6 @@ CPUState kernel_idle_state;
 
 static volatile bool calibrating_apic_timer;
 static u64 apic_freq;
-
-CPUState new_thread_state(void* entrypoint, uintptr_t stack, size_t stack_size, bool is_user);
 
 static void irq_disable_pic(void) {
     // set ICW1
@@ -286,12 +285,7 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
 
         // dissassemble code
         if (memmap_translate(old_address_space, state->rip, &translated)) {
-            // relocate higher half addresses to the ELF in physical memory
-            if (state->rip >= 0xFFFFFFFF80000000ull) {
-                translated = state->rip;
-            }
-
-            kprintf("  code:   %p (translated: %p)\n\n", state->rip, translated);
+            kprintf("  code:   %p (translated: %p, %x)\n\n", state->rip, translated, *(u8*) paddr2kaddr(translated));
             // x86_print_disasm((uint8_t*) translated, 16);
         } else {
             kprintf("  code:   NOT PRESENT\n");
@@ -314,26 +308,23 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
         u64 next_wake;
         Thread* next = sched_try_switch(now / boot_info->tsc_freq, &next_wake);
 
-        uint64_t new_now_time = (__rdtsc() / boot_info->tsc_freq);
-        uint64_t until_wake = 1;
-        if (next_wake > new_now_time) {
-            until_wake = next_wake - new_now_time;
-        }
-
         // if we're switching, save old thread state
         if (cpu->current_thread != NULL) {
             cpu->current_thread->state = *state;
         }
 
         if (next == NULL) {
-            ON_DEBUG(IRQ)(kprintf("  >> IDLE! (for %d ms, %d ticks) <<\n", until_wake / 1000, micros_to_apic_time(until_wake)));
+            ON_DEBUG(IRQ)(kprintf("  >> IDLE! (until %d ms) <<\n", next_wake / 1000));
+            spall_begin_event("sleep", 0);
+
+            uint64_t new_now_time = (__rdtsc() / boot_info->tsc_freq);
+            uint64_t until_wake = next_wake > new_now_time ? next_wake - new_now_time : 1;
 
             // send EOI
             APIC(0xB0) = 0;
             // set new one-shot
             APIC(0x380) = micros_to_apic_time(until_wake);
 
-            spall_begin_event("sleep", 0);
             *state = kernel_idle_state;
             cpu->current_thread = NULL;
             return kaddr2paddr(boot_info->kernel_pml4);
@@ -341,31 +332,36 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
 
         // do thread context switch, if we changed
         if (cpu->current_thread != next) {
-            ON_DEBUG(IRQ)(kprintf("  >> SWITCH %p -> %p (for %d ms, %d ticks) <<\n\n", cpu->current_thread, next, until_wake / 1000, micros_to_apic_time(until_wake)));
+            ON_DEBUG(IRQ)(kprintf("  >> SWITCH %p -> %p (until %d ms) <<\n\n", cpu->current_thread, next, next_wake / 1000));
 
             *state = next->state;
             cpu->current_thread = next;
         } else {
-            ON_DEBUG(IRQ)(kprintf("  >> STAY %p (for %d ms, %d ticks) <<\n\n", cpu->current_thread, until_wake / 1000, micros_to_apic_time(until_wake)));
+            ON_DEBUG(IRQ)(kprintf("  >> STAY %p (until %d ms) <<\n\n", cpu->current_thread, next_wake / 1000));
         }
+
+        {
+            // switch into thread's address space, for kernel threads they'll use kernel_pml4
+            char str[32];
+            str[0] = 't', str[1] = 'a', str[2] = 's', str[3] = 'k', str[4] = '-';
+
+            const char hex[] = "0123456789abcdef";
+            int i = 5;
+            uint64_t addr = (uint64_t) next;
+            for(int j = 16; j--;) {
+                str[i++] = hex[(addr >> (j*4)) & 0xF];
+            }
+            str[i++] = 0;
+            spall_begin_event(str, 0);
+        }
+
+        uint64_t new_now_time = (__rdtsc() / boot_info->tsc_freq);
+        uint64_t until_wake = next_wake > new_now_time ? next_wake - new_now_time : 1;
 
         // send EOI
         APIC(0xB0) = 0;
         // set new one-shot
         APIC(0x380) = micros_to_apic_time(until_wake);
-
-        // switch into thread's address space, for kernel threads they'll use kernel_pml4
-        char str[32];
-        str[0] = 't', str[1] = 'a', str[2] = 's', str[3] = 'k', str[4] = '-';
-
-        const char hex[] = "0123456789abcdef";
-        int i = 5;
-        uint64_t addr = (uint64_t) next;
-        for(int j = 16; j--;) {
-            str[i++] = hex[(addr >> (j*4)) & 0xF];
-        }
-        str[i++] = 0;
-        spall_begin_event(str, 0);
 
         PageTable* next_pml4 = next->parent ? next->parent->addr_space.hw_tables : boot_info->kernel_pml4;
         return kaddr2paddr(next_pml4);
@@ -375,11 +371,12 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
     }
 }
 
-CPUState new_thread_state(void* entrypoint, uintptr_t stack, size_t stack_size, bool is_user) {
+CPUState new_thread_state(void* entrypoint, uintptr_t arg, uintptr_t stack, size_t stack_size, bool is_user) {
     // the stack will grow downwards.
     // the other registers are zeroed by default.
     CPUState s = {
         .rip = (uintptr_t) entrypoint, .rsp = stack + stack_size,
+        .rdi = arg,
         .flags = 0x200, .cs = 0x08, .ss = 0x10,
     };
 

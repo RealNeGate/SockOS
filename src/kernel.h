@@ -156,15 +156,15 @@ struct KObject {
         // memory
         KOBJECT_VMO,
         // IPC
-        KOBJECT_CHANNEL,
+        KOBJECT_MAILBOX,
     } tag;
 
-    int ref_count;
+    atomic_int ref_count;
 };
 
 // chunk of virtual memory which can be shared across environments
 struct KObject_VMO {
-    KObject super;
+    KObject super; // tag = KOBJECT_VMO
 
     // page-aligned
     size_t size;
@@ -172,6 +172,29 @@ struct KObject_VMO {
     // simple physical mapping
     uintptr_t paddr;
 };
+
+enum { KOBJECT_MAILBOX_SIZE = 65536 };
+typedef struct {
+    uint16_t handle_count;
+    uint16_t byte_count;
+    // who is the message being sent to, 0 for "any"
+    uint32_t rx_id, tx_id;
+    uint8_t data[];
+} Message;
+
+typedef struct {
+    KObject super; // tag = KOBJECT_MAILBOX
+
+    // TODO(NeGate): we must remove this lock
+    // later, it will become an IPC bottleneck.
+    Lock lock;
+
+    size_t mask;
+    _Atomic(u64) bot, top;
+
+    // each message is aligned to 8b and has the same header
+    uint8_t data[];
+} KObject_Mailbox;
 
 // 10 cache lines worth of handles
 typedef struct {
@@ -186,13 +209,20 @@ typedef struct {
 
 typedef struct KHandleTable KHandleTable;
 struct KHandleTable {
-    KHandleTable* prev;
+    _Atomic(KHandleTable*) prev;
+
+    // item migration work
+    _Atomic(size_t) claimed, done;
 
     size_t capacity;
     KHandleEntry entries[];
 };
 
 KObject_VMO* vmo_create_physical(uintptr_t addr, size_t size);
+
+KObject_Mailbox* vmo_mailbox_create(void);
+void vmo_mailbox_send(KObject_Mailbox* mailbox, size_t handle_count, KHandle* handles, size_t data_size, uint8_t* data);
+void vmo_mailbox_recv(KObject_Mailbox* mailbox, size_t handle_count, KHandle* handles, size_t data_size, uint8_t* data);
 
 ////////////////////////////////
 // Environment (memory + resources accessible bound to some set of threads)
@@ -243,7 +273,7 @@ bool env_close_handle(Env* env, KHandle handle);
 ////////////////////////////////
 typedef int ThreadEntryFn(void*);
 
-Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t stack, size_t stack_size, bool is_user);
+Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintptr_t stack, size_t stack_size, bool is_user);
 void thread_kill(Thread* thread);
 
 ////////////////////////////////
@@ -258,6 +288,7 @@ struct PerCPU_Scheduler {
     ThreadQueue waiters;
 };
 
+void sched_init(void);
 void sched_yield(void);
 void sched_wait(u64 timeout);
 
@@ -273,11 +304,11 @@ PerCPU* cpu_get(void);
 void arch_init(int core_id);
 uintptr_t arch_canonical_addr(uintptr_t p);
 
-CPUState new_thread_state(void* entrypoint, uintptr_t stack, size_t stack_size, bool is_user);
+CPUState new_thread_state(void* entrypoint, uintptr_t arg, uintptr_t stack, size_t stack_size, bool is_user);
 _Noreturn void do_context_switch(CPUState* state, uintptr_t addr_space);
 
 void* memmap_view(PageTable* address_space, uintptr_t phys_addr, uintptr_t virt_addr, size_t size, VMem_Flags flags);
-void memmap__unview(PageTable* address_space, uintptr_t virt_addr, size_t size);
+void memmap_unview(PageTable* address_space, uintptr_t virt_addr, size_t size);
 bool memmap_translate(PageTable* address_space, uintptr_t virt, u64* out);
 
 // we emulate I/O ports on all platforms, it's used for PCI mostly
@@ -289,3 +320,7 @@ void io_out8(u16 port, u8 value);
 void io_out16(u16 port, u16 value);
 void io_out32(u16 port, u32 value);
 
+////////////////////////////////
+// Utils
+////////////////////////////////
+uint32_t mur3_32(const void *key, int len, uint32_t h);

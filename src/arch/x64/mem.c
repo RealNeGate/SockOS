@@ -56,7 +56,7 @@ void* memmap_view(PageTable* address_space, uintptr_t phys_addr, uintptr_t virt_
     return (void*) virt_addr;
 }
 
-void memmap__unview(PageTable* address_space, uintptr_t virt_addr, size_t size) {
+void memmap_unview(PageTable* address_space, uintptr_t virt_addr, size_t size) {
     size_t page_count = (size + PAGE_SIZE - 1) / PAGE_SIZE;
     kassert((virt_addr & 0xFFFull) == 0, "virtual address unaligned (%p)", virt_addr);
 

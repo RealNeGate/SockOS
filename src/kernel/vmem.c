@@ -253,8 +253,6 @@ bool vmem_segfault(Env* env, uintptr_t access_addr, bool is_write, VMem_PTEUpdat
         return NULL;
     }
 
-    ON_DEBUG(VMEM)(kprintf("[vmem] first touch %p, landed in range %p-%p\n", access_addr, start_addr, end_addr-1));
-
     // attempt to commit page
     uintptr_t actual_page = (uintptr_t) vmem_addrhm_get(&env->addr_space.commit_table, (void*) access_addr);
     if (actual_page == 0) {
@@ -265,7 +263,7 @@ bool vmem_segfault(Env* env, uintptr_t access_addr, bool is_write, VMem_PTEUpdat
             KObject_VMO* vmo_ptr = env_get_handle(env, desc->vmo_handle, NULL);
 
             size_t offset = (access_addr & -PAGE_SIZE) - start_addr;
-            new_page = vmo_ptr->paddr + offset;
+            new_page = vmo_ptr->paddr + desc->offset + offset;
 
             ON_DEBUG(VMEM)(kprintf("[vmem] first touch on VMO (%p), paddr=%p\n", access_addr, new_page));
         } else {

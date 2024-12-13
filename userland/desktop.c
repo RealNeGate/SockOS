@@ -3,7 +3,7 @@
 
 #include "syscall_helper.h"
 
-typedef uint64_t Handle;
+typedef unsigned int KHandle;
 
 enum {
     // sleep(micros)
@@ -12,8 +12,13 @@ enum {
     SYS_mmap  = 1,
 };
 
-int _start(void) {
-    uint32_t* pixels = (uint32_t*) syscall(SYS_mmap, 0x80000000, 0, 800 * 600 * sizeof(uint32_t));
+void foo(void* arg) {
+    __builtin_debugtrap();
+}
+
+int _start(KHandle bootstrap_channel) {
+    uint32_t* pixels = (uint32_t*) syscall(SYS_mmap, 1, 0, 800 * 600 * sizeof(uint32_t));
+    // syscall(SYS_thread_create, foo, NULL);
 
     uint8_t mult = 0;
     int width = 800, height = 600, stride = 800;

@@ -2,7 +2,7 @@
 #include "../../kernel.h"
 
 struct CPUState {
-    // u8  fxsave[512 + 16];
+    u8  fxsave[512 + 16];
     u64 r15, r14, r13, r12, r11, r10, r9, r8;
     u64 rdi, rsi, rbp, rbx, rdx, rcx, rax;
     u64 interrupt_num, error;
@@ -38,26 +38,6 @@ enum {
     INTR_LAPIC_RESCHEDULE = 0xF3,
 };
 
-struct Thread {
-    Env* parent;
-    Thread* prev_in_env;
-    Thread* next_in_env;
-
-    Thread* prev_sched;
-    Thread* next_sched;
-
-    // active range
-    u64 start_time, end_time;
-
-    // how much of the quanta did we give up to waiting
-    u64 wait_time;
-
-    // sleeping
-    u64 wake_time;
-
-    CPUState state;
-};
-
 #define APIC(reg_num) ((volatile uint32_t*) boot_info->lapic_base)[(reg_num) >> 2]
 
 extern CPUState kernel_idle_state;
@@ -66,6 +46,7 @@ _Noreturn void x86_halt(void);
 
 void x86_parse_acpi(void);
 void x86_enable_apic(void);
+void x86_boot_cores(void);
 
 void x86_irq_startup(int core_id);
 uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu);

@@ -1,9 +1,4 @@
-#include <kernel.h>
-#include <elf.h>
-
-#ifdef __x86_64__
-#include "../arch/x64/x64.h"
-#endif
+#include "threads.h"
 
 static PerCPU_Scheduler* get_sched(void) {
     // initialize scheduler
@@ -24,8 +19,8 @@ Env* env_create(void) {
     Env* env = kheap_zalloc(sizeof(Env));
     env->addr_space.commit_table = nbhm_alloc(60);
 
-    env->handles = kheap_zalloc(sizeof(KHandleTable) + 2*sizeof(KHandleEntry));
-    env->handles->capacity = 2;
+    env->handles = kheap_zalloc(sizeof(KHandleTable) + sizeof(KHandleEntry));
+    env->handles->capacity = 1;
     env->handles->entries[0].open = 1;
 
     #ifdef __x86_64__
@@ -60,14 +55,14 @@ void env_kill(Env* env) {
     spin_unlock(&env->lock);
 }
 
-Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t stack, size_t stack_size, bool is_user) {
+Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintptr_t stack, size_t stack_size, bool is_user) {
     Thread* new_thread = kpool_alloc_page();
     *new_thread = (Thread){
         .parent = env,
         .wake_time = 0,
 
         // initial cpu state (CPU specific)
-        .state = new_thread_state(entrypoint, stack, stack_size, is_user)
+        .state = new_thread_state(entrypoint, arg, stack, stack_size, is_user)
     };
 
     // attach to env
@@ -184,5 +179,5 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
     kprintf("[elf] entry=%p\n", elf_header->e_entry);
     kprintf("[elf] stack=%p\n", stack_ptr);
 
-    return thread_create(env, (ThreadEntryFn*) elf_header->e_entry, stack_ptr, 16384, true);
+    return thread_create(env, (ThreadEntryFn*) elf_header->e_entry, 0, stack_ptr, 16384, true);
 }

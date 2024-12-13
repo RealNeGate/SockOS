@@ -1,8 +1,4 @@
-#include <kernel.h>
-
-#ifdef __x86_64__
-#include "../arch/x64/x64.h"
-#endif
+#include "threads.h"
 
 #define SCHED_QUANTA 15625 // 64Hz
 
@@ -56,6 +52,10 @@ static Thread* tq_advance(ThreadQueue* tq) {
 void sleep(u64 timeout) {
     sched_wait(timeout);
     sched_yield();
+}
+
+void sched_init(void) {
+
 }
 
 #define kprintf

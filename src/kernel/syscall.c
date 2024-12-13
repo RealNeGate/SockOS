@@ -24,7 +24,7 @@ SyscallFn* syscall_table[] = {
 size_t syscall_table_count = SYS_MAX;
 
 #ifdef __x86_64__
-#include "../arch/x64/x64.h"
+#include "threads.h"
 
 #define SYS_PARAM0 state->rdi
 #define SYS_PARAM1 state->rsi
@@ -53,8 +53,12 @@ SYS_FN(sleep) {
 SYS_FN(mmap) {
     ON_DEBUG(SYSCALL)(kprintf("SYS_mmap(vmo=%p, offset=%d, size=%d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2));
 
-    size_t page_aligned_size = (SYS_PARAM1 + PAGE_SIZE - 1) & -PAGE_SIZE;
-    SYS_RET = vmem_map(cpu->current_thread->parent, SYS_PARAM0, SYS_PARAM1, page_aligned_size, VMEM_PAGE_WRITE | VMEM_PAGE_USER);
+    size_t page_aligned_size = (SYS_PARAM2 + PAGE_SIZE - 1) & -PAGE_SIZE;
+    if (page_aligned_size == 0) {
+        SYS_RET = 0;
+    } else {
+        SYS_RET = vmem_map(cpu->current_thread->parent, SYS_PARAM0, SYS_PARAM1, page_aligned_size, VMEM_PAGE_WRITE | VMEM_PAGE_USER);
+    }
 
     return cr3;
 }

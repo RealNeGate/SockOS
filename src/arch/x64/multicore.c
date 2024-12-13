@@ -34,7 +34,7 @@ static void powernap(u64 micros) {
     }
 }
 
-void boot_cores(void) {
+void x86_boot_cores(void) {
     if (boot_info->core_count == 1) {
         return;
     }
@@ -44,7 +44,7 @@ void boot_cores(void) {
         kprintf("KernelStack[%d]: %p - %p\n", k, sp, sp + 4095);
 
         // if windows can get away with small kernel stacks so can we
-        PerCPU* restrict cpu = &boot_info->cores[k++];
+        PerCPU* restrict cpu = &boot_info->cores[k];
         cpu->self = cpu;
         cpu->kernel_stack     = (uint8_t*) sp;
         cpu->kernel_stack_top = (uint8_t*) sp + 4096;
@@ -53,21 +53,25 @@ void boot_cores(void) {
     // map the bootstrap code
     //   we just copy it to 0x1000 (with the data going before that) because
     //   we're silly and goofy and need it available somewhere the 16bit stuff can go
+    extern char bootstrap_data_start[];
+    extern char bootstrap_transition[];
     extern char bootstrap_start[];
-    extern char bootstrap_entry[];
     extern char bootstrap_end[];
     extern char premain[];
 
-    char* dst = (char*) 0x1000;
-    memcpy(dst - (bootstrap_entry - bootstrap_start), bootstrap_start, bootstrap_end - bootstrap_start);
+    // other cores need to be able to see the bootstrap chunk once they transition to paging
+    memmap_view(boot_info->kernel_pml4, 0x1000, 0x1000, PAGE_ALIGN(bootstrap_end - bootstrap_start), VMEM_PAGE_WRITE);
+
+    char* dst = paddr2kaddr(0x1000);
+    memcpy(dst, bootstrap_start, bootstrap_end - bootstrap_start);
 
     // fill in relocations
-    volatile u64* slots = (volatile u64*) (0x1000 - (bootstrap_entry - bootstrap_start));
+    volatile u64* slots = paddr2kaddr(0x1000 + (bootstrap_data_start - bootstrap_start));
     slots[0] = (u64) boot_info->kernel_pml4; // pml4
     slots[1] = (u64) &smp_main;
     slots[2] = (u64) &boot_info->cores[0];
     slots[3] = (u64) sizeof(PerCPU);
-    slots[4] = (u64) 0x1000 + (premain - bootstrap_entry);
+    slots[4] = (u64) bootstrap_transition;
 
     // Walk the cores and boot them
     FOR_N(i, 1, boot_info->core_count) {

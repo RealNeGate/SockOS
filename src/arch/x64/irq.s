@@ -123,21 +123,21 @@ asm_int_handler:
     mov cr3, rax
 
     ; fxsave needs to be aligned to 16bytes
-    ; mov rbx,rsp
-    ; and rsp,~0xF
-    ; fxsave  [rsp - 512]
-    ; mov rsp,rbx
-    ; sub rsp,512 + 16
+    mov rbx,rsp
+    and rsp,~0xF
+    fxsave  [rsp - 512]
+    mov rsp,rbx
+    sub rsp,512 + 16
 
     mov rdi, rsp
     mov rdx, gs:[0]
     call x86_irq_int_handler
 
     ; fxrstor also needs to be aligned to 16bytes
-    ; add rsp, 512 + 16
-    ; mov rbx,rsp
-    ; and rbx,~0xF
-    ; fxrstor [rbx - 512]
+    add rsp, 512 + 16
+    mov rbx,rsp
+    and rbx,~0xF
+    fxrstor [rbx - 512]
 
     ; switch to whichever address space we returned
     mov cr3, rax
@@ -209,6 +209,13 @@ syscall_handler:
     push r14
     push r15
 
+    ; fxsave needs to be aligned to 16bytes
+    mov rbx,rsp
+    and rsp,~0xF
+    fxsave  [rsp - 512]
+    mov rsp,rbx
+    sub rsp,512 + 16
+
     ; call into syscall table
     lea rcx, syscall_table
     mov rcx, [rcx + rax*8]
@@ -230,6 +237,12 @@ syscall_handler.has_syscall:
     ; switch to new address space
     mov cr3, rax
 syscall_handler.no_syscall:
+    ; fxrstor also needs to be aligned to 16bytes
+    add rsp, 512 + 16
+    mov rbx,rsp
+    and rbx,~0xF
+    fxrstor [rbx - 512]
+
     pop r15
     pop r14
     pop r13
@@ -272,6 +285,13 @@ do_context_switch:
 
     ; use CPUState as the stack
     mov rsp, rdi
+
+    ; fxrstor also needs to be aligned to 16bytes
+    add rsp, 512 + 16
+    mov rbx,rsp
+    and rbx,~0xF
+    fxrstor [rbx - 512]
+
     pop r15
     pop r14
     pop r13
