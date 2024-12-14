@@ -2,12 +2,9 @@
 
 // Toaruos SMP boot for reference
 // https://github.com/klange/toaruos/blob/master/kernel/arch/x86_64/smp.c
-static Lock print_lock;
 
 void smp_main(PerCPU* cpu) {
-    spin_lock(&print_lock);
     kprintf("Hello Mr. CPU! %p %d\n", cpu, cpu->core_id);
-    spin_unlock(&print_lock);
 
     arch_init(cpu->core_id);
     x86_halt();

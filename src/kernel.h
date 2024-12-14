@@ -30,13 +30,6 @@ void spall_begin_event(const char* name, int tid);
 void spall_end_event(int tid);
 
 ////////////////////////////////
-// Spin-lock
-////////////////////////////////
-typedef _Atomic(uint32_t) Lock;
-void spin_lock(Lock* lock);
-void spin_unlock(Lock* lock);
-
-////////////////////////////////
 // Read-write lock
 ////////////////////////////////
 // bottom bit means there's an exclusive lock.

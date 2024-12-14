@@ -59,6 +59,13 @@ void* memcpy(void* dest, const void* src, size_t n);
 int memcmp(const void* a, const void* b, size_t n);
 bool memeq(const void* a, const void* b, size_t n);
 
+////////////////////////////////
+// Spin-lock
+////////////////////////////////
+typedef _Atomic(uint32_t) Lock;
+void spin_lock(Lock* lock);
+void spin_unlock(Lock* lock);
+
 // bootleg stdio.h
 void kprintf(const char *fmt, ...);
 void put_char(int ch);
