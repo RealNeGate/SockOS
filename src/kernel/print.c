@@ -59,7 +59,7 @@ void kprintf(const char *fmt, ...) {
     __builtin_va_list args;
     __builtin_va_start(args, fmt);
 
-    // spin_lock(&print_lock);
+    spin_lock(&print_lock);
 
     u8 obuf[_PRINT_BUFFER_LEN];
     u32 min_len = 0;
@@ -171,5 +171,5 @@ void kprintf(const char *fmt, ...) {
     }
     __builtin_va_end(args);
 
-    // spin_unlock(&print_lock);
+    spin_unlock(&print_lock);
 }
