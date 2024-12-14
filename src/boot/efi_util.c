@@ -1,5 +1,5 @@
 
-int itoa(u32 i, u8 base, u16* buf) {
+int itoa(u32 i, u16 *buf, u8 base) {
     static const char bchars[] = "0123456789ABCDEF";
 
     int pos   = 0;
@@ -29,7 +29,7 @@ int itoa(u32 i, u8 base, u16* buf) {
 
 static void efi_print_hex(EFI_SYSTEM_TABLE* st, u32 number) {
     u16 buffer[32];
-    itoa(number, 16, buffer);
+    itoa(number, buffer, 16);
     buffer[31] = 0;
 
     st->ConOut->OutputString(st->ConOut, (i16*) buffer);

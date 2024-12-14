@@ -69,9 +69,9 @@ void spin_unlock(Lock* lock);
 // bootleg stdio.h
 void kprintf(const char *fmt, ...);
 void put_char(int ch);
-void put_string(const char* str);
-void put_number(u64 x, u8 base);
+void print_ring_init(uint8_t *buffer, size_t size);
+
+uint64_t get_time_ticks(void);
 
 #define kassert(cond, ...) ((cond) ? 0 : (kprintf("%s:%d: assertion failed!\n  %s\n  ", __FILE__, __LINE__, #cond), kprintf(__VA_ARGS__), kprintf("\n\n"), __builtin_trap()))
 #define panic(...) (kprintf("%s:%d: panic!\n", __FILE__, __LINE__), kprintf(__VA_ARGS__), __builtin_trap())
-

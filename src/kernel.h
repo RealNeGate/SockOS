@@ -317,3 +317,4 @@ void io_out32(u16 port, u32 value);
 // Utils
 ////////////////////////////////
 uint32_t mur3_32(const void *key, int len, uint32_t h);
+int itoa(uint64_t v, uint8_t *buffer, uint8_t base);

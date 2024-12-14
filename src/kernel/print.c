@@ -1,6 +1,6 @@
 #include <common.h>
 
-int itoa(u64 i, u8 base, u8 *buf) {
+int itoa(u64 i, uint8_t *buf, u8 base) {
     static const char bchars[] = "0123456789ABCDEF";
 
     int      pos   = 0;
@@ -29,56 +29,92 @@ int itoa(u64 i, u8 base, u8 *buf) {
     return o_pos + 1;
 }
 
-void put_number(u64 number, u8 base) {
-    u8 buffer[65];
-    itoa(number, base, buffer);
-    buffer[64] = 0;
+#define LOG_TYPES         \
+X(LOG_INFO, 0x0,  "INFO") \
+X(LOG_BOOT, 0x1,  "BOOT") \
+X(LOG_TIME, 0x2,  "TIME") \
+X(LOG_MEM,  0x3,  "MEM ") \
+X(LOG_PCI,  0x4,  "PCI ") \
+X(LOG_NET,  0x5,  "NET ")
 
-    // serial port writing
-    for (int i = 0; buffer[i]; i++) {
-        put_char(buffer[i]);
-    }
-}
+static const char *log_typenames[] = {
+    #define X(tag, id, name) [id] = name,
+    LOG_TYPES
+    #undef X
+};
+typedef enum {
+    #define X(tag, id, name) tag = id,
+    LOG_TYPES
+    #undef X
+} LogType;
 
-void put_string(const char* str) {
-    for (; *str; str++) put_char(*str);
-}
+typedef struct {
+    uint8_t *data;
+    uint64_t ts;
+    uint16_t pos;
+    uint16_t type;
+} __attribute__((packed)) LogEntry;
 
-static void put_buffer(const u8* buf, int size) {
-    if (size >= 0) {
-        for (int i = 0; i < size; i++) put_char(buf[i]);
-    } else {
-        for (int i = 0; buf[i]; i++) put_char(buf[i]);
-    }
-}
+typedef struct {
+    _Atomic uint64_t top;
+
+    LogEntry *entries;
+    size_t entry_count;
+} Ring;
 
 static Lock print_lock;
+static Ring print_ring;
 
-#define _PRINT_BUFFER_LEN 128
+#define MAX_LOG_LEN 128
+void print_ring_init(uint8_t *buffer, size_t size) {
+    size_t ideal_entry_count = (size / MAX_LOG_LEN);
+    size_t overhead = ideal_entry_count * sizeof(LogEntry);
+    size_t real_size = size - overhead;
+    size_t entry_count = (real_size / MAX_LOG_LEN);
+
+    print_ring.entries = (LogEntry *)buffer;
+    print_ring.entry_count = entry_count;
+    uint8_t *data_start = buffer + (sizeof(LogEntry) * entry_count);
+    for (int i = 0; i < entry_count; i++) {
+        print_ring.entries[i].data = data_start + (i * MAX_LOG_LEN);
+        print_ring.entries[i].ts = 0;
+        print_ring.entries[i].pos = 0;
+    }
+}
+
+static void write_char(LogEntry *e, char c) {
+    if (e->pos > MAX_LOG_LEN) {
+        return;
+    }
+
+    e->data[e->pos++] = c;
+}
+
+static void write_buffer(LogEntry *e, char *buf, int size) {
+    if (size >= 0) {
+        for (int i = 0; i < size; i++) write_char(e, buf[i]);
+    } else {
+        for (int i = 0; buf[i]; i++) write_char(e, buf[i]);
+    }
+}
+
 void kprintf(const char *fmt, ...) {
     __builtin_va_list args;
     __builtin_va_start(args, fmt);
 
-    spin_lock(&print_lock);
+    uint64_t top_slot = atomic_fetch_add(&print_ring.top, 1);
+    LogEntry *entry = &print_ring.entries[top_slot % print_ring.entry_count];
+    entry->ts = get_time_ticks();
 
-    u8 obuf[_PRINT_BUFFER_LEN];
+    int base = 10;
     u32 min_len = 0;
     for (const char *c = fmt; *c != 0; c++) {
         if (*c != '%') {
-            int i = 0;
-            for (; *c != 0 && *c != '%'; i++) {
-                if (i > _PRINT_BUFFER_LEN) {
-                    put_buffer(obuf, i);
-                    i = 0;
-                }
-
-                obuf[i] = *c;
+            for (; *c != 0 && *c != '%';) {
+                write_char(entry, *c);
                 c++;
             }
 
-            if (i > 0) {
-                put_buffer(obuf, i);
-            }
             c--;
             continue;
         }
@@ -103,15 +139,11 @@ void kprintf(const char *fmt, ...) {
             } break;
             case 'c': {
                 i64 c = __builtin_va_arg(args, i64);
-                put_char(c);
+                write_char(entry, c);
             } break;
             case 's': {
-                u8 *s = __builtin_va_arg(args, u8 *);
-                put_buffer(s, precision);
-            } break;
-            case 'd': {
-                i64 i = __builtin_va_arg(args, i64);
-                put_number(i, 10);
+                char *s = __builtin_va_arg(args, char *);
+                write_buffer(entry, s, precision);
             } break;
             case 'z': {
                 goto consume_moar;
@@ -119,57 +151,80 @@ void kprintf(const char *fmt, ...) {
             case 'l': {
                 goto consume_moar;
             } break;
+
+            case 'd':
             case 'u': {
-                u64 i = __builtin_va_arg(args, u64);
-                put_number(i, 10);
+                base = 10;
+                goto print_num;
             } break;
+
+            case 'b': {
+                base = 2;
+                goto print_num;
+            } break;
+
             case 'x': {
+                base = 16;
+print_num:
                 u64 i = __builtin_va_arg(args, u64);
 
                 u8 tbuf[64];
-                int sz = itoa(i, 16, tbuf);
+                int sz = itoa(i, tbuf, base);
 
                 int pad_sz = min_len - (sz - 1);
                 while (pad_sz > 0) {
-                    put_char('0');
+                    write_char(entry, '0');
                     pad_sz--;
                 }
 
-                put_buffer(tbuf, sz - 1);
+                write_buffer(entry, (char *)tbuf, sz - 1);
                 min_len = 0;
             } break;
+
             case 'p': {
                 u64 i = __builtin_va_arg(args, u64);
+
                 u8 tbuf[64];
-                int sz = itoa(i, 16, tbuf);
+                int sz = itoa(i, tbuf, 16);
                 int pad_sz = 16 - (sz - 1);
-                put_char('0');
-                put_char('x');
+                write_char(entry, '0');
+                write_char(entry, 'x');
                 while (pad_sz > 0) {
-                    put_char('0');
-                    pad_sz--;
-                }
-                put_buffer(tbuf, sz - 1);
-                min_len = 0;
-            } break;
-            case 'b': {
-                u64 i = __builtin_va_arg(args, u64);
-
-                u8 tbuf[64];
-                int sz = itoa(i, 2, tbuf);
-
-                int pad_sz = min_len - (sz - 1);
-                while (pad_sz > 0) {
-                    put_char('0');
+                    write_char(entry, '0');
                     pad_sz--;
                 }
 
-                put_buffer(tbuf, sz - 1);
+                write_buffer(entry, (char *)tbuf, sz - 1);
                 min_len = 0;
             } break;
         }
     }
     __builtin_va_end(args);
 
+    // Dump entry to serial
+    spin_lock(&print_lock);
+
+    u8 tbuf[64];
+    int sz = itoa(entry->ts, tbuf, 10);
+    for (int i = 0; i < sz - 1; i++) {
+        put_char(tbuf[i]);
+    }
+    put_char(' ');
+
+/*
+    put_char('[');
+    const char *type_name = log_typenames[entry->type];
+    for (int i = 0; i < 4; i++) {
+        put_char(type_name[i]);
+    }
+    put_char(']');
+    put_char(' ');
+*/
+    
+    for (int i = 0; i < entry->pos; i++) {
+        put_char(entry->data[i]);
+    }
+
+    entry->pos = 0;
     spin_unlock(&print_lock);
 }

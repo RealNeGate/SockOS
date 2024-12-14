@@ -152,3 +152,6 @@ void sched_yield(void) {
     asm volatile ("int 32");
 }
 
+uint64_t get_time_ticks(void) {
+    return __rdtsc();
+}

@@ -20,11 +20,28 @@ typedef struct {
     volatile u16 special;
 } __attribute__((packed)) e1000_tx_desc;
 
-static void print_mac(u8 *mac) {
-    kprintf("[eth] MAC: ");
+
+static char *mac_to_str(u8 *mac, char *str) {
+    int j = 0;
     for (int i = 0; i < 6; i++) {
-        kprintf("%x%s", mac[i], i == 5 ? "\n" : ":");
+        u8 tbuf[64];
+        int sz = itoa(mac[i], tbuf, 16);
+
+        if (sz == 2) {
+            str[j++] = '0';
+        }
+
+        for (int k = 0; k < sz - 1; k++) {
+            str[j++] = tbuf[k];
+        }
+
+        if (i != 5) {
+            str[j++] = ':';
+        }
     }
+    str[j] = 0;
+
+    return str;
 }
 
 static e1000_rx_desc *rx_descs[32];
@@ -114,7 +131,9 @@ static bool init_eth(PCI_Device *eth_dev) {
     mac[3] = (mac_addr_lo >> 24) & 0xFF;
     mac[4] = mac_addr_hi & 0xFF;
     mac[5] = (mac_addr_hi >> 8) & 0xFF;
-    print_mac(mac);
+
+    char mac_str[(3 * 6) + 1];
+    kprintf("[eth] MAC: %s\n", mac_to_str(mac, mac_str));
 
     // Setup RX Ring
     void *rx_virt_ptr = kheap_alloc(sizeof(rx_descs) + 16);
