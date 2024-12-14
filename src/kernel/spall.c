@@ -56,7 +56,7 @@ typedef struct SpallPadSkipEvent {
 
 static Lock spall_lock;
 
-#if 1
+#if 0
 void spall_header(void) {}
 void spall_begin_event(const char* name, int tid) {}
 void spall_end_event(int tid) {}

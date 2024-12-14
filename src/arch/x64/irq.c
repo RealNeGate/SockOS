@@ -46,7 +46,12 @@ static const char* interrupt_names[] = {
 volatile IDTEntry _idt[256];
 CPUState kernel_idle_state;
 
-static volatile bool calibrating_apic_timer;
+static volatile enum {
+    APIC_UNCALIBRATED,
+    APIC_CALIBRATING,
+    APIC_CALIBRATED,
+} apic_timer_status;
+
 static u64 apic_freq;
 
 static void irq_disable_pic(void) {
@@ -168,26 +173,38 @@ void x86_irq_handoff(int core_id) {
 
     // calibrate APIC timer
     if (core_id == 0) {
-        calibrating_apic_timer = true;
+        apic_timer_status = APIC_CALIBRATING;
         apic_freq = __rdtsc();
         APIC(0x380) = APIC_CALIBRATION_TICKS;
 
-        while (calibrating_apic_timer) {
+        for (;;) {
             asm volatile ("hlt");
         }
+    } else {
+        // maybe we should signal the cores in this case... idk
+        while (apic_timer_status != APIC_CALIBRATED) {
+            asm volatile ("pause");
+        }
+
+        kprintf("CPU-%d is now ready to work!\n", core_id);
+        spall_begin_event("main", core_id);
+
+        asm volatile ("int 32");
     }
 }
 
 uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
-    spall_end_event(0);
-    spall_begin_event(interrupt_names[state->interrupt_num], 0);
+    if (apic_timer_status == APIC_CALIBRATED) {
+        spall_end_event(cpu->core_id);
+        spall_begin_event(interrupt_names[state->interrupt_num], cpu->core_id);
+    }
 
     u64 now = __rdtsc();
     PageTable* old_address_space = paddr2kaddr(cr3);
 
     #if DEBUG_IRQ
     if (state->interrupt_num != 32) {
-        kprintf("%s (%d): error=0x%x\n", interrupt_names[state->interrupt_num], state->interrupt_num, state->error);
+        kprintf("CPU-%d: %s (%d): error=0x%x\n", cpu->core_id, interrupt_names[state->interrupt_num], state->interrupt_num, state->error);
         kprintf("  rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
     }
     #endif
@@ -299,14 +316,16 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
         x86_halt();
         return cr3;
     } else if (state->interrupt_num == 32) {
-        if (calibrating_apic_timer) {
+        if (apic_timer_status == APIC_CALIBRATING) {
             apic_freq = (now - apic_freq) / APIC_CALIBRATION_TICKS;
-            calibrating_apic_timer = false;
 
             kprintf("APIC timer freq = %d\n", apic_freq);
+
+            spall_header();
+            spall_begin_event("main", cpu->core_id);
+            apic_timer_status = APIC_CALIBRATED;
         }
 
-        spall_end_event(0);
         PerCPU* cpu = cpu_get();
 
         u64 next_wake;
@@ -315,7 +334,7 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
             next = sched_try_switch(now / boot_info->tsc_freq, &next_wake);
         } else {
             next = NULL;
-            next_wake = (now / boot_info->tsc_freq) + 1000000;
+            next_wake = (now / boot_info->tsc_freq) + 500000;
         }
 
         // if we're switching, save old thread state
@@ -325,7 +344,9 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
 
         if (next == NULL) {
             ON_DEBUG(IRQ)(kprintf("  CPU-%d >> IDLE! (until %d ms) <<\n", cpu->core_id, next_wake / 1000));
-            spall_begin_event("sleep", 0);
+
+            spall_end_event(cpu->core_id);
+            spall_begin_event("sleep", cpu->core_id);
 
             uint64_t new_now_time = (__rdtsc() / boot_info->tsc_freq);
             uint64_t until_wake = next_wake > new_now_time ? next_wake - new_now_time : 1;
@@ -362,7 +383,9 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
                 str[i++] = hex[(addr >> (j*4)) & 0xF];
             }
             str[i++] = 0;
-            spall_begin_event(str, 0);
+
+            spall_end_event(cpu->core_id);
+            spall_begin_event(str, cpu->core_id);
         }
 
         uint64_t new_now_time = (__rdtsc() / boot_info->tsc_freq);

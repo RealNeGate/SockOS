@@ -117,8 +117,6 @@ void arch_init(int core_id) {
     kprintf("Hello Mr. CPU! %p %d\n", cpu, core_id);
 
     // jump into timer interrupt, we're going to run tasks now
-    spall_header();
-    spall_begin_event("main", core_id);
     x86_irq_handoff(core_id);
 }
 

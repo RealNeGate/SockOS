@@ -36,7 +36,7 @@ typedef int8_t              i8;
 
 // logging options
 #define DEBUG_SYSCALL 0
-#define DEBUG_IRQ     1
+#define DEBUG_IRQ     0
 #define DEBUG_ENV     0
 #define DEBUG_VMEM    0
 #define DEBUG_KHEAP   0

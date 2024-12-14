@@ -277,6 +277,9 @@ typedef struct {
 } ThreadQueue;
 
 struct PerCPU_Scheduler {
+    // sum of the weight of all active tasks
+    u64 total_weight;
+
     ThreadQueue active;
     ThreadQueue waiters;
 };

@@ -9,8 +9,8 @@ bits 16
 bootstrap_start:
     cli
 
-    ; Enable PAE & PGE
-    mov eax, 0xA0
+    ; Enable PAE, PGE, OSFXSR and OSXMMEXCPT
+    mov eax, 0x6A0
     mov cr4, eax
 
     ; Setup PML4
@@ -23,7 +23,7 @@ bootstrap_start:
     or eax, 0x100
     wrmsr
 
-    mov ebx, 0x80000011
+    mov ebx, 0x80000013
     mov cr0, ebx
 
     lgdt [0x1000 + (bootstrap_gdt64_pointer - bootstrap_start)]
