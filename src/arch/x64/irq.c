@@ -327,14 +327,40 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
         }
 
         PerCPU* cpu = cpu_get();
+        u64 now_micros = now / boot_info->tsc_freq;
 
         u64 next_wake;
-        Thread* next;
+        Thread* next = NULL;
         if (cpu->core_id == 0) {
-            next = sched_try_switch(now / boot_info->tsc_freq, &next_wake);
+            Thread* old_thread = cpu->current_thread;
+            if (old_thread) {
+                // update the executed time
+                u64 exec_time = now_micros - old_thread->start_time;
+                if (old_thread->wake_time != 0) {
+                    // kprintf("Thread-%p: Blocked!!! %d\n", old_thread, exec_time);
+                    old_thread->exec_time = exec_time;
+                } else {
+                    if (exec_time < old_thread->max_exec_time) {
+                        // if the task hasn't finished it's time slice, we just keep running it
+                        next = old_thread;
+                    } else {
+                        old_thread->exec_time = exec_time;
+
+                        // we've stopped running the task (either blocked or ran out of time), we
+                        // re-insert into the queue based on weight.
+                        PerCPU_Scheduler* sched = cpu_get()->sched;
+                        sched->total_exec += old_thread->exec_time;
+                        tq_insert(&sched->active, old_thread, false);
+                    }
+                }
+            }
+
+            if (next == NULL) {
+                next = sched_try_switch(now_micros, &next_wake);
+            }
         } else {
             next = NULL;
-            next_wake = (now / boot_info->tsc_freq) + 500000;
+            next_wake = now_micros + 500000;
         }
 
         // if we're switching, save old thread state

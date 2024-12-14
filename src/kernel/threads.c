@@ -1,13 +1,7 @@
 #include "threads.h"
 
 static PerCPU_Scheduler* get_sched(void) {
-    // initialize scheduler
     PerCPU* cpu = cpu_get();
-    if (cpu->sched == NULL) {
-        cpu->sched = kheap_alloc(sizeof(PerCPU_Scheduler));
-        *cpu->sched = (PerCPU_Scheduler){ 0 };
-    }
-
     return cpu->sched;
 }
 
@@ -60,6 +54,7 @@ Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintpt
     *new_thread = (Thread){
         .parent = env,
         .wake_time = 0,
+        .exec_time = 0,
 
         // initial cpu state (CPU specific)
         .state = new_thread_state(entrypoint, arg, stack, stack_size, is_user)
@@ -86,10 +81,8 @@ Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintpt
 
     // put into schedule
     PerCPU_Scheduler* sched = get_sched();
+    sched->total_exec += new_thread->exec_time;
     tq_append(&sched->active, new_thread);
-    if (sched->active.curr == NULL) {
-        sched->active.curr = new_thread;
-    }
 
     kprintf("created thread: %p\n", new_thread);
     return new_thread;
