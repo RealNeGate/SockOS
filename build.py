@@ -25,7 +25,6 @@ cflags = ' '.join(CFLAGS)
 
 asm_files = {
     "kernel": [
-        "src/arch/x64/gdt.s",
         "src/arch/x64/loader.s",
         "src/arch/x64/bootstrap.s",
         "src/arch/x64/irq.s",

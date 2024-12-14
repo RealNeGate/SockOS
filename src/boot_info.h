@@ -24,14 +24,6 @@ typedef struct {
     _Atomic(u64) entries[512];
 } PageTable;
 
-enum {
-    KERNEL_CS  = 0x08,
-    KERNEL_DS  = 0x10,
-    USER_DS    = 0x18,
-    USER_CS    = 0x20,
-    TSS        = 0x28,
-};
-
 typedef enum {
     MEM_REGION_USABLE,
     MEM_REGION_RESERVED,
@@ -95,6 +87,17 @@ struct PerCPU {
     // Scheduler info
     struct Thread* current_thread;
     PerCPU_Scheduler* sched;
+
+    #ifdef __x86_64__
+    u64 gdt[7];
+
+    // 2 byte limit, 8 byte base
+    u16 gdt_pointer[5];
+
+    // This is initialized by the kernel but put into
+    // place by the boot EFI
+    u32 tss[26];
+    #endif
 };
 
 // This is all the crap we throw into the loader
@@ -120,10 +123,6 @@ typedef struct {
     size_t elf_mapped_size;
 
     Framebuffer fb;
-
-    // This is initialized by the kernel but put into
-    // place by the boot EFI
-    u32 tss[26];
 } BootInfo;
 
 // loader.s & irq.s needs these to be here

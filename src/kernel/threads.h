@@ -13,11 +13,12 @@ struct Thread {
     Thread* prev_sched;
     Thread* next_sched;
 
-    // active range
-    u64 start_time, end_time;
+    u64 exec_time;
 
-    // how much of the quanta did we give up to waiting
-    u64 wait_time;
+    u64 max_exec_time;
+
+    // active range
+    u64 start_time;
 
     // sleeping
     u64 wake_time;

@@ -2,12 +2,8 @@
 
 // Toaruos SMP boot for reference
 // https://github.com/klange/toaruos/blob/master/kernel/arch/x86_64/smp.c
-
 void smp_main(PerCPU* cpu) {
-    kprintf("Hello Mr. CPU! %p %d\n", cpu, cpu->core_id);
-
     arch_init(cpu->core_id);
-    x86_halt();
 }
 
 u32 apic_get_errors(void) {
@@ -36,6 +32,9 @@ void x86_boot_cores(void) {
         return;
     }
 
+    u64* gdt_table = kheap_alloc(boot_info->core_count * sizeof(u64));
+    gdt_table[0] = 0;
+
     FOR_N(k, 1, boot_info->core_count) {
         char* sp = kpool_alloc_page();
         kprintf("KernelStack[%d]: %p - %p\n", k, sp, sp + 4095);
@@ -45,6 +44,22 @@ void x86_boot_cores(void) {
         cpu->self = cpu;
         cpu->kernel_stack     = (uint8_t*) sp;
         cpu->kernel_stack_top = (uint8_t*) sp + 4096;
+
+        // setup per-core GDT
+        u64 gdt_base = (u64) boot_info->cores[k].gdt;
+        boot_info->cores[k].gdt_pointer[0] = sizeof(boot_info->cores[0].gdt) - 1;
+        memcpy(&boot_info->cores[k].gdt_pointer[1], &gdt_base, sizeof(u64));
+
+        u64* gdt = boot_info->cores[k].gdt;
+        gdt[0] = 0;
+        gdt[1] = 0xAF9A000000FFFF; // kernel CS
+        gdt[2] = 0xCF92000000FFFF; // kernel DS
+        gdt[3] = 0xCFF2000000FFFF; // user DS
+        gdt[4] = 0xAFFA000000FFFF; // user CS
+        gdt[5] = 0;                // TSS
+        gdt[6] = 0;                // TSS
+
+        gdt_table[k] = (u64) &boot_info->cores[k].gdt_pointer[0];
     }
 
     // map the bootstrap code
@@ -54,13 +69,9 @@ void x86_boot_cores(void) {
     extern char bootstrap_start[];
     extern char bootstrap_end[];
     extern char premain[];
-    extern char gdt64[];
-    extern char gdt64_pointer[];
 
     // other cores need to be able to see the bootstrap chunk once they transition to paging
-    u64 gdt64_paddr = ((uintptr_t) gdt64_pointer - boot_info->elf_virtual_ptr) + boot_info->elf_physical_ptr;
     memmap_view(boot_info->kernel_pml4, 0x1000, 0x1000, PAGE_ALIGN(bootstrap_end - bootstrap_start), VMEM_PAGE_WRITE);
-    memmap_view(boot_info->kernel_pml4, gdt64_paddr & -PAGE_SIZE, gdt64_paddr & -PAGE_SIZE, 0x1000, VMEM_PAGE_WRITE);
 
     char* dst = paddr2kaddr(0x1000);
     memcpy(dst, bootstrap_start, bootstrap_end - bootstrap_start);
@@ -72,26 +83,20 @@ void x86_boot_cores(void) {
     slots[2] = (u64) &boot_info->cores[0];
     slots[3] = (u64) sizeof(PerCPU);
     slots[4] = (u64) premain;
-    slots[5] = gdt64_paddr;
-
-    kprintf("A %x %x\n", gdt64_paddr, *(u64*) gdt64_paddr);
+    slots[5] = (u64) gdt_table;
 
     // Walk the cores and boot them
     FOR_N(i, 1, boot_info->core_count) {
         u32 lapic_id = boot_info->cores[i].lapic_id;
-
         // Send a CPU INIT
         send_ipi(lapic_id, 0x4501);
-
-        // sleep for a while
-        powernap(200);
-
-        // Send a STARTUP IPI
-        send_ipi(lapic_id, 0x4601);
-
-        powernap(200);
     }
 
     powernap(1000000);
-    x86_halt();
+
+    FOR_N(i, 1, boot_info->core_count) {
+        u32 lapic_id = boot_info->cores[i].lapic_id;
+        // Send a STARTUP IPI
+        send_ipi(lapic_id, 0x4601);
+    }
 }

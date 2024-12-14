@@ -9,8 +9,8 @@ bits 16
 bootstrap_start:
     cli
 
-    ; Enable PAE & PGE
-    mov eax, 0xA0
+    ; Enable PAE, PGE, OSFXSR and OSXMMEXCPT
+    mov eax, 0x6A0
     mov cr4, eax
 
     ; Setup PML4
@@ -23,7 +23,7 @@ bootstrap_start:
     or eax, 0x100
     wrmsr
 
-    mov ebx, 0x80000011
+    mov ebx, 0x80000013
     mov cr0, ebx
 
     lgdt [0x1000 + (bootstrap_gdt64_pointer - bootstrap_start)]
@@ -34,14 +34,20 @@ bootstrap_start:
 bits 64
 align 256
 gdt_jump:
+    ; get core number (it's in RBX)
+    mov eax, 1
+    cpuid
+    shr ebx, 24
+
     ; use GDT
     mov rax, [data_start + 40]
+    mov rax, [rax + rbx*8]
     lgdt [rax]
 
     ; there's a weird bug around far jumps in Intel assembly syntax
-    mov rax, data_start + 32
-    mov rax, [rax]
-    mov qword [rel far_jumper], rax
+    mov rcx, data_start + 32
+    mov rcx, [rcx]
+    mov qword [rel far_jumper], rcx
     jmp far qword [rel far_jumper]
 
 far_jumper:
@@ -56,7 +62,7 @@ bootstrap_data_start:
     dq 0 ; [16] cores
     dq 0 ; [24] sizeof_core
     dq 0 ; [32] bootstrap_transition
-    dq 0 ; [40] gdt64_pointer
+    dq 0 ; [40] gdt_table
 
 bootstrap_gdt64:
     ; zero entry
@@ -76,10 +82,6 @@ premain:
     mov ds, ax
     mov es, ax
     mov ss, ax
-
-    ; set TSS
-    ; mov ax, 0x28
-    ; ltr ax
 
     ; get core number
     mov eax, 1

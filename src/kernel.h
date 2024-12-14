@@ -3,6 +3,8 @@
 #include <common.h>
 #include <boot_info.h>
 
+#define SCHED_QUANTA 15625 // 64Hz
+
 enum {
     CHUNK_SIZE = 2*1024*1024
 };
@@ -273,10 +275,18 @@ void thread_kill(Thread* thread);
 // Scheduler
 ////////////////////////////////
 typedef struct {
-    Thread *curr, *first, *last;
+    int head, tail;
+    Thread* data[256];
 } ThreadQueue;
 
 struct PerCPU_Scheduler {
+    // sum of the exec time of all active tasks
+    u64 total_exec;
+
+    // in micros
+    u64 ideal_exec_time;
+    u64 scheduling_period;
+
     ThreadQueue active;
     ThreadQueue waiters;
 };
@@ -287,6 +297,7 @@ void sched_wait(u64 timeout);
 
 Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us);
 
+void tq_insert(ThreadQueue* tq, Thread* t, bool is_waiter);
 void tq_append(ThreadQueue* tq, Thread* t);
 
 ////////////////////////////////

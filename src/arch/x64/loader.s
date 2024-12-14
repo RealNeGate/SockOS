@@ -1,4 +1,4 @@
-extern kmain, kernel_tss, gdt64, gdt64_pointer, gdt64.tss
+extern kmain, kernel_tss
 global _start, kernel_idle
 
 ; We got ourselves boot info in RCX
@@ -9,14 +9,10 @@ _start:
     mov rsp, rdx
     cli
 
-    ; write TSS address (R9:R8)
-    mov qword [rel gdt64.tss], r8
-    mov qword [rel gdt64.tss + 8], r9
-
     ; switch page tables
     mov rax, [rcx + 0]
     mov rdx, [rcx + 8]
-    mov r8,  [rcx + 16]
+    mov r9,  [rcx + 16]
     mov cr3, rax
 
     ; jump to the higher-half form of kmain
@@ -25,18 +21,11 @@ _start:
     jmp rax
 _start.transition:
     ; move pointers up
-    add rcx, r8
-    add rsp, r8
+    add rcx, r9
+    add rsp, r9
 
     ; setup GDT descriptor
-    lea rax, qword [rel gdt64]
-    mov [rel gdt64_pointer + 2], rax
-
-    lgdt [rel gdt64_pointer]
-
-    ; set TSS
-    mov ax, 0x28
-    ltr ax
+    lgdt [r8]
 
     lea rax, [rel _start.reload_cs]
     mov qword [rel far_jumper], rax

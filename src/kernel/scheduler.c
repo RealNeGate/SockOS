@@ -1,52 +1,34 @@
 #include "threads.h"
 
-#define SCHED_QUANTA 15625 // 64Hz
-
-Thread* tq_peek(ThreadQueue* tq) {
-    return tq->curr;
-}
-
-void tq_remove(ThreadQueue* tq, Thread* t) {
-    Thread* next = t->next_sched;
-
-    if (tq->first == t) { tq->first = next; }
-    if (tq->last == t) { tq->last = t->prev_sched; }
-    if (tq->curr == t) { tq->curr = NULL; }
-    if (t->prev_sched != NULL) {
-        t->prev_sched->next_sched = next;
-    }
-    if (next != NULL) {
-        next->prev_sched = t->prev_sched;
-    }
-}
-
-static void tq_insert_after(ThreadQueue* tq, Thread* at, Thread* t) {
-    t->prev_sched = at;
-    t->next_sched = at->next_sched;
-    at->next_sched->prev_sched = t;
-    at->next_sched = t;
-}
-
 void tq_append(ThreadQueue* tq, Thread* t) {
-    t->next_sched = NULL;
-
-    if (tq->first == NULL) {
-        t->prev_sched = NULL;
-        tq->first = tq->last = t;
-    } else {
-        t->prev_sched = tq->last;
-        tq->last->next_sched = t;
-        tq->last = t;
-    }
+    tq->data[tq->tail] = t;
+    tq->tail = (tq->tail + 1) % 256;
 }
 
-static Thread* tq_advance(ThreadQueue* tq) {
-    Thread* next = tq->curr->next_sched;
-    if (next == NULL) {
-        // wrap around
-        next = tq->first;
+void tq_insert(ThreadQueue* tq, Thread* t, bool is_waiter) {
+    // shift up
+    int j = tq->tail;
+    if (j < tq->head) { j += 256; }
+
+    if (is_waiter) { // sort by wake time
+        while (j-- > tq->head && tq->data[j % 256]->wake_time > t->wake_time) {
+            tq->data[(j + 1) % 256] = tq->data[j % 256];
+        }
+    } else {
+        while (j-- > tq->head && tq->data[j % 256]->exec_time > t->exec_time) {
+            tq->data[(j + 1) % 256] = tq->data[j % 256];
+        }
     }
-    return (tq->curr = next);
+
+    tq->tail = (tq->tail + 1) % 256;
+    tq->data[(j + 1) % 256] = t;
+
+    /* kprintf("%s: [ %d %d : ", is_waiter ? "Wait" : "Act", tq->head, tq->tail);
+    for (int i = tq->head; i != tq->tail; i = (i + 1) % 256) {
+        Thread* t = tq->data[i];
+        kprintf("Thread-%p ", t);
+    }
+    kprintf("]\n"); */
 }
 
 void sleep(u64 timeout) {
@@ -55,131 +37,106 @@ void sleep(u64 timeout) {
 }
 
 void sched_init(void) {
-
+    PerCPU* cpu = cpu_get();
+    cpu->sched = kheap_zalloc(sizeof(PerCPU_Scheduler));
 }
 
-#define kprintf
 void sched_wait(u64 timeout) {
-    PerCPU_Scheduler* sched = cpu_get()->sched;
-    Thread* t = sched->active.curr;
+    PerCPU* cpu = cpu_get();
+    Thread* t = cpu->current_thread;
 
     uint64_t now_time = __rdtsc() / boot_info->tsc_freq;
 
     // TODO(NeGate): there's potential logic & overflow bugs if now_time exceeds end_time
-    kprintf("sched_wait(now=%d, timeout=%d):\n", now_time, timeout);
+    // kprintf("sched_wait(now=%d, timeout=%d): %p\n", now_time, timeout, t);
     if (timeout == 0) {
         // give up rest of time slice
-        t->wake_time = t->end_time;
-        t->wait_time = t->end_time - now_time;
+        t->wake_time = 1;
     } else {
         uint64_t wake_time = now_time + timeout;
         t->wake_time = wake_time;
-
-        // how much time of our slice was just consumed by waiting, the more time
-        // given up the higher priority we are for waking up.
-        uint64_t end_of_slice_sleep = (wake_time > t->end_time ? t->end_time : wake_time);
-        if (end_of_slice_sleep <= now_time) {
-            t->wait_time = 0;
-        } else {
-            t->wait_time = end_of_slice_sleep - now_time;
-        }
-        kprintf("  Thread-%p gave up %d us\n", t, t->wait_time);
     }
 
-    t->start_time = t->end_time = 0;
-    tq_advance(&sched->active);
-
-    // remove ourselves from the active list
-    tq_remove(&sched->active, t);
-    tq_append(&sched->waiters, t);
-
-    // migrate to wait list (highest wait_time first)
-    /* if (sched->waiters == NULL || sched->waiters->wait_time < t->wait_time) {
-        t->next_sched  = sched->waiters;
-        sched->waiters = t;
-    } else {
-        Thread* other = sched->waiters;
-        while (other != NULL) {
-            Thread* next = other->next_sched;
-            if (next == NULL || t->wait_time > next->wait_time) {
-                other->next_sched = t;
-                t->next_sched = next;
-                break;
-            }
-            other = next;
-        }
-    } */
+    tq_insert(&cpu->sched->waiters, t, true);
 }
 
 // We need this function to behave in a relatively fast and bounded fashion, it's generally called
 // in a context switch interrupt after all.
 Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us) {
     PerCPU_Scheduler* sched = cpu_get()->sched;
-    kprintf("sched_try_switch(now=%d):\n", now_time);
-
-    Thread* active = tq_peek(&sched->active);
-    kprintf("  active = Thread-%p {", active);
-    for (Thread* t = sched->active.first; t; t = t->next_sched) {
-        kprintf("  Thread-%p", t);
-    }
-    kprintf("  }\n");
+    kprintf("sched_try_switch(now=%d)\n", now_time);
 
     // wake up sleepy guys
-    Thread* next_waiter = sched->waiters.first;
-    if (next_waiter != NULL && now_time >= next_waiter->wake_time) {
-        kprintf("  Thread-%p is awake now\n", next_waiter);
+    while (sched->waiters.head != sched->waiters.tail) {
+        Thread* waiter = sched->waiters.data[sched->waiters.head];
+        if (now_time < waiter->wake_time) {
+            break;
+        }
 
-        tq_remove(&sched->waiters, next_waiter);
-        tq_append(&sched->active,  next_waiter);
+        // kprintf("  Thread-%p is awake now\n", waiter);
+        sched->waiters.head = (sched->waiters.head + 1) % 256;
 
-        // reset wait/wake info
-        next_waiter->wake_time = 0;
-        next_waiter->wait_time = 0;
+        waiter->wake_time = 0;
+        sched->total_exec += waiter->exec_time;
+        tq_insert(&sched->active, waiter, false);
+    }
 
-        if (active == NULL) {
-            active = sched->active.curr = next_waiter;
-            active->start_time = active->end_time = 0;
+    // recompute scheduling period
+    if (1) {
+        int active_count = sched->active.tail;
+        if (active_count < sched->active.head) {
+            active_count += 256;
+        }
+        active_count -= sched->active.head;
+
+        int N = (SCHED_QUANTA / 1000);
+        if (active_count > N) {
+            sched->scheduling_period = 1000 * active_count;
+        } else {
+            sched->scheduling_period = SCHED_QUANTA;
+        }
+
+        sched->ideal_exec_time = active_count > 0 ? sched->scheduling_period / active_count : 0;
+        // kprintf("SCHEDULING PERIOD OF %d us\n", sched->scheduling_period);
+    }
+
+    // if there's no active tasks, we just wait on the next sleeper
+    if (sched->active.head == sched->active.tail) {
+        if (sched->waiters.head != sched->waiters.tail) {
+            Thread* waiter = sched->waiters.data[sched->waiters.head];
+
+            // round to minimum quanta
+            u64 wake_time = ((waiter->wake_time + 999) / 1000) * 1000;
+
+            // kprintf("  sleep until %d\n", wake_time);
+            *out_wake_us = wake_time;
+            return NULL;
+        } else {
+            // kprintf("  sleep basically forever\n");
+            *out_wake_us = now_time + 1000000;
+            return NULL;
         }
     }
 
-    if (active != NULL) {
-        kprintf("  end_time = %d\n", active->end_time);
+    // pop leftmost thread, reinsert with new weight
+    Thread* active = sched->active.data[sched->active.head];
+    sched->active.head = (sched->active.head + 1) % 256;
+    sched->total_exec -= active->exec_time;
 
-        // allocate same quanta for each active item
-        if (active->start_time == 0) {
-            kprintf("  allot %d micros to Thread-%p\n", SCHED_QUANTA, active);
+    // kprintf("  Thread-%p with lowest exec time (%d us)\n", active, active->exec_time);
 
-            active->start_time = now_time;
-            active->end_time = now_time + SCHED_QUANTA;
-        }
-
-        // move along to the next task
-        if (now_time > active->end_time) {
-            // reset start & end
-            active->start_time = active->end_time = 0;
-
-            active = tq_advance(&sched->active);
-            kprintf("  advance to Thread-%p\n", active);
-
-            // schedule next task
-            active->start_time = now_time;
-            active->end_time = now_time + SCHED_QUANTA;
-        }
-
-        *out_wake_us = active->end_time;
-        return active;
+    // allocate time slice
+    active->start_time = now_time;
+    if (sched->ideal_exec_time > active->exec_time) {
+        active->max_exec_time = sched->ideal_exec_time - active->exec_time;
     } else {
-        // idle until the next sleeper to wake up (10 seconds is the max sleep we'll do)
-        uint64_t next_wake = UINT64_MAX;
-        for (Thread* t = sched->waiters.first; t; t = t->next_sched) {
-            if (next_wake > t->wake_time) {
-                next_wake = t->wake_time;
-            }
-        }
-
-        kprintf("  sleep until t=%d\n", next_wake);
-        *out_wake_us = next_wake;
-        return NULL;
+        active->max_exec_time = 1;
     }
+
+    // round to minimum quanta
+    active->max_exec_time = ((active->max_exec_time + 999) / 1000) * 1000;
+
+    kprintf("  alloting %d micros to Thread-%p\n", active->max_exec_time, active);
+    *out_wake_us = now_time + active->max_exec_time;
+    return active;
 }
-#undef kprintf
