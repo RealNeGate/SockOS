@@ -153,7 +153,9 @@ void x86_irq_startup(int core_id) {
     idt.limit = sizeof(_idt) - 1;
     idt.base = (uintptr_t) _idt;
     irq_enable(&idt);
+}
 
+void x86_irq_handoff(int core_id) {
     // Enable APIC timer
     //   0xF0 - Spurious Interrupt Vector Register
     //   Punting spurious interrupts (see PIC/CPU race condition, this is a fake interrupt)
@@ -165,12 +167,14 @@ void x86_irq_startup(int core_id) {
     APIC(0x3E0) = 0b1011;
 
     // calibrate APIC timer
-    calibrating_apic_timer = true;
-    apic_freq = __rdtsc();
-    APIC(0x380) = APIC_CALIBRATION_TICKS;
+    if (core_id == 0) {
+        calibrating_apic_timer = true;
+        apic_freq = __rdtsc();
+        APIC(0x380) = APIC_CALIBRATION_TICKS;
 
-    while (calibrating_apic_timer) {
-        asm volatile ("hlt");
+        while (calibrating_apic_timer) {
+            asm volatile ("hlt");
+        }
     }
 }
 
@@ -306,7 +310,13 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
         PerCPU* cpu = cpu_get();
 
         u64 next_wake;
-        Thread* next = sched_try_switch(now / boot_info->tsc_freq, &next_wake);
+        Thread* next;
+        if (cpu->core_id == 0) {
+            next = sched_try_switch(now / boot_info->tsc_freq, &next_wake);
+        } else {
+            next = NULL;
+            next_wake = (now / boot_info->tsc_freq) + 1000000;
+        }
 
         // if we're switching, save old thread state
         if (cpu->current_thread != NULL) {
@@ -314,7 +324,7 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
         }
 
         if (next == NULL) {
-            ON_DEBUG(IRQ)(kprintf("  >> IDLE! (until %d ms) <<\n", next_wake / 1000));
+            ON_DEBUG(IRQ)(kprintf("  CPU-%d >> IDLE! (until %d ms) <<\n", cpu->core_id, next_wake / 1000));
             spall_begin_event("sleep", 0);
 
             uint64_t new_now_time = (__rdtsc() / boot_info->tsc_freq);
@@ -332,12 +342,12 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
 
         // do thread context switch, if we changed
         if (cpu->current_thread != next) {
-            ON_DEBUG(IRQ)(kprintf("  >> SWITCH %p -> %p (until %d ms) <<\n\n", cpu->current_thread, next, next_wake / 1000));
+            ON_DEBUG(IRQ)(kprintf("  CPU-%d >> SWITCH %p -> %p (until %d ms) <<\n\n", cpu->core_id, cpu->current_thread, next, next_wake / 1000));
 
             *state = next->state;
             cpu->current_thread = next;
         } else {
-            ON_DEBUG(IRQ)(kprintf("  >> STAY %p (until %d ms) <<\n\n", cpu->current_thread, next_wake / 1000));
+            ON_DEBUG(IRQ)(kprintf("  CPU-%d >> STAY %p (until %d ms) <<\n\n", cpu->core_id, cpu->current_thread, next_wake / 1000));
         }
 
         {

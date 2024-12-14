@@ -1,6 +1,14 @@
 #pragma once
 #include "../../kernel.h"
 
+enum {
+    KERNEL_CS  = 0x08,
+    KERNEL_DS  = 0x10,
+    USER_DS    = 0x18,
+    USER_CS    = 0x20,
+    TSS        = 0x28,
+};
+
 struct CPUState {
     u8  fxsave[512 + 16];
     u64 r15, r14, r13, r12, r11, r10, r9, r8;
@@ -49,6 +57,8 @@ void x86_enable_apic(void);
 void x86_boot_cores(void);
 
 void x86_irq_startup(int core_id);
+void x86_irq_handoff(int core_id);
+
 uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu);
 
 // MSRs

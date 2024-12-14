@@ -30,7 +30,7 @@ do {                          \
 
 #define KERNEL_BUFFER_SIZE (16 * 1024 * 1024)
 
-typedef void (*LoaderFunction)(BootInfo* info, u8* stack, u64 tss_lo, u64 tss_hi);
+typedef void (*LoaderFunction)(BootInfo* info, u8* stack, u64 gdt_base);
 
 typedef struct {
     size_t capacity;
@@ -431,22 +431,6 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         }
     }
 
-    uintptr_t tss_ptr = kernel_boot_info.identity_map_ptr + ((uintptr_t) &kernel_boot_info.tss[0]);
-    u64 tss[2] = {
-        //  access    limit
-        //    VV        VV
-        0x0000890000000067 | ((tss_ptr & 0xFFFFFF) << 16) | (((tss_ptr >> 24) & 0xFF) << 56),
-        (tss_ptr >> 32ull),
-    };
-
-    // disable I/O map base
-    ((u16*) kernel_boot_info.tss)[0x102 / 4] = 0xDFFF;
-
-    // set IST1, when an interrupt happens we'll be using this as the kernel
-    // stack.
-    kernel_boot_info.tss[0x24 / 4] = (kernel_boot_info.identity_map_ptr + (uintptr_t) kstack_end);
-    kernel_boot_info.tss[0x28 / 4] = (kernel_boot_info.identity_map_ptr + (uintptr_t) kstack_end) >> 32;
-
     #if 0
     printf("TSS descriptor:\n");
     memdump(tss, 16);
@@ -461,6 +445,22 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     kernel_boot_info.cores[0].kernel_stack = kstack_base;
     kernel_boot_info.cores[0].kernel_stack_top = kstack_end;
 
+    // GDT setup
+    {
+        u64 gdt_base = kernel_boot_info.identity_map_ptr + (uintptr_t) kernel_boot_info.cores[0].gdt;
+        kernel_boot_info.cores[0].gdt_pointer[0] = sizeof(kernel_boot_info.cores[0].gdt) - 1;
+        memcpy(&kernel_boot_info.cores[0].gdt_pointer[1], &gdt_base, sizeof(u64));
+
+        u64* gdt = kernel_boot_info.cores[0].gdt;
+        gdt[0] = 0;
+        gdt[1] = 0xAF9A000000FFFF; // kernel CS
+        gdt[2] = 0xCF92000000FFFF; // kernel DS
+        gdt[3] = 0xCFF2000000FFFF; // user DS
+        gdt[4] = 0xAFFA000000FFFF; // user CS
+        gdt[5] = 0;                // TSS
+        gdt[6] = 0;                // TSS
+    }
+
     uint32_t* sp = (uint32_t*) kstack_base;
     sp[0] = KERNEL_STACK_COOKIE;
     sp[1] = 0;
@@ -470,6 +470,6 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     // printf("Jumping to the kernel: %X (sp=%X)\n", loader, kstack_end);
 
     kernel_boot_info.elf_virtual_entry = kernel_boot_info.elf_virtual_ptr + kernel_module.entry_addr;
-    loader(&kernel_boot_info, kstack_end, tss[0], tss[1]);
+    loader(&kernel_boot_info, kstack_end, kernel_boot_info.identity_map_ptr + (uintptr_t) kernel_boot_info.cores[0].gdt_pointer);
     return 0;
 }

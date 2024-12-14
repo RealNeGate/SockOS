@@ -66,12 +66,14 @@ void arch_init(int core_id) {
         kprintf("Found %d cores | TSC freq %d MHz\n", boot_info->core_count, boot_info->tsc_freq);
 
         kpool_subdivide(boot_info->core_count);
-        x86_boot_cores();
 
         sched_init();
         pci_init();
 
         kernel_idle_state = new_thread_state(kernel_idle, 0, 0, 0, false);
+
+        x86_irq_startup(core_id);
+        x86_boot_cores();
 
         { // Spawn desktop
             static _Alignas(4096) const uint8_t desktop_elf[] = {
@@ -87,12 +89,37 @@ void arch_init(int core_id) {
             void* desktop_elf_ptr = paddr2kaddr(((uintptr_t) desktop_elf - boot_info->elf_virtual_ptr) + boot_info->elf_physical_ptr);
             Thread* mine = env_load_elf(env, desktop_elf_ptr, sizeof(desktop_elf));
         }
+    } else {
+        x86_irq_startup(core_id);
     }
+
+    PerCPU* cpu = &boot_info->cores[core_id];
+
+    // setup TSS, it'll store the relevant kernel stack
+    {
+        //  access    limit
+        //    VV        VV
+        u64 tss_ptr = (u64) &cpu->tss[0];
+        cpu->gdt[TSS/8   ] = 0x0000890000000067 | ((tss_ptr & 0xFFFFFF) << 16) | (((tss_ptr >> 24) & 0xFF) << 56);
+        cpu->gdt[TSS/8 +1] = (tss_ptr >> 32ull);
+
+        // disable I/O map base
+        ((u16*) cpu->tss)[0x102 / 4] = 0xDFFF;
+
+        // set IST1, when an interrupt happens we'll be using this as the kernel
+        // stack.
+        cpu->tss[0x24 / 4] = ((u64) cpu->kernel_stack_top);
+        cpu->tss[0x28 / 4] = ((u64) cpu->kernel_stack_top) >> 32ull;
+
+        asm volatile ("mov ax, 0x28\nltr ax" ::: "ax");
+    }
+
+    kprintf("Hello Mr. CPU! %p %d\n", cpu, core_id);
 
     // jump into timer interrupt, we're going to run tasks now
     spall_header();
-    spall_begin_event("main", 0);
-    x86_irq_startup(core_id);
+    spall_begin_event("main", core_id);
+    x86_irq_handoff(core_id);
 }
 
 void put_char(int ch) {
