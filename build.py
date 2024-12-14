@@ -95,10 +95,6 @@ file.write(f'build bin/efi/boot/bootx64.efi: link objs/efi.o\n')
 file.write(f'  flags = -subsystem:efi_application -nodefaultlib -dll -entry:efi_main\n')
 file.write(f'\n')
 
-# file.write(f'build objs/kernel.o: cc src/kernel/kernel.c | userland/desktop.elf\n')
-# file.write(f'  flags = -I src -fPIC -target x86_64-linux-gnu -ffreestanding {cflags}\n')
-# file.write(f'\n')
-
 kernel_asm = " ".join(asm_outputs["kernel"])
 objs_str = " ".join(objs)
 file.write(f'build bin/kernel.so | output.map: ld {objs_str} {kernel_asm} | link.ld\n')

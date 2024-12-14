@@ -29,7 +29,7 @@ uint32_t mur3_32(const void *key, int len, uint32_t h) {
     return h ^ (h >> 16);
 }
 
-static uint8_t print_buffer[8192];
+void _putchar(char ch);
 void kmain(BootInfo* restrict info) {
     boot_info = info;
     boot_info->cores[0].self = &boot_info->cores[0];
@@ -39,8 +39,6 @@ void kmain(BootInfo* restrict info) {
     // convert pointers into kernel addresses
     boot_info->kernel_pml4 = paddr2kaddr((uintptr_t) boot_info->kernel_pml4);
     boot_info->mem_map.regions = paddr2kaddr((uintptr_t) boot_info->mem_map.regions);
-
-    print_ring_init(print_buffer, sizeof(print_buffer));
 
     kprintf("Beginning kernel boot...\n");
     arch_init(0);

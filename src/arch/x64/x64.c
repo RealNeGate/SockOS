@@ -90,6 +90,7 @@ void arch_init(int core_id) {
             Thread* mine = env_load_elf(env, desktop_elf_ptr, sizeof(desktop_elf));
         }
     } else {
+        sched_init();
         x86_irq_startup(core_id);
     }
 
@@ -120,7 +121,7 @@ void arch_init(int core_id) {
     x86_irq_handoff(core_id);
 }
 
-void put_char(int ch) {
+void _putchar(char ch) {
     io_out8(0x3f8, ch);
 }
 

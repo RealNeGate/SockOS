@@ -84,6 +84,9 @@ struct PerCPU {
     // NBHM crap
     _Alignas(64) _Atomic uint64_t ebr_time;
 
+    // Logging
+    struct LogBuffer* log_buffer;
+
     // Scheduler info
     struct Thread* current_thread;
     PerCPU_Scheduler* sched;

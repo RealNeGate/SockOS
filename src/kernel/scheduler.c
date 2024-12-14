@@ -63,8 +63,9 @@ void sched_wait(u64 timeout) {
 // We need this function to behave in a relatively fast and bounded fashion, it's generally called
 // in a context switch interrupt after all.
 Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us) {
+    int core_id = cpu_get()->core_id;
     PerCPU_Scheduler* sched = cpu_get()->sched;
-    kprintf("sched_try_switch(now=%d)\n", now_time);
+    // kprintf("sched_try_switch(now=%d)\n", now_time);
 
     // wake up sleepy guys
     while (sched->waiters.head != sched->waiters.tail) {
@@ -73,7 +74,7 @@ Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us) {
             break;
         }
 
-        // kprintf("  Thread-%p is awake now\n", waiter);
+        // ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p is awake now (exec time was %d us)\n", core_id, waiter, waiter->exec_time));
         sched->waiters.head = (sched->waiters.head + 1) % 256;
 
         waiter->wake_time = 0;
@@ -92,12 +93,14 @@ Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us) {
         int N = (SCHED_QUANTA / 1000);
         if (active_count > N) {
             sched->scheduling_period = 1000 * active_count;
-        } else {
+        } else if (active_count > 0) {
             sched->scheduling_period = SCHED_QUANTA;
+        } else {
+            sched->scheduling_period = 0;
         }
 
         sched->ideal_exec_time = active_count > 0 ? sched->scheduling_period / active_count : 0;
-        // kprintf("SCHEDULING PERIOD OF %d us\n", sched->scheduling_period);
+        ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: scheduling period of %d us (exec time = %d us)\n", core_id, sched->scheduling_period, sched->total_exec));
     }
 
     // if there's no active tasks, we just wait on the next sleeper
@@ -108,11 +111,11 @@ Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us) {
             // round to minimum quanta
             u64 wake_time = ((waiter->wake_time + 999) / 1000) * 1000;
 
-            // kprintf("  sleep until %d\n", wake_time);
+            ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: sleep for %d us\n", core_id, wake_time - now_time));
             *out_wake_us = wake_time;
             return NULL;
         } else {
-            // kprintf("  sleep basically forever\n");
+            ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: sleep basically forever\n", core_id));
             *out_wake_us = now_time + 1000000;
             return NULL;
         }
@@ -123,7 +126,7 @@ Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us) {
     sched->active.head = (sched->active.head + 1) % 256;
     sched->total_exec -= active->exec_time;
 
-    // kprintf("  Thread-%p with lowest exec time (%d us)\n", active, active->exec_time);
+    // ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p with lowest exec time (%d us)\n", core_id, active, active->exec_time));
 
     // allocate time slice
     active->start_time = now_time;
@@ -136,7 +139,7 @@ Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us) {
     // round to minimum quanta
     active->max_exec_time = ((active->max_exec_time + 999) / 1000) * 1000;
 
-    kprintf("  alloting %d micros to Thread-%p\n", active->max_exec_time, active);
+    // ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: alloting %d micros to Thread-%p\n", core_id, active->max_exec_time, active));
     *out_wake_us = now_time + active->max_exec_time;
     return active;
 }

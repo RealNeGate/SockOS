@@ -41,6 +41,7 @@ typedef int8_t              i8;
 #define DEBUG_VMEM    0
 #define DEBUG_KHEAP   0
 #define DEBUG_KPOOL   0
+#define DEBUG_SCHED   1
 #define DEBUG_NBHM    0
 
 #define ON_DEBUG(cond) CONCAT(DO_IF_, CONCAT(DEBUG_, cond))
@@ -68,8 +69,7 @@ void spin_unlock(Lock* lock);
 
 // bootleg stdio.h
 void kprintf(const char *fmt, ...);
-void put_char(int ch);
-void print_ring_init(uint8_t *buffer, size_t size);
+void print_ring_init(void);
 
 uint64_t get_time_ticks(void);
 

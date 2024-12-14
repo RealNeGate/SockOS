@@ -8,7 +8,7 @@
 #include "crt.c"
 #include "com.c"
 #include "term.c"
-#include "printf.c"
+#include "efi_print.c"
 
 #undef panic
 #define panic(fmt, ...)       \

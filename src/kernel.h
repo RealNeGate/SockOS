@@ -2,6 +2,7 @@
 #pragma once
 #include <common.h>
 #include <boot_info.h>
+#include <kernel/printf.h>
 
 #define SCHED_QUANTA 15625 // 64Hz
 
@@ -328,4 +329,4 @@ void io_out32(u16 port, u32 value);
 // Utils
 ////////////////////////////////
 uint32_t mur3_32(const void *key, int len, uint32_t h);
-int itoa(uint64_t v, uint8_t *buffer, uint8_t base);
+int itoa(u64 v, uint8_t *buffer, uint8_t base);
