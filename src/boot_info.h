@@ -112,6 +112,7 @@ typedef struct {
     uintptr_t identity_map_ptr;
 
     u64 lapic_base;
+    u64 ioapic_base;
     u64 tsc_freq;
     u64 apic_tick_in_tsc;
 

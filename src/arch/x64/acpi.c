@@ -84,6 +84,15 @@ typedef struct __attribute__((packed)) {
     u32 flags;
 } ACPI_APIC_LAPIC_Entry;
 
+typedef struct __attribute__((packed)) {
+    u8  type;
+    u8  length;
+    u8  ioapic_id;
+    u8  reserved;
+    u32 ioapic_address;
+    u32 global_system_interrupt_base;
+} ACPI_APIC_IOAPIC_Entry;
+
 typedef enum {
     APIC_ENTRY_LAPIC  = 0,
     APIC_ENTRY_IOAPIC = 1,
@@ -147,11 +156,17 @@ void x86_parse_acpi(void) {
             buf_ptr += sizeof(*ahead);
             while (buf_ptr < (char *)(head + sizeof(ACPI_APIC_Header))) {
                 ACPI_APIC_Entry *entry = (ACPI_APIC_Entry *)buf_ptr;
-                if (entry->type == APIC_ENTRY_LAPIC) {
-                    ACPI_APIC_LAPIC_Entry *entry = (ACPI_APIC_LAPIC_Entry *)buf_ptr;
-                    boot_info->cores[core_count].core_id  = entry->processor_id;
-                    boot_info->cores[core_count].lapic_id = entry->apic_id;
-                    core_count += 1;
+                switch (entry->type) {
+                    case APIC_ENTRY_LAPIC: {
+                        ACPI_APIC_LAPIC_Entry *entry = (ACPI_APIC_LAPIC_Entry *)buf_ptr;
+                        boot_info->cores[core_count].core_id  = entry->processor_id;
+                        boot_info->cores[core_count].lapic_id = entry->apic_id;
+                        core_count += 1;
+                    } break;
+                    case APIC_ENTRY_IOAPIC: {
+                        ACPI_APIC_IOAPIC_Entry *entry = (ACPI_APIC_IOAPIC_Entry *)buf_ptr;
+                        boot_info->ioapic_base = entry->ioapic_address;
+                    } break;
                 }
                 buf_ptr += entry->length;
             }
