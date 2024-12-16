@@ -60,11 +60,65 @@ void sched_wait(u64 timeout) {
     tq_insert(&cpu->sched->waiters, t, true);
 }
 
+// keeps moving tasks to try to keep the exec times near each other
+#if 0
+int sched_load_balancer(void*) {
+    static i64 total_exec[256];
+    for (;;) {
+        // find average
+        u64 avg = 0;
+        FOR_N(i, 0, boot_info->core_count) {
+            total_exec[i] = boot_info->cores[i].sched->total_exec;
+        }
+        FOR_N(i, 0, boot_info->core_count) {
+            avg += total_exec[i];
+        }
+        boot_info->average_exec_time = avg / boot_info->core_count;
+        ON_DEBUG(SCHED)(kprintf("[sched] Average CPU exec time: %d us\n", avg));
+
+        if (avg > 1000) {
+            FOR_N(i, 0, boot_info->core_count) {
+                // if we're above average in exec times, we'll throw tasks into the
+                // lowest exec core.
+                if (total_exec[i] <= boot_info->average_exec_time) {
+                    continue;
+                }
+
+                int overhead = boot_info->average_exec_time - total_exec[i];
+
+                // round to min quanta
+                overhead = (overhead + 999) / 1000 * 1000;
+
+                ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: APLAPLPA %d\n", i, overhead));
+
+                int lowest = -1;
+                FOR_N(j, 0, boot_info->core_count) if (i != j) {
+                    if (lowest < 0 || total_exec[j] < total_exec[lowest]) {
+                        lowest = j;
+                    }
+                }
+
+                // pluck highest task
+                PerCPU_Scheduler* sched = boot_info->cores[i].sched;
+
+                PerCPU_Scheduler* sched2 = boot_info->cores[i].sched;
+                spin_lock(&sched->lock);
+
+                spin_lock(&sched->lock);
+            }
+        }
+
+        sleep(100000);
+    }
+}
+#endif
+
 // We need this function to behave in a relatively fast and bounded fashion, it's generally called
 // in a context switch interrupt after all.
 Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us) {
     int core_id = cpu_get()->core_id;
     PerCPU_Scheduler* sched = cpu_get()->sched;
+    spin_lock(&sched->lock);
     // kprintf("sched_try_switch(now=%d)\n", now_time);
 
     // wake up sleepy guys
@@ -112,11 +166,14 @@ Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us) {
             u64 wake_time = ((waiter->wake_time + 999) / 1000) * 1000;
 
             ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: sleep for %d us\n", core_id, wake_time - now_time));
+            spin_unlock(&sched->lock);
+
             *out_wake_us = wake_time;
             return NULL;
         } else {
-            ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: sleep basically forever\n", core_id));
-            *out_wake_us = now_time + 1000000;
+            spin_unlock(&sched->lock);
+
+            *out_wake_us = now_time + 5000000;
             return NULL;
         }
     }
@@ -140,6 +197,7 @@ Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us) {
     active->max_exec_time = ((active->max_exec_time + 999) / 1000) * 1000;
 
     // ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: alloting %d micros to Thread-%p\n", core_id, active->max_exec_time, active));
+    spin_unlock(&sched->lock);
     *out_wake_us = now_time + active->max_exec_time;
     return active;
 }

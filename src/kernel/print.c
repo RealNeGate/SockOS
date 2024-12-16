@@ -66,9 +66,23 @@ static LogBuffer log_buffer[2];
 // Buffered kernel printing
 void kprintf(const char* fmt, ...) {
     LogBuffer* b = &log_buffer[0];
+
+    #if 1
+    spin_lock(&print_lock);
+
+    __builtin_va_list args;
+    __builtin_va_start(args, fmt);
+    int len = vsnprintf(b->data, LOG_BUFFER_SIZE, fmt, args);
+    __builtin_va_end(args);
+
+    for (int i = 0; i < len; i++) {
+        _putchar(b->data[i]);
+    }
+
+    spin_unlock(&print_lock);
+    #else
     spin_lock(&print_lock);
     for (;;) {
-
         __builtin_va_list args;
         __builtin_va_start(args, fmt);
         int len = vsnprintf(&b->data[b->used], LOG_BUFFER_SIZE - b->used, fmt, args);
@@ -87,5 +101,6 @@ void kprintf(const char* fmt, ...) {
         spin_unlock(&print_lock);
         return;
     }
+    #endif
 }
 

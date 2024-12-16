@@ -86,7 +86,7 @@ DEFINE_INT 44
 DEFINE_INT 45
 DEFINE_INT 46
 DEFINE_INT 47
-DEFINE_INT 112
+DEFINE_INT 81
 asm_int_handler:
     cld
     cli
@@ -129,6 +129,7 @@ asm_int_handler:
     mov rsp,rbx
     sub rsp,512 + 16
 
+    xor rbp, rbp
     mov rdi, rsp
     mov rdx, gs:[0]
     call x86_irq_int_handler

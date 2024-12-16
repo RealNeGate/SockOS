@@ -45,6 +45,24 @@ void ps2_cmd_arg(u8 cmd, u8 arg) {
     io_out8(PS2_DATA, arg);
 }
 
+char key_map[128] = {
+    0, 27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
+    '\t', 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', '\n',
+    '\a', 'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`', '\a',
+    '\\', 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', 0, '*', 0, ' ',
+};
+
+void x86_halt();
+void ps2_interrupt(void* ctx) {
+    u8 key = io_in8(PS2_DATA);
+
+    if ((key & 0x80) == 0) {
+        _putchar(key_map[key]);
+    }
+
+    // kprintf("HEHEHE! %d\n", key);
+}
+
 void ps2_init(void) {
     // Read the PS2 Controller Config
     ps2_cmd(PS2_DISABLE_PORT1);
@@ -54,7 +72,7 @@ void ps2_init(void) {
     status |= (PS2_PORT1_IRQ | PS2_PORT2_IRQ);
     ps2_cmd_arg(PS2_WRITE_CONFIG, status);
 
-    set_interrupt_line(1);
+    set_interrupt_line(1, ps2_interrupt, NULL);
 
     ps2_cmd(PS2_ENABLE_PORT1);
     ps2_cmd(PS2_ENABLE_PORT2);

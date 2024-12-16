@@ -49,6 +49,7 @@ void env_kill(Env* env) {
     spin_unlock(&env->lock);
 }
 
+static int round_robin_load_balance;
 Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintptr_t stack, size_t stack_size, bool is_user) {
     Thread* new_thread = kpool_alloc_page();
     *new_thread = (Thread){
@@ -80,11 +81,22 @@ Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintpt
     }
 
     // put into schedule
-    PerCPU_Scheduler* sched = get_sched();
-    sched->total_exec += new_thread->exec_time;
-    tq_append(&sched->active, new_thread);
+    {
+        int i = round_robin_load_balance;
+        if (++round_robin_load_balance == boot_info->core_count) {
+            round_robin_load_balance = 0;
+        }
 
-    kprintf("created thread: %p\n", new_thread);
+        kprintf("[sched] created Thread-%p, placed onto CPU-%d\n", new_thread, i);
+
+        PerCPU_Scheduler* sched = boot_info->cores[i].sched;
+        spin_lock(&sched->lock);
+        sched->total_exec += new_thread->exec_time;
+        tq_append(&sched->active, new_thread);
+        spin_unlock(&sched->lock);
+        arch_wake_up(i);
+    }
+
     return new_thread;
 }
 

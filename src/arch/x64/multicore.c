@@ -10,11 +10,22 @@ u32 apic_get_errors(void) {
     return *((volatile u32 *)(boot_info->lapic_base + 0x280));
 }
 
-void send_ipi(u64 lapic_id, u64 val) {
+void x86_send_ipi(u64 lapic_id, u64 val) {
     APIC(0x310) = lapic_id << 24;
     APIC(0x300) = val;
 
     while (APIC(0x300) & (1 << 12)) {}
+}
+
+void arch_wake_up(int core_id) {
+    if (cpu_get()->core_id != core_id) {
+        u32 lapic_id = boot_info->cores[core_id].lapic_id;
+        if (atomic_compare_exchange_strong(&boot_info->cores[core_id].sched->idleing, &(bool){ true }, false)) {
+            // sending an IPI which triggers int#32 (timer interrupt)
+            x86_send_ipi(lapic_id, 0x4820);
+            kprintf("Wake! %d\n", lapic_id);
+        }
+    }
 }
 
 static void powernap(u64 micros) {
@@ -35,15 +46,23 @@ void x86_boot_cores(void) {
     u64* gdt_table = kheap_alloc(boot_info->core_count * sizeof(u64));
     gdt_table[0] = 0;
 
+    char* chunk = kpool_alloc_chunk();
+    size_t mark = 0;
+
     FOR_N(k, 1, boot_info->core_count) {
-        char* sp = kpool_alloc_page();
-        kprintf("KernelStack[%d]: %p - %p\n", k, sp, sp + 4095);
+        if (mark + 65536 >= CHUNK_SIZE) {
+            chunk = kpool_alloc_chunk();
+            mark  = 0;
+        }
+
+        char* sp = &chunk[mark];
+        kprintf("KernelStack[%d]: %p - %p\n", k, sp, sp + 65535);
 
         // if windows can get away with small kernel stacks so can we
         PerCPU* restrict cpu = &boot_info->cores[k];
         cpu->self = cpu;
         cpu->kernel_stack     = (uint8_t*) sp;
-        cpu->kernel_stack_top = (uint8_t*) sp + 4096;
+        cpu->kernel_stack_top = (uint8_t*) sp + 65536;
 
         // setup per-core GDT
         u64 gdt_base = (u64) boot_info->cores[k].gdt;
@@ -89,7 +108,7 @@ void x86_boot_cores(void) {
     FOR_N(i, 1, boot_info->core_count) {
         u32 lapic_id = boot_info->cores[i].lapic_id;
         // Send a CPU INIT
-        send_ipi(lapic_id, 0x4501);
+        x86_send_ipi(lapic_id, 0x4501);
     }
 
     powernap(1000000);
@@ -97,6 +116,7 @@ void x86_boot_cores(void) {
     FOR_N(i, 1, boot_info->core_count) {
         u32 lapic_id = boot_info->cores[i].lapic_id;
         // Send a STARTUP IPI
-        send_ipi(lapic_id, 0x4601);
+        x86_send_ipi(lapic_id, 0x4601);
     }
 }
+

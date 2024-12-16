@@ -54,6 +54,13 @@ static volatile enum {
 
 static u64 apic_freq;
 
+typedef struct {
+    void* ctx;
+    void (*fn)(void* ctx);
+} InterruptLineCallback;
+
+static InterruptLineCallback line_callbacks[24];
+
 static void irq_disable_pic(void) {
     // set ICW1
     io_out8(PIC1_COMMAND, 0x11);
@@ -131,6 +138,7 @@ void x86_irq_startup(int core_id) {
         SET_INTERRUPT(45, false);
         SET_INTERRUPT(46, false);
         SET_INTERRUPT(47, false);
+        SET_INTERRUPT(81, false);
 
         // allow int3 in ring 3
         _idt[3].type_attr |= (3 << 5);
@@ -165,17 +173,20 @@ u32 ioapic_read(u32 ioapic_addr, u32 reg) {
     *(u32 volatile *)addr = reg;
     return *(u32 volatile *)(addr + 0x10);
 }
+
 void ioapic_write(u32 ioapic_addr, u32 reg, u32 val) {
     u64 addr = (u64)ioapic_addr;
     *(u32 volatile *)addr = reg;
     *(u32 volatile *)(addr + 0x10) = val;
 }
-void set_interrupt_line(u32 _line) {
-    u32 line = _line;
 
+void set_interrupt_line(u32 line, void fn(void*), void* ctx) {
     // redirect table has 2 32-bit entries per interrupt slot
     u32 redirect_table_idx = (line * 2) + 0x10;
     u32 entry = 0x50 + line;
+
+    line_callbacks[line].ctx = ctx;
+    line_callbacks[line].fn = fn;
 
     ioapic_write(boot_info->ioapic_base, redirect_table_idx,     1 << 16); // Mask the interrupt while we tweak
     ioapic_write(boot_info->ioapic_base, redirect_table_idx + 1, boot_info->cores[0].lapic_id << 24);
@@ -237,8 +248,9 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
         u64 access_addr = x86_get_cr2();
 
         Env* env = NULL;
-        if (cpu->current_thread && cpu->current_thread->parent) {
-            env = cpu->current_thread->parent;
+        Thread* curr = cpu->current_thread;
+        if (curr && curr->parent) {
+            env = curr->parent;
         }
 
         if (env != NULL) {
@@ -350,7 +362,8 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
             apic_timer_status = APIC_CALIBRATED;
         }
 
-        PerCPU* cpu = cpu_get();
+        cpu->sched->idleing = false;
+
         u64 now_micros = now / boot_info->tsc_freq;
 
         u64 next_wake;
@@ -372,7 +385,7 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
 
                     // we've stopped running the task (either blocked or ran out of time), we
                     // re-insert into the queue based on weight.
-                    PerCPU_Scheduler* sched = cpu_get()->sched;
+                    PerCPU_Scheduler* sched = cpu->sched;
                     sched->total_exec += old_thread->exec_time;
                     tq_insert(&sched->active, old_thread, false);
                 }
@@ -388,12 +401,8 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
             cpu->current_thread->state = *state;
         }
 
-        if (next == NULL) {
-            ON_DEBUG(IRQ)(kprintf("  CPU-%d >> IDLE! (until %d ms) <<\n", cpu->core_id, next_wake / 1000));
-
-            spall_end_event(cpu->core_id);
-            spall_begin_event("sleep", cpu->core_id);
-
+        // don't arm the timer again if we're gonna sleep forever
+        if (next_wake != UINT64_MAX) {
             uint64_t new_now_time = (__rdtsc() / boot_info->tsc_freq);
             uint64_t until_wake = next_wake > new_now_time ? next_wake - new_now_time : 1;
 
@@ -401,6 +410,19 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
             APIC(0xB0) = 0;
             // set new one-shot
             APIC(0x380) = micros_to_apic_time(until_wake);
+        } else {
+            cpu->sched->idleing = true;
+        }
+
+        if (cpu->current_thread != next) {
+            ON_DEBUG(IRQ)(kprintf("[irq] CPU-%d: switch %p -> %p, until %d ms\n", cpu->core_id, cpu->current_thread, next, next_wake / 1000));
+        } else {
+            ON_DEBUG(IRQ)(kprintf("[irq] CPU-%d: stay until %d ms\n", cpu->core_id, next_wake / 1000));
+        }
+
+        if (next == NULL) {
+            spall_end_event(cpu->core_id);
+            spall_begin_event("sleep", cpu->core_id);
 
             *state = kernel_idle_state;
             cpu->current_thread = NULL;
@@ -409,8 +431,6 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
 
         // do thread context switch, if we changed
         if (cpu->current_thread != next) {
-            ON_DEBUG(IRQ)(kprintf("  CPU-%d >> SWITCH %p -> %p (until %d ms) <<\n\n", cpu->core_id, cpu->current_thread, next, next_wake / 1000));
-
             *state = next->state;
             cpu->current_thread = next;
         } else {
@@ -437,13 +457,19 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
         uint64_t new_now_time = (__rdtsc() / boot_info->tsc_freq);
         uint64_t until_wake = next_wake > new_now_time ? next_wake - new_now_time : 1;
 
-        // send EOI
-        APIC(0xB0) = 0;
-        // set new one-shot
-        APIC(0x380) = micros_to_apic_time(until_wake);
-
         PageTable* next_pml4 = next->parent ? next->parent->addr_space.hw_tables : boot_info->kernel_pml4;
         return kaddr2paddr(next_pml4);
+    } else if (state->interrupt_num >= 0x50) {
+        // interrupt lines
+        InterruptLineCallback* c = &line_callbacks[state->interrupt_num - 0x50];
+        if (c->fn) {
+            c->fn(c->ctx);
+
+            APIC(0xB0) = 0;
+        } else {
+            x86_halt();
+        }
+        return cr3;
     } else {
         x86_halt();
         return cr3;

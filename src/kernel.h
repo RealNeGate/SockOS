@@ -281,8 +281,15 @@ typedef struct {
 } ThreadQueue;
 
 struct PerCPU_Scheduler {
+    Lock lock;
+
+    atomic_bool idleing;
+
     // sum of the exec time of all active tasks
-    u64 total_exec;
+    _Atomic(u64) total_exec;
+
+    // stolen task
+    struct Thread* migrated;
 
     // in micros
     u64 ideal_exec_time;
@@ -297,6 +304,7 @@ void sched_yield(void);
 void sched_wait(u64 timeout);
 
 Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us);
+int sched_load_balancer(void* arg);
 
 void tq_insert(ThreadQueue* tq, Thread* t, bool is_waiter);
 void tq_append(ThreadQueue* tq, Thread* t);
@@ -307,6 +315,7 @@ void tq_append(ThreadQueue* tq, Thread* t);
 PerCPU* cpu_get(void);
 
 void arch_init(int core_id);
+void arch_wake_up(int core_id);
 uintptr_t arch_canonical_addr(uintptr_t p);
 
 CPUState new_thread_state(void* entrypoint, uintptr_t arg, uintptr_t stack, size_t stack_size, bool is_user);
@@ -316,7 +325,7 @@ void* memmap_view(PageTable* address_space, uintptr_t phys_addr, uintptr_t virt_
 void memmap_unview(PageTable* address_space, uintptr_t virt_addr, size_t size);
 bool memmap_translate(PageTable* address_space, uintptr_t virt, u64* out);
 
-void set_interrupt_line(u32 line);
+void set_interrupt_line(u32 line, void fn(void*), void* ctx);
 
 // we emulate I/O ports on all platforms, it's used for PCI mostly
 u8 io_in8(u16 port);

@@ -43,6 +43,8 @@ void x86_set_kernel_gs(int core_id) {
     asm volatile ("swapgs");
 }
 
+static atomic_int cores_ready;
+
 void pci_init(void);
 void ps2_init(void);
 void arch_init(int core_id) {
@@ -77,20 +79,7 @@ void arch_init(int core_id) {
         x86_irq_startup(core_id);
         x86_boot_cores();
 
-        { // Spawn desktop
-            static _Alignas(4096) const uint8_t desktop_elf[] = {
-                #embed "../../../userland/desktop.elf"
-            };
-
-            Env* env = env_create();
-
-            // framebuffer passed along
-            KObject_VMO* fb_vmo = vmo_create_physical(0x80000000, 800 * 600 * sizeof(uint32_t));
-            KHandle fb = env_open_handle(env, 0, &fb_vmo->super);
-
-            void* desktop_elf_ptr = paddr2kaddr(((uintptr_t) desktop_elf - boot_info->elf_virtual_ptr) + boot_info->elf_physical_ptr);
-            Thread* mine = env_load_elf(env, desktop_elf_ptr, sizeof(desktop_elf));
-        }
+        // thread_create(NULL, sched_load_balancer, 0, (uintptr_t) kpool_alloc_page(), 4096, false);
     } else {
         sched_init();
         x86_irq_startup(core_id);
@@ -118,6 +107,27 @@ void arch_init(int core_id) {
     }
 
     kprintf("Hello Mr. CPU! %p %d\n", cpu, core_id);
+
+    // fence to wait for all CPUs to finish init
+    cores_ready++;
+    while (cores_ready < boot_info->core_count) {
+        asm volatile ("pause");
+    }
+
+    if (core_id == 0) { // Spawn desktop
+        static _Alignas(4096) const uint8_t desktop_elf[] = {
+            #embed "../../../userland/desktop.elf"
+        };
+
+        Env* env = env_create();
+
+        // framebuffer passed along
+        KObject_VMO* fb_vmo = vmo_create_physical(0x80000000, 800 * 600 * sizeof(uint32_t));
+        KHandle fb = env_open_handle(env, 0, &fb_vmo->super);
+
+        void* desktop_elf_ptr = paddr2kaddr(((uintptr_t) desktop_elf - boot_info->elf_virtual_ptr) + boot_info->elf_physical_ptr);
+        Thread* mine = env_load_elf(env, desktop_elf_ptr, sizeof(desktop_elf));
+    }
 
     // jump into timer interrupt, we're going to run tasks now
     x86_irq_handoff(core_id);

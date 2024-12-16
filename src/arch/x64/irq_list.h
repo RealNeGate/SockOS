@@ -26,4 +26,5 @@ X(29, "VMM communication")
 X(30, "Security")
 // 31 is reserved
 X(32, "Timer")
+X(81, "Stuff")
 #undef X

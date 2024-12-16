@@ -59,6 +59,8 @@ void x86_boot_cores(void);
 void x86_irq_startup(int core_id);
 void x86_irq_handoff(int core_id);
 
+void x86_send_ipi(u64 lapic_id, u64 val);
+
 uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu);
 
 // MSRs

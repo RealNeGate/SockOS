@@ -127,6 +127,8 @@ typedef struct {
     size_t elf_mapped_size;
 
     Framebuffer fb;
+
+    _Atomic(u64) average_exec_time;
 } BootInfo;
 
 // loader.s & irq.s needs these to be here

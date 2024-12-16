@@ -2,8 +2,7 @@
 
 #define SPALL_MIN(a, b) (((a) < (b)) ? (a) : (b))
 
-#pragma pack(push, 1)
-typedef struct SpallHeader {
+typedef struct __attribute__((packed)) SpallHeader {
     uint64_t magic_header; // = 0x0BADF00D
     uint64_t version; // = 1
     double   timestamp_unit;
@@ -23,7 +22,7 @@ enum {
     SpallEventType_Pad_Skip            = 7,
 };
 
-typedef struct SpallBeginEvent {
+typedef struct __attribute__((packed)) SpallBeginEvent {
     uint8_t type; // = SpallEventType_Begin
     uint8_t category;
 
@@ -35,24 +34,23 @@ typedef struct SpallBeginEvent {
     uint8_t args_length;
 } SpallBeginEvent;
 
-typedef struct SpallBeginEventMax {
+typedef struct  __attribute__((packed)) SpallBeginEventMax {
     SpallBeginEvent event;
     char name_bytes[255];
     char args_bytes[255];
 } SpallBeginEventMax;
 
-typedef struct SpallEndEvent {
+typedef struct __attribute__((packed)) SpallEndEvent {
     uint8_t  type; // = SpallEventType_End
     uint32_t pid;
     uint32_t tid;
     double   when;
 } SpallEndEvent;
 
-typedef struct SpallPadSkipEvent {
+typedef struct __attribute__((packed)) SpallPadSkipEvent {
     uint8_t  type; // = SpallEventType_Pad_Skip
     uint32_t size;
 } SpallPadSkipEvent;
-#pragma pack(pop)
 
 static Lock spall_lock;
 
