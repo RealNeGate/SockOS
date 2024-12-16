@@ -56,6 +56,8 @@ void x86_boot_cores(void) {
         }
 
         char* sp = &chunk[mark];
+        mark += 65536;
+
         kprintf("KernelStack[%d]: %p - %p\n", k, sp, sp + 65535);
 
         // if windows can get away with small kernel stacks so can we

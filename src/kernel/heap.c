@@ -59,6 +59,7 @@ void* kheap_alloc(size_t obj_size) {
     }
 
     kassert(0, "Ran out of kernel memory");
+    spin_unlock(&heap_lock);
 }
 
 void kheap_free(void* obj) {
