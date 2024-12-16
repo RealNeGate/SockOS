@@ -44,6 +44,7 @@ void x86_set_kernel_gs(int core_id) {
 }
 
 void pci_init(void);
+void ps2_init(void);
 void arch_init(int core_id) {
     // Stuff we only handle once
     x86_set_kernel_gs(core_id);
@@ -66,9 +67,10 @@ void arch_init(int core_id) {
         kprintf("Found %d cores | TSC freq %d MHz\n", boot_info->core_count, boot_info->tsc_freq);
 
         kpool_subdivide(boot_info->core_count);
+        pci_init();
+        ps2_init();
 
         sched_init();
-        pci_init();
 
         kernel_idle_state = new_thread_state(kernel_idle, 0, 0, 0, false);
 

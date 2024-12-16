@@ -316,6 +316,8 @@ void* memmap_view(PageTable* address_space, uintptr_t phys_addr, uintptr_t virt_
 void memmap_unview(PageTable* address_space, uintptr_t virt_addr, size_t size);
 bool memmap_translate(PageTable* address_space, uintptr_t virt, u64* out);
 
+void set_interrupt_line(u32 line);
+
 // we emulate I/O ports on all platforms, it's used for PCI mostly
 u8 io_in8(u16 port);
 u16 io_in16(u16 port);

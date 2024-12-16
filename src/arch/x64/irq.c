@@ -160,6 +160,30 @@ void x86_irq_startup(int core_id) {
     irq_enable(&idt);
 }
 
+u32 ioapic_read(u32 ioapic_addr, u32 reg) {
+    u64 addr = (u64)ioapic_addr;
+    *(u32 volatile *)addr = reg;
+    return *(u32 volatile *)(addr + 0x10);
+}
+void ioapic_write(u32 ioapic_addr, u32 reg, u32 val) {
+    u64 addr = (u64)ioapic_addr;
+    *(u32 volatile *)addr = reg;
+    *(u32 volatile *)(addr + 0x10) = val;
+}
+void set_interrupt_line(u32 _line) {
+    u32 line = _line;
+
+    // redirect table has 2 32-bit entries per interrupt slot
+    u32 redirect_table_idx = (line * 2) + 0x10;
+    u32 entry = 0x50 + line;
+
+    ioapic_write(boot_info->ioapic_base, redirect_table_idx,     1 << 16); // Mask the interrupt while we tweak
+    ioapic_write(boot_info->ioapic_base, redirect_table_idx + 1, boot_info->cores[0].lapic_id << 24);
+    ioapic_write(boot_info->ioapic_base, redirect_table_idx,     entry);
+
+    kprintf("idx: 0x%x, added line: %d | %016b\n", redirect_table_idx, line, entry);
+}
+
 void x86_irq_handoff(int core_id) {
     // Enable APIC timer
     //   0xF0 - Spurious Interrupt Vector Register

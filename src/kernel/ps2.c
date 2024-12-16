@@ -54,6 +54,8 @@ void ps2_init(void) {
     status |= (PS2_PORT1_IRQ | PS2_PORT2_IRQ);
     ps2_cmd_arg(PS2_WRITE_CONFIG, status);
 
+    set_interrupt_line(1);
+
     ps2_cmd(PS2_ENABLE_PORT1);
     ps2_cmd(PS2_ENABLE_PORT2);
 }

@@ -216,9 +216,11 @@ void x86_parse_acpi(void) {
     boot_info->tsc_freq = tsc_freq;
 
     kassert(boot_info->lapic_base, "We don't have APIC?");
-    kprintf("Found the APIC: %p\n", boot_info->lapic_base);
+    kprintf("Found the APIC:     %p\n", boot_info->lapic_base);
+    kprintf("Found the I/O APIC: %p\n", boot_info->ioapic_base);
 
     memmap_view(boot_info->kernel_pml4, boot_info->lapic_base, boot_info->lapic_base, PAGE_SIZE, VMEM_PAGE_WRITE);
+    memmap_view(boot_info->kernel_pml4, boot_info->ioapic_base, boot_info->ioapic_base, PAGE_SIZE, VMEM_PAGE_WRITE);
 }
 
 // Enable APIC
