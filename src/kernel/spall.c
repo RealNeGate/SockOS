@@ -54,7 +54,7 @@ typedef struct __attribute__((packed)) SpallPadSkipEvent {
 
 static Lock spall_lock;
 
-#if 0
+#if !DEBUG_SPALL
 void spall_header(void) {}
 void spall_begin_event(const char* name, int tid) {}
 void spall_end_event(int tid) {}
