@@ -223,20 +223,11 @@ syscall_handler:
     test rcx, rcx
     jz syscall_handler.no_syscall
 syscall_handler.has_syscall:
-    ; switch to kernel PML4
-    mov rsi, cr3
-    mov r10, [boot_info]
-    mov rdx, [r10 + 0]
-    sub rdx, [r10 + 16]
-    mov cr3, rdx
-
     ; run C syscall stuff & preserve old address space (in callee saved reg)
     mov rdi, rsp
+    mov rsi, cr3
     mov rdx, gs:[0]
     call rcx
-
-    ; switch to new address space
-    mov cr3, rax
 syscall_handler.no_syscall:
     ; fxrstor also needs to be aligned to 16bytes
     add rsp, 512 + 16

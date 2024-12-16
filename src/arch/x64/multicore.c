@@ -4,6 +4,7 @@
 // https://github.com/klange/toaruos/blob/master/kernel/arch/x86_64/smp.c
 void smp_main(PerCPU* cpu) {
     arch_init(cpu->core_id);
+    arch_handoff(cpu->core_id);
 }
 
 u32 apic_get_errors(void) {

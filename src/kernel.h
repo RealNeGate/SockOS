@@ -4,8 +4,6 @@
 #include <boot_info.h>
 #include <kernel/printf.h>
 
-#define SCHED_QUANTA 15625 // 64Hz
-
 enum {
     CHUNK_SIZE = 2*1024*1024
 };
@@ -153,9 +151,9 @@ struct KObject {
         KOBJECT_VMO,
         // IPC
         KOBJECT_MAILBOX,
+        // Devices
+        KOBJECT_DEV_PCI,
     } tag;
-
-    atomic_int ref_count;
 };
 
 // chunk of virtual memory which can be shared across environments
@@ -213,6 +211,12 @@ struct KHandleTable {
     size_t capacity;
     KHandleEntry entries[];
 };
+
+typedef struct PCI_Device PCI_Device;
+
+enum { PCI_MAX_DEVICES = 10 };
+extern int pci_dev_count;
+extern PCI_Device* pci_devs[PCI_MAX_DEVICES];
 
 KObject_VMO* vmo_create_physical(uintptr_t addr, size_t size);
 
@@ -285,15 +289,14 @@ struct PerCPU_Scheduler {
 
     atomic_bool idleing;
 
-    // sum of the exec time of all active tasks
-    _Atomic(u64) total_exec;
-
     // stolen task
     struct Thread* migrated;
 
     // in micros
     u64 ideal_exec_time;
     u64 scheduling_period;
+
+    u64 min_exec_time;
 
     ThreadQueue active;
     ThreadQueue waiters;
@@ -303,10 +306,8 @@ void sched_init(void);
 void sched_yield(void);
 void sched_wait(u64 timeout);
 
-Thread* sched_try_switch(u64 now_time, u64* restrict out_wake_us);
-int sched_load_balancer(void* arg);
+Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us);
 
-void tq_insert(ThreadQueue* tq, Thread* t, bool is_waiter);
 void tq_append(ThreadQueue* tq, Thread* t);
 
 ////////////////////////////////

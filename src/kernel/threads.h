@@ -6,6 +6,8 @@
 #endif
 
 struct Thread {
+    KObject super; // tag = KOBJECT_THREAD
+
     Env* parent;
     Thread* prev_in_env;
     Thread* next_in_env;
@@ -14,7 +16,6 @@ struct Thread {
     Thread* next_sched;
 
     u64 exec_time;
-
     u64 max_exec_time;
 
     // active range

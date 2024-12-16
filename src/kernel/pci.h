@@ -1,27 +1,30 @@
 #pragma once
+#include <kernel.h>
 
 typedef struct {
 	u32 value;
 	u32 size;
 } Raw_BAR;
 
-typedef struct {
-	u16 vendor_id;
-	u16 device_id;
+struct PCI_Device {
+    KObject super; // tag = KOBJECT_DEV_PCI
 
-	u8 class;
-	u8 subclass;
-	u8 prog_IF;
-	u8 revision;
+    u16 vendor_id;
+    u16 device_id;
 
-	Raw_BAR bar[7];
-	int bar_count;
+    u8 class;
+    u8 subclass;
+    u8 prog_IF;
+    u8 revision;
 
-	u8 irq_line;
-	u8 irq_pin;
+    Raw_BAR bar[7];
+    int bar_count;
+
+    u8 irq_line;
+    u8 irq_pin;
 
     u32 status;
-} PCI_Device;
+};
 
 typedef struct {
 	u64 addr;

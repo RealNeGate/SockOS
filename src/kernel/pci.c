@@ -152,7 +152,7 @@ BAR parse_bar(Raw_BAR bar) {
 }
 char *pin_names[] = { "NONE", "A", "B", "C" "D" };
 
-static void pci_print_device(PCI_Device *dev) {
+void pci_print_device(PCI_Device *dev) {
     kprintf("[pci] Found %x:%x\n", dev->vendor_id, dev->device_id);
 
     char *subclass_tag;
@@ -352,7 +352,7 @@ static bool pci_check_device(PCI_Device *dev, u32 bus, u32 device, u8 func) {
             dev->irq_pin  = hdr1.interrupt_pin;
         } break;
         default: {
-            kprintf("Unhandled PCI header: %d\n", hdr.header_type);
+            ON_DEBUG(PCI)(kprintf("[pci] unhandled PCI header: %d\n", hdr.header_type));
             return false;
         } break;
     }
@@ -363,40 +363,50 @@ static bool pci_check_device(PCI_Device *dev, u32 bus, u32 device, u8 func) {
 extern Device_Driver _DRIVER_START[];
 extern Device_Driver _DRIVER_END[];
 
-#define MAX_DEVICES 10
-void pci_init(void) {
-    PCI_Device devs[MAX_DEVICES];
-    int dev_count = 0;
+int pci_dev_count;
+PCI_Device* pci_devs[PCI_MAX_DEVICES];
 
-    kprintf("[pci] Scanning for devices!\n");
+void pci_init(void) {
+    ON_DEBUG(PCI)(kprintf("[pci] Scanning for devices!\n"));
+
+    PCI_Device* dev = kheap_alloc(sizeof(PCI_Device));
+    dev->super.tag = KOBJECT_DEV_PCI;
+
+    // allocate kernel objects for each of the PCI devices
     for (u32 bus = 0; bus < 256; bus++) {
         for (u32 device = 0; device < 32; device++) {
-            PCI_Device *dev = &devs[dev_count];
-
             for (u8 func = 0; func < 8; func++) {
                 if (pci_check_device(dev, bus, device, func)) {
                     pci_print_device(dev);
 
+                    // kernel-sided drivers
                     for (Device_Driver* driver = _DRIVER_START; driver != _DRIVER_END; driver++) {
                         if (driver->vendor_id == dev->vendor_id && driver->device_id == dev->device_id) {
-                            kprintf("[pci] Driver found for: %s\n", driver->name);
+                            ON_DEBUG(PCI)(kprintf("[pci] Driver found for: %s\n", driver->name));
                             if (!driver->init(dev)) {
-                                kprintf("[pci] Failed to load driver!\n");
+                                ON_DEBUG(PCI)(kprintf("[pci] Failed to load driver!\n"));
                             }
-                            goto next_device;
+                            break;
                         }
                     }
-                    next_device:
 
-                    dev_count += 1;
-                    if (dev_count >= MAX_DEVICES) {
-                        kprintf("[pci] Hit max devices!\n");
+                    pci_devs[pci_dev_count++] = dev;
+                    if (pci_dev_count >= PCI_MAX_DEVICES) {
+                        ON_DEBUG(PCI)(kprintf("[pci] Hit max devices!\n"));
                         goto done_scanning;
                     }
+
+                    // new alloc for the next device we find
+                    dev = kheap_alloc(sizeof(PCI_Device));
+                    dev->super.tag = KOBJECT_DEV_PCI;
                 }
             }
         }
     }
+
     done_scanning:
-    kprintf("[pci] Done scanning\n");
+    ON_DEBUG(PCI)(kprintf("[pci] Done scanning\n"));
+
+    // last allocation was for a device which we didn't find
+    kheap_free(dev);
 }
