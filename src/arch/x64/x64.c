@@ -133,6 +133,21 @@ void arch_init(int core_id) {
     x86_irq_handoff(core_id);
 }
 
+typedef struct StackFrame_x64 StackFrame_x64;
+struct StackFrame_x64 {
+    StackFrame_x64* rbp;
+    void* rip;
+};
+
+void arch_backtrace(void) {
+    kprintf("CPU-%d: ALLOC:\n", cpu_get()->core_id);
+    StackFrame_x64* frame = __builtin_frame_address(0);
+    while (frame) {
+        kprintf("  %p\n", frame->rip);
+        frame = frame->rbp;
+    }
+}
+
 void _putchar(char ch) {
     io_out8(0x3f8, ch);
 }

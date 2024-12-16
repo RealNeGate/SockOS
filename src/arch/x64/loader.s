@@ -38,6 +38,7 @@ _start.reload_cs:
     mov fs, ax
     mov gs, ax
     mov rdi, rcx
+    xor ebp, ebp
     call kmain
     hlt
 

@@ -317,6 +317,7 @@ PerCPU* cpu_get(void);
 void arch_init(int core_id);
 void arch_wake_up(int core_id);
 uintptr_t arch_canonical_addr(uintptr_t p);
+void arch_backtrace(void);
 
 CPUState new_thread_state(void* entrypoint, uintptr_t arg, uintptr_t stack, size_t stack_size, bool is_user);
 _Noreturn void do_context_switch(CPUState* state, uintptr_t addr_space);
