@@ -3,8 +3,8 @@
 ////////////////////////////////
 // Syscall table
 ////////////////////////////////
-#define SYS_FN(name) static uintptr_t syscall_ ## name(CPUState* state, uintptr_t cr3, PerCPU* cpu)
-typedef uintptr_t SyscallFn(CPUState* state, uintptr_t cr3, PerCPU* cpu);
+#define SYS_FN(name) static void syscall_ ## name(CPUState* state, uintptr_t cr3, PerCPU* cpu)
+typedef void SyscallFn(CPUState* state, uintptr_t cr3, PerCPU* cpu);
 
 typedef enum {
     #define X(name, ...) SYS_ ## name,
@@ -14,7 +14,7 @@ typedef enum {
 } SyscallNum;
 
 // forward decls
-#define X(name, ...) static uintptr_t syscall_ ## name (CPUState*, uintptr_t, PerCPU*);
+#define X(name, ...) static void syscall_ ## name (CPUState*, uintptr_t, PerCPU*);
 #include "syscall_table.h"
 
 SyscallFn* syscall_table[] = {
@@ -59,8 +59,34 @@ SYS_FN(mmap) {
     } else {
         SYS_RET = vmem_map(cpu->current_thread->parent, SYS_PARAM0, SYS_PARAM1, page_aligned_size, VMEM_PAGE_WRITE | VMEM_PAGE_USER);
     }
+}
 
-    return cr3;
+SYS_FN(thread_create) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_thread_create(fn=%d, arg=%p)\n", SYS_PARAM0, SYS_PARAM1));
+
+    Env* env = cpu->current_thread->parent;
+    uintptr_t stack_ptr = vmem_map(env, 0, 0, 16384, VMEM_PAGE_WRITE | VMEM_PAGE_USER);
+    Thread* thread = thread_create(env, (ThreadEntryFn*) SYS_PARAM0, SYS_PARAM1, stack_ptr, 16384, true);
+
+    if (thread == NULL) {
+        SYS_RET = 0;
+    } else {
+        // make an accessible handle for the thread
+        SYS_RET = env_open_handle(env, 0, &thread->super);
+    }
+}
+
+SYS_FN(test) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_test()\n"));
+}
+
+void pci_print_device(PCI_Device *dev);
+SYS_FN(pci_claim_device) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_pci_claim_device(count=%d, query=%p)\n"));
+
+    for (int i = 0; i < pci_dev_count; i++) {
+        pci_print_device(pci_devs[i]);
+    }
 }
 
 #undef SYS_PARAM0

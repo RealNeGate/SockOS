@@ -6,7 +6,6 @@ KObject_VMO* vmo_create_physical(uintptr_t addr, size_t size) {
 
     KObject_VMO* obj = kheap_zalloc(sizeof(KObject_VMO));
     obj->super.tag = KOBJECT_VMO;
-    obj->super.ref_count = 1;
     obj->size = (size + PAGE_SIZE - 1) & -PAGE_SIZE;
     obj->paddr = addr;
     return obj;
@@ -16,7 +15,7 @@ KObject_Mailbox* vmo_mailbox_create(void) {
     KObject_Mailbox* obj = kheap_alloc(sizeof(KObject_Mailbox) + KOBJECT_MAILBOX_SIZE);
     *obj = (KObject_Mailbox){
         .super= {
-            .tag = KOBJECT_VMO, .ref_count = 1,
+            .tag = KOBJECT_VMO,
         },
         .mask = KOBJECT_MAILBOX_SIZE - 1,
     };

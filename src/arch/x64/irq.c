@@ -168,16 +168,14 @@ void x86_irq_startup(int core_id) {
     irq_enable(&idt);
 }
 
-u32 ioapic_read(u32 ioapic_addr, u32 reg) {
-    u64 addr = (u64)ioapic_addr;
-    *(u32 volatile *)addr = reg;
-    return *(u32 volatile *)(addr + 0x10);
+u32 ioapic_read(u64 ioapic_addr, u32 reg) {
+    *(u32 volatile *)ioapic_addr = reg;
+    return *(u32 volatile *)(ioapic_addr + 0x10);
 }
 
-void ioapic_write(u32 ioapic_addr, u32 reg, u32 val) {
-    u64 addr = (u64)ioapic_addr;
-    *(u32 volatile *)addr = reg;
-    *(u32 volatile *)(addr + 0x10) = val;
+void ioapic_write(u64 ioapic_addr, u32 reg, u32 val) {
+    *(u32 volatile *)ioapic_addr = reg;
+    *(u32 volatile *)(ioapic_addr + 0x10) = val;
 }
 
 void set_interrupt_line(u32 line, void fn(void*), void* ctx) {
@@ -238,7 +236,7 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
     PageTable* old_address_space = paddr2kaddr(cr3);
 
     #if DEBUG_IRQ
-    if (state->interrupt_num != 32) {
+    if (state->interrupt_num != 14 && state->interrupt_num != 32) {
         kprintf("CPU-%d: %s (%d): error=0x%x\n", cpu->core_id, interrupt_names[state->interrupt_num], state->interrupt_num, state->error);
         kprintf("  rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
     }
@@ -367,57 +365,39 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
         u64 now_micros = now / boot_info->tsc_freq;
 
         u64 next_wake;
-        Thread* next = NULL;
-
-        Thread* old_thread = cpu->current_thread;
-        if (old_thread) {
-            // update the executed time
-            u64 exec_time = now_micros - old_thread->start_time;
-            if (old_thread->wake_time != 0) {
-                old_thread->exec_time = exec_time;
-            } else {
-                if (exec_time < old_thread->max_exec_time) {
-                    // if the task hasn't finished it's time slice, we just keep running it
-                    next = old_thread;
-                    next_wake = old_thread->start_time + old_thread->max_exec_time;
-                } else {
-                    old_thread->exec_time = exec_time;
-
-                    // we've stopped running the task (either blocked or ran out of time), we
-                    // re-insert into the queue based on weight.
-                    PerCPU_Scheduler* sched = cpu->sched;
-                    sched->total_exec += old_thread->exec_time;
-                    tq_insert(&sched->active, old_thread, false);
-                }
-            }
-        }
-
-        if (next == NULL) {
-            next = sched_try_switch(now_micros, &next_wake);
-        }
+        spin_lock(&cpu->sched->lock);
+        Thread* next = sched_pick_next(cpu, now_micros, &next_wake);
+        spin_unlock(&cpu->sched->lock);
 
         // if we're switching, save old thread state
         if (cpu->current_thread != NULL) {
             cpu->current_thread->state = *state;
         }
 
+        // send EOI
+        APIC(0xB0) = 0;
+
         // don't arm the timer again if we're gonna sleep forever
+        uint64_t new_now_time = (__rdtsc() / boot_info->tsc_freq);
         if (next_wake != UINT64_MAX) {
-            uint64_t new_now_time = (__rdtsc() / boot_info->tsc_freq);
             uint64_t until_wake = next_wake > new_now_time ? next_wake - new_now_time : 1;
 
-            // send EOI
-            APIC(0xB0) = 0;
             // set new one-shot
-            APIC(0x380) = micros_to_apic_time(until_wake);
+            APIC(0x380) = micros_to_apic_time(next_wake > new_now_time ? next_wake - new_now_time : 1);
+
+            if (cpu->current_thread != next) {
+                ON_DEBUG(IRQ)(kprintf("[irq] CPU-%d: switch %p -> %p for %f ms\n", cpu->core_id, cpu->current_thread, next, (next_wake - new_now_time) / 1000.0f));
+            } else {
+                ON_DEBUG(IRQ)(kprintf("[irq] CPU-%d: stay on %p for %f ms\n", cpu->core_id, next, (next_wake - new_now_time) / 1000.0f));
+            }
         } else {
             cpu->sched->idleing = true;
-        }
 
-        if (cpu->current_thread != next) {
-            ON_DEBUG(IRQ)(kprintf("[irq] CPU-%d: switch %p -> %p, until %d ms\n", cpu->core_id, cpu->current_thread, next, next_wake / 1000));
-        } else {
-            ON_DEBUG(IRQ)(kprintf("[irq] CPU-%d: stay until %d ms\n", cpu->core_id, next_wake / 1000));
+            if (cpu->current_thread != next) {
+                ON_DEBUG(IRQ)(kprintf("[irq] CPU-%d: switch %p -> %p... \"forever\"\n", cpu->core_id, cpu->current_thread, next));
+            } else {
+                ON_DEBUG(IRQ)(kprintf("[irq] CPU-%d: stay on %p... \"forever\"\n", cpu->core_id, next));
+            }
         }
 
         if (next == NULL) {
@@ -433,10 +413,9 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
         if (cpu->current_thread != next) {
             *state = next->state;
             cpu->current_thread = next;
-        } else {
-            ON_DEBUG(IRQ)(kprintf("  CPU-%d >> STAY %p (until %d ms) <<\n\n", cpu->core_id, cpu->current_thread, next_wake / 1000));
         }
 
+        #if DEBUG_SPALL
         {
             // switch into thread's address space, for kernel threads they'll use kernel_pml4
             char str[32];
@@ -453,9 +432,7 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
             spall_end_event(cpu->core_id);
             spall_begin_event(str, cpu->core_id);
         }
-
-        uint64_t new_now_time = (__rdtsc() / boot_info->tsc_freq);
-        uint64_t until_wake = next_wake > new_now_time ? next_wake - new_now_time : 1;
+        #endif
 
         PageTable* next_pml4 = next->parent ? next->parent->addr_space.hw_tables : boot_info->kernel_pml4;
         return kaddr2paddr(next_pml4);

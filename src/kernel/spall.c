@@ -53,6 +53,7 @@ typedef struct __attribute__((packed)) SpallPadSkipEvent {
 } SpallPadSkipEvent;
 
 static Lock spall_lock;
+static atomic_bool spall_init;
 
 #if !DEBUG_SPALL
 void spall_header(void) {}
@@ -79,9 +80,12 @@ void spall_header(void) {
         .must_be_0 = 0
     };
     spall_write(&header, sizeof(SpallHeader));
+    spall_init = true;
 }
 
 void spall_begin_event(const char* name, int tid) {
+    kassert(spall_init, "spall not initialized!");
+
     int name_len = 0;
     while (name[name_len]) { name_len++; }
 
@@ -102,6 +106,8 @@ void spall_begin_event(const char* name, int tid) {
 }
 
 void spall_end_event(int tid) {
+    kassert(spall_init, "spall not initialized!");
+
     double when = __rdtsc();
     SpallEndEvent ev = {
         .type = SpallEventType_End,

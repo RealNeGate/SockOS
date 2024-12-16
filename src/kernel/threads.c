@@ -29,7 +29,6 @@ Env* env_create(void) {
     #error "TODO"
     #endif
 
-    // kprintf("AA\n");
     // dump_pages(boot_info->kernel_pml4, 0, 0);
     return env;
 }
@@ -53,6 +52,9 @@ static int round_robin_load_balance;
 Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintptr_t stack, size_t stack_size, bool is_user) {
     Thread* new_thread = kpool_alloc_page();
     *new_thread = (Thread){
+        .super = {
+            .tag = KOBJECT_THREAD,
+        },
         .parent = env,
         .wake_time = 0,
         .exec_time = 0,
@@ -87,11 +89,10 @@ Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintpt
             round_robin_load_balance = 0;
         }
 
-        kprintf("[sched] created Thread-%p, placed onto CPU-%d\n", new_thread, i);
+        kprintf("[sched] created Thread-%p, placed onto CPU-%d (%s)\n", new_thread, i, new_thread->parent ? "USER" : "KERNEL");
 
         PerCPU_Scheduler* sched = boot_info->cores[i].sched;
         spin_lock(&sched->lock);
-        sched->total_exec += new_thread->exec_time;
         tq_append(&sched->active, new_thread);
         spin_unlock(&sched->lock);
         arch_wake_up(i);

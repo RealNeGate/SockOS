@@ -33,6 +33,8 @@ void* memmap_view(PageTable* address_space, uintptr_t phys_addr, uintptr_t virt_
     kassert((virt_addr & 0xFFFull) == 0, "virtual address unaligned (%p)", virt_addr);
     kassert(flags & 0xFFF, "invalid flags (%x)", flags);
 
+    void* result = (void*) virt_addr;
+
     uint64_t page_flags = 0;
     if (flags & VMEM_PAGE_USER)  { page_flags |= PAGE_USER;  }
     if (flags & VMEM_PAGE_WRITE) { page_flags |= PAGE_WRITE; }
@@ -53,7 +55,7 @@ void* memmap_view(PageTable* address_space, uintptr_t phys_addr, uintptr_t virt_
         virt_addr += PAGE_SIZE, phys_addr += PAGE_SIZE;
     }
 
-    return (void*) virt_addr;
+    return result;
 }
 
 void memmap_unview(PageTable* address_space, uintptr_t virt_addr, size_t size) {
