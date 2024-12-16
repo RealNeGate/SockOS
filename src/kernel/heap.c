@@ -1,5 +1,6 @@
 #include <kernel.h>
 
+static Lock heap_lock;
 KernelFreeList* kernel_free_list;
 
 static KernelFreeList* kheap_next(KernelFreeList* n) {
@@ -20,6 +21,8 @@ void* kheap_zalloc(size_t obj_size) {
 }
 
 void* kheap_alloc(size_t obj_size) {
+    spin_lock(&heap_lock);
+
     // add free list header and 8b padding
     obj_size = (obj_size + 7) & ~7;
     obj_size += sizeof(KernelFreeList);
@@ -31,6 +34,7 @@ void* kheap_alloc(size_t obj_size) {
                 list->is_free = false;
 
                 ON_DEBUG(KHEAP)(kprintf("[kheap] alloc(%d) = %p\n", obj_size, &list->data[0]));
+                spin_unlock(&heap_lock);
                 return &list->data[0];
             } else if (list->size > obj_size) {
                 size_t full_size = list->size;
@@ -48,6 +52,7 @@ void* kheap_alloc(size_t obj_size) {
                 split->prev = list;
 
                 ON_DEBUG(KHEAP)(kprintf("[kheap] alloc(%d) = %p\n", obj_size, &list->data[0]));
+                spin_unlock(&heap_lock);
                 return &list->data[0];
             }
         }
@@ -57,6 +62,7 @@ void* kheap_alloc(size_t obj_size) {
 }
 
 void kheap_free(void* obj) {
+    spin_lock(&heap_lock);
     KernelFreeList* list = &((KernelFreeList*) obj)[-1];
     kassert(!list->is_free, "not allocated... you can't free it");
 
@@ -75,6 +81,7 @@ void kheap_free(void* obj) {
     }
 
     memset(list->data, 0xCD, list->size - sizeof(KernelFreeList));
+    spin_unlock(&heap_lock);
 }
 
 void* kheap_realloc(void* obj, size_t obj_size) {

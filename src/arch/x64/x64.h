@@ -57,7 +57,6 @@ void x86_enable_apic(void);
 void x86_boot_cores(void);
 
 void x86_irq_startup(int core_id);
-void x86_irq_handoff(int core_id);
 
 void x86_send_ipi(u64 lapic_id, u64 val);
 

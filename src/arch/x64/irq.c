@@ -195,7 +195,7 @@ void set_interrupt_line(u32 line, void fn(void*), void* ctx) {
     kprintf("idx: 0x%x, added line: %d | %016b\n", redirect_table_idx, line, entry);
 }
 
-void x86_irq_handoff(int core_id) {
+void arch_handoff(int core_id) {
     // Enable APIC timer
     //   0xF0 - Spurious Interrupt Vector Register
     //   Punting spurious interrupts (see PIC/CPU race condition, this is a fake interrupt)

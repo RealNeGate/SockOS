@@ -42,4 +42,19 @@ void kmain(BootInfo* restrict info) {
 
     kprintf("Beginning kernel boot...\n");
     arch_init(0);
+
+    static _Alignas(4096) const uint8_t desktop_elf[] = {
+        #embed "../../userland/desktop.elf"
+    };
+
+    Env* env = env_create();
+
+    // framebuffer passed along
+    KObject_VMO* fb_vmo = vmo_create_physical(0x80000000, 800 * 600 * sizeof(uint32_t));
+    KHandle fb = env_open_handle(env, 0, &fb_vmo->super);
+
+    void* desktop_elf_ptr = paddr2kaddr(((uintptr_t) desktop_elf - boot_info->elf_virtual_ptr) + boot_info->elf_physical_ptr);
+    Thread* mine = env_load_elf(env, desktop_elf_ptr, sizeof(desktop_elf));
+
+    arch_handoff(0);
 }
