@@ -7,13 +7,15 @@ typedef unsigned int KHandle;
 
 enum {
     // sleep(micros)
-    SYS_sleep         = 0,
+    SYS_sleep            = 0,
     // mmap(vmo, offset, size)
-    SYS_mmap          = 1,
+    SYS_mmap             = 1,
     // thread_create(start, arg)
-    SYS_thread_create = 2,
+    SYS_thread_create    = 2,
     // test()
-    SYS_test          = 3,
+    SYS_test             = 3,
+    // pci_claim_device()
+    SYS_pci_claim_device = 4,
 };
 
 void foo(void* arg) {
@@ -39,9 +41,10 @@ void baz(void* arg) {
 int _start(KHandle bootstrap_channel) {
     uint32_t* pixels = (uint32_t*) syscall(SYS_mmap, 1, 0, 800 * 600 * sizeof(uint32_t));
 
-    #if 1
-    syscall(SYS_thread_create, bar, NULL);
-    #else
+    // uint32_t video_devs[] = { 0x12341111 };
+    // int eth_pci = syscall(SYS_pci_claim_device, 1, video_devs);
+
+    #if 0
     for (int i = 0; i < 4; i++) {
         syscall(SYS_thread_create, foo, NULL);
     }

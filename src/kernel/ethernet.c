@@ -175,7 +175,6 @@ static bool init_eth(PCI_Device *eth_dev) {
 
         kprintf("allocating for rx ring: %d\n", i);
         uintptr_t ring_addr = kaddr2paddr(kheap_zalloc(4096));
-        kprintf("A %p %p\n", &rx_descs[i]->addr, ring_addr);
         rx_descs[i]->addr = (u64)ring_addr;
         rx_descs[i]->status = 0;
     }

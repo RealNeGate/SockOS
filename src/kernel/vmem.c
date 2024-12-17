@@ -218,6 +218,10 @@ bool vmem_protect(Env* env, uintptr_t addr, size_t size, VMem_Flags flags) {
     return false;
 }
 
+void vmem_commit_page(Env* env, uintptr_t vaddr, void* kaddr) {
+    vmem_addrhm_put(&env->addr_space.commit_table, (void*) vaddr, (void*) kaddr2paddr(kaddr));
+}
+
 void vmem_add_range(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_t vsize, VMem_Flags flags) {
     kassert((vaddr & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", vaddr);
     kassert((vsize & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", vsize);

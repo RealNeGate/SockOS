@@ -179,15 +179,15 @@ syscall_handler:
     swapgs
 
     ; save user stack, switch to kernel stack
-    mov gs:[24], rsp
-    mov rsp, gs:[16]
+    mov gs:[16], rsp
+    mov rsp, gs:[8]
 
     ; ss, rsp, flags, cs, rip
-    push 0x1B         ; ss
-    push qword gs:[24]; user rsp
-    push r11          ; rflags
-    push 0x23         ; cs
-    push rcx          ; rip
+    push 0x1B          ; ss
+    push qword gs:[16] ; user rsp
+    push r11           ; rflags
+    push 0x23          ; cs
+    push rcx           ; rip
 
     ; error & interrupt num
     push 0
@@ -249,15 +249,15 @@ syscall_handler.no_syscall:
     pop rbx
     pop rdx
     pop rcx
-    pop rax
+    ; pop rax
 
-    add rsp, 56 ; pop the rest of the CPU state
+    add rsp, 64 ; pop the rest of the CPU state
 
     ; enable interrupts
     or r11, 0x200
 
     ; give the user back his GS and stack
-    mov rsp, gs:[24]
+    mov rsp, gs:[16]
     swapgs
 
     ; we're using the 64bit sysret
@@ -273,7 +273,7 @@ syscall_handler.bad_syscall:
 ; RSI - PageTable*
 do_context_switch:
     ; switch to new address space
-    mov cr3, rax
+    mov cr3, rsi
 
     ; use CPUState as the stack
     mov rsp, rdi

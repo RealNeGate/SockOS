@@ -19,14 +19,14 @@ void x86_send_ipi(u64 lapic_id, u64 val) {
 }
 
 void arch_wake_up(int core_id) {
-    if (cpu_get()->core_id != core_id) {
+    /* if (cpu_get()->core_id != core_id) {
         u32 lapic_id = boot_info->cores[core_id].lapic_id;
         if (atomic_compare_exchange_strong(&boot_info->cores[core_id].sched->idleing, &(bool){ true }, false)) {
-            // sending an IPI which triggers int#32 (timer interrupt)
-            x86_send_ipi(lapic_id, 0x4820);
+            // sending an IPI which triggers int#F2 (IPI)
+            x86_send_ipi(lapic_id, 0x48F2);
             kprintf("Wake! %d\n", lapic_id);
         }
-    }
+    } */
 }
 
 static void powernap(u64 micros) {
@@ -64,8 +64,7 @@ void x86_boot_cores(void) {
         // if windows can get away with small kernel stacks so can we
         PerCPU* restrict cpu = &boot_info->cores[k];
         cpu->self = cpu;
-        cpu->kernel_stack     = (uint8_t*) sp;
-        cpu->kernel_stack_top = (uint8_t*) sp + 65536;
+        cpu->irq_stack_top = sp + 65536;
 
         // setup per-core GDT
         u64 gdt_base = (u64) boot_info->cores[k].gdt;

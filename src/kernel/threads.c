@@ -29,7 +29,7 @@ Env* env_create(void) {
     #error "TODO"
     #endif
 
-    // dump_pages(boot_info->kernel_pml4, 0, 0);
+    kprintf("[env] HW Tables at %p\n", env->addr_space.hw_tables);
     return env;
 }
 
@@ -49,7 +49,9 @@ void env_kill(Env* env) {
 }
 
 static int round_robin_load_balance;
-Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintptr_t stack, size_t stack_size, bool is_user) {
+Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintptr_t stack, size_t stack_size) {
+    bool is_user = env != NULL;
+
     Thread* new_thread = kpool_alloc_page();
     *new_thread = (Thread){
         .super = {
@@ -62,6 +64,16 @@ Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintpt
         // initial cpu state (CPU specific)
         .state = new_thread_state(entrypoint, arg, stack, stack_size, is_user)
     };
+
+    // userland programs need an extra stack for syscall handling
+    if (is_user) {
+        void* page = kpool_alloc_page();
+
+        new_thread->kstack_addr = (uintptr_t) page + PAGE_SIZE;
+        memmap_view(boot_info->kernel_pml4, kaddr2paddr(page), (uintptr_t) page, PAGE_SIZE, VMEM_PAGE_WRITE);
+
+        kprintf("[env] Thread kernel stack: %p - %p\n", new_thread->kstack_addr, new_thread->kstack_addr + PAGE_SIZE - 1);
+    }
 
     // attach to env
     if (env != NULL) {
@@ -180,10 +192,10 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
     }
 
     // tiny i know
-    uintptr_t stack_ptr = vmem_map(env, 0, 0, 16384, VMEM_PAGE_WRITE | VMEM_PAGE_USER);
+    uintptr_t stack_ptr = vmem_map(env, 0, 0, USER_STACK_SIZE, VMEM_PAGE_WRITE | VMEM_PAGE_USER);
 
     kprintf("[elf] entry=%p\n", elf_header->e_entry);
     kprintf("[elf] stack=%p\n", stack_ptr);
 
-    return thread_create(env, (ThreadEntryFn*) elf_header->e_entry, 0, stack_ptr, 16384, true);
+    return thread_create(env, (ThreadEntryFn*) elf_header->e_entry, 0, stack_ptr, USER_STACK_SIZE);
 }

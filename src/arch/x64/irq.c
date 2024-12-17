@@ -326,24 +326,23 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
 
         #if DEBUG_IRQ
         // just throw error
-        // kprintf("%s (%d): error=0x%x\n", interrupt_names[state->interrupt_num], state->interrupt_num, state->error);
-        // kprintf("  rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
+        kprintf("CPU-%d: Page Fault: error=%#x, env=%p\n", cpu->core_id, state->error, env);
         kprintf("  cr3=%p\n\n", cr3);
 
         // print memory access address
         u64 translated;
         if (memmap_translate(old_address_space, access_addr, &translated)) {
-            kprintf("  access: %p (translated: %p)\n", access_addr, translated);
+            kprintf("  access: %d:%p (translated: %p)\n", state->ss, access_addr, translated);
         } else {
-            kprintf("  access: %p (NOT PRESENT)\n", access_addr);
+            kprintf("  access: %d:%p (NOT PRESENT)\n", state->ss, access_addr);
         }
 
         // dissassemble code
         if (memmap_translate(old_address_space, state->rip, &translated)) {
-            kprintf("  code:   %p (translated: %p, %x)\n\n", state->rip, translated, *(u8*) paddr2kaddr(translated));
+            kprintf("  code:   %d:%p (translated: %p, %x)\n\n", state->cs, state->rip, translated, *(u8*) paddr2kaddr(translated));
             // x86_print_disasm((uint8_t*) translated, 16);
         } else {
-            kprintf("  code:   NOT PRESENT\n");
+            kprintf("  code:   %d:%p (NOT PRESENT)\n", state->cs, state->rip);
         }
         #endif
 
@@ -405,14 +404,18 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
             spall_begin_event("sleep", cpu->core_id);
 
             *state = kernel_idle_state;
-            cpu->current_thread = NULL;
+            cpu->current_thread   = NULL;
+            cpu->kernel_stack_top = NULL;
             return kaddr2paddr(boot_info->kernel_pml4);
         }
 
         // do thread context switch, if we changed
         if (cpu->current_thread != next) {
             *state = next->state;
-            cpu->current_thread = next;
+
+            cpu->current_thread   = next;
+            cpu->kernel_stack_top = (void*) next->kstack_addr;
+
         }
 
         #if DEBUG_SPALL

@@ -100,8 +100,8 @@ void arch_init(int core_id) {
 
         // set IST1, when an interrupt happens we'll be using this as the kernel
         // stack.
-        cpu->tss[0x24 / 4] = ((u64) cpu->kernel_stack_top);
-        cpu->tss[0x28 / 4] = ((u64) cpu->kernel_stack_top) >> 32ull;
+        cpu->tss[0x24 / 4] = ((u64) cpu->irq_stack_top);
+        cpu->tss[0x28 / 4] = ((u64) cpu->irq_stack_top) >> 32ull;
 
         asm volatile ("mov ax, 0x28\nltr ax" ::: "ax");
     }

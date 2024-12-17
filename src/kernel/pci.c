@@ -37,12 +37,12 @@ X(PCI_CLASS_UNASSIGNED,          0xFF,  "Unassigned")
 static const char *pci_class_names[] = {
     #define X(tag, id, name) [id] = name,
     PCI_CLASS
-    #undef X
+        #undef X
 };
 typedef enum {
     #define X(tag, id, name) tag = id,
     PCI_CLASS
-    #undef X
+        #undef X
 } PCI_Class;
 
 #define PCI_SUBCLASS_BR                                                 \
@@ -61,12 +61,12 @@ X(PCI_SUBCLASS_BR_INFINBAND2PCI, 0xA,  "Infiniband-to-PCI Host Bridge")
 static const char *pci_subclass_bridge_names[] = {
     #define X(tag, id, name) [id] = name,
     PCI_SUBCLASS_BR
-    #undef X
+        #undef X
 };
 typedef enum {
     #define X(tag, id, name) tag = id,
     PCI_SUBCLASS_BR
-    #undef X
+        #undef X
 } PCI_Subclass_Bridge;
 
 #define PCI_SUBCLASS_NET                                                       \
@@ -83,12 +83,12 @@ X(PCI_SUBCLASS_NET_FABRIC,      0x8,  "Fabric Controller")
 static const char *pci_subclass_net_names[] = {
     #define X(tag, id, name) [id] = name,
     PCI_SUBCLASS_NET
-    #undef X
+        #undef X
 };
 typedef enum {
     #define X(tag, id, name) tag = id,
     PCI_SUBCLASS_NET
-    #undef X
+        #undef X
 } PCI_Subclass_Network;
 
 #define PCI_SUBCLASS_DISP                        \
@@ -99,12 +99,12 @@ X(PCI_SUBCLASS_DISP_3D,  0x2,  "3D Controller")
 static const char *pci_subclass_display_names[] = {
     #define X(tag, id, name) [id] = name,
     PCI_SUBCLASS_DISP
-    #undef X
+        #undef X
 };
 typedef enum {
     #define X(tag, id, name) tag = id,
     PCI_SUBCLASS_DISP
-    #undef X
+        #undef X
 } PCI_Subclass_Display;
 
 #define PCI_SUBCLASS_STR                        \
@@ -115,12 +115,12 @@ X(PCI_SUBCLASS_STR_FLOPPY,  0x2,  "Floppy Disk Controller")
 static const char *pci_subclass_storage_names[] = {
     #define X(tag, id, name) [id] = name,
     PCI_SUBCLASS_STR
-    #undef X
+        #undef X
 };
 typedef enum {
     #define X(tag, id, name) tag = id,
     PCI_SUBCLASS_STR
-    #undef X
+        #undef X
 } PCI_Subclass_Storage;
 
 static inline u32 pci_read_u32(u32 bus, u32 device, u32 func, u32 offs) {
@@ -369,7 +369,7 @@ PCI_Device* pci_devs[PCI_MAX_DEVICES];
 void pci_init(void) {
     ON_DEBUG(PCI)(kprintf("[pci] Scanning for devices!\n"));
 
-    PCI_Device* dev = kheap_alloc(sizeof(PCI_Device));
+    PCI_Device* dev = kheap_zalloc(sizeof(PCI_Device));
     dev->super.tag = KOBJECT_DEV_PCI;
 
     // allocate kernel objects for each of the PCI devices
@@ -397,7 +397,7 @@ void pci_init(void) {
                     }
 
                     // new alloc for the next device we find
-                    dev = kheap_alloc(sizeof(PCI_Device));
+                    dev = kheap_zalloc(sizeof(PCI_Device));
                     dev->super.tag = KOBJECT_DEV_PCI;
                 }
             }

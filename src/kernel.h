@@ -5,7 +5,8 @@
 #include <kernel/printf.h>
 
 enum {
-    CHUNK_SIZE = 2*1024*1024
+    CHUNK_SIZE = 2*1024*1024,
+    USER_STACK_SIZE = 2*1024*1024,
 };
 
 #define NBHM_VIRTUAL_ALLOC(size)     memset(kernelfl_alloc(size), 0, size)
@@ -130,6 +131,9 @@ typedef struct {
 
 uintptr_t vmem_map(Env* env, KHandle vmo, size_t offset, size_t size, VMem_Flags flags);
 void vmem_add_range(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_t vsize, VMem_Flags flags);
+
+// maps a kernel page to a virtual address.
+void vmem_commit_page(Env* env, uintptr_t vaddr, void* kaddr);
 
 bool vmem_protect(Env* env, uintptr_t addr, size_t size, VMem_Flags flags);
 bool vmem_segfault(Env* env, uintptr_t access_addr, bool is_write, VMem_PTEUpdate* out_update);
@@ -274,7 +278,7 @@ bool env_close_handle(Env* env, KHandle handle);
 ////////////////////////////////
 typedef int ThreadEntryFn(void*);
 
-Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintptr_t stack, size_t stack_size, bool is_user);
+Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintptr_t stack, size_t stack_size);
 void thread_kill(Thread* thread);
 
 ////////////////////////////////

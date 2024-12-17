@@ -96,6 +96,6 @@ premain:
     add rdi, [data_start + 16]
 
     ; jump into C... finally!
-    mov rsp, [rdi + 16] ; kernel_stack_top
+    mov rsp, [rdi + 24] ; irq_stack_top
     call [data_start + 8]
 bootstrap_end:

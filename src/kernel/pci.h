@@ -9,6 +9,11 @@ typedef struct {
 struct PCI_Device {
     KObject super; // tag = KOBJECT_DEV_PCI
 
+    // which application actually claimed the
+    // PCI device, this is who's responsible for
+    // the interrupts as well.
+    _Atomic(Env*) parent;
+
     u16 vendor_id;
     u16 device_id;
 
@@ -46,3 +51,4 @@ typedef struct {
 } Device_Driver;
 
 BAR parse_bar(Raw_BAR bar);
+void pci_print_device(PCI_Device *dev);

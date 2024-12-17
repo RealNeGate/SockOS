@@ -442,8 +442,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     kernel_boot_info.fb = fb;
     kernel_boot_info.mem_map = mem_map;
     kernel_boot_info.kernel_pml4 = &page_tables[0];
-    kernel_boot_info.cores[0].kernel_stack = kstack_base;
-    kernel_boot_info.cores[0].kernel_stack_top = kstack_end;
+    kernel_boot_info.cores[0].irq_stack_top = kstack_end;
 
     // GDT setup
     {

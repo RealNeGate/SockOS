@@ -12,17 +12,17 @@ struct Thread {
     Thread* prev_in_env;
     Thread* next_in_env;
 
-    Thread* prev_sched;
-    Thread* next_sched;
-
+    // Scheduler info
     u64 exec_time;
     u64 max_exec_time;
-
-    // active range
     u64 start_time;
-
-    // sleeping
     u64 wake_time;
 
     CPUState state;
+
+    // Used for syscalls:
+    //   on x64 it's hooked to kernel GS base
+    //   when a userland app is running.
+    uintptr_t kstack_addr;
 };
+

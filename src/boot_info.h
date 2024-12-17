@@ -14,7 +14,7 @@ typedef struct {
 enum {
     PAGE_SIZE = 4096,
 
-    KERNEL_STACK_SIZE   = 0x10000,
+    KERNEL_STACK_SIZE   = 8192,
     KERNEL_STACK_COOKIE = 0xABCDABCD,
 
     MAX_CORES = 256,
@@ -68,10 +68,14 @@ typedef struct PerCPU PerCPU;
 struct PerCPU {
     PerCPU* self;
 
-    // used for interrupts
-    u8* kernel_stack;
-    u8* kernel_stack_top;
-    u8* user_stack_scratch;
+    // used for syscalls & interrupts
+    void* kernel_stack_top;
+    void* user_stack_scratch;
+    void* irq_stack_top;
+
+    // Scheduler info
+    struct Thread* current_thread;
+    PerCPU_Scheduler* sched;
 
     u32 core_id, lapic_id;
 
@@ -86,10 +90,6 @@ struct PerCPU {
 
     // Logging
     struct LogBuffer* log_buffer;
-
-    // Scheduler info
-    struct Thread* current_thread;
-    PerCPU_Scheduler* sched;
 
     #ifdef __x86_64__
     u64 gdt[7];
@@ -135,8 +135,10 @@ typedef struct {
 _Static_assert(offsetof(BootInfo, kernel_pml4) == 0, "the loader is sad");
 _Static_assert(offsetof(BootInfo, elf_virtual_entry) == 8, "the loader is sad");
 _Static_assert(offsetof(BootInfo, identity_map_ptr) == 16, "the loader.s & irq.s are sad");
-_Static_assert(offsetof(PerCPU, kernel_stack_top) == 16, "the irq.s & bootstrap.s is sad");
-_Static_assert(offsetof(PerCPU, user_stack_scratch) == 24, "the irq.s is sad");
+
+_Static_assert(offsetof(PerCPU, kernel_stack_top)   == 8,  "the irq.s & bootstrap.s is sad");
+_Static_assert(offsetof(PerCPU, user_stack_scratch) == 16, "the irq.s is sad");
+_Static_assert(offsetof(PerCPU, irq_stack_top)      == 24, "the loader.s is sad");
 
 extern BootInfo* boot_info;
 
