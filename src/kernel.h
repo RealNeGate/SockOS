@@ -46,10 +46,11 @@ void rwlock_unlock_exclusive(RWLock* lock);
 ////////////////////////////////
 typedef struct KernelFreeList KernelFreeList;
 struct KernelFreeList {
+    uint32_t cookie;
     // next node is directly after the end size of this one
-    uint64_t size     : 62;
-    uint64_t is_free  : 1;
-    uint64_t has_next : 1;
+    uint32_t size     : 30;
+    uint32_t is_free  : 1;
+    uint32_t has_next : 1;
     // used to track coalescing correctly
     KernelFreeList* prev;
     char data[];

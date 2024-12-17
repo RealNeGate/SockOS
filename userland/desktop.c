@@ -7,18 +7,51 @@ typedef unsigned int KHandle;
 
 enum {
     // sleep(micros)
-    SYS_sleep = 0,
+    SYS_sleep         = 0,
     // mmap(vmo, offset, size)
-    SYS_mmap  = 1,
+    SYS_mmap          = 1,
+    // thread_create(start, arg)
+    SYS_thread_create = 2,
+    // test()
+    SYS_test          = 3,
 };
 
 void foo(void* arg) {
-    __builtin_debugtrap();
+    for (;;) {
+        syscall(SYS_test);
+    }
+}
+
+void bar(void* arg) {
+    for (;;) {
+        syscall(SYS_test);
+        syscall(SYS_sleep, 6*1000);
+    }
+}
+
+void baz(void* arg) {
+    for (;;) {
+        syscall(SYS_test);
+        syscall(SYS_sleep, 3*1000);
+    }
 }
 
 int _start(KHandle bootstrap_channel) {
     uint32_t* pixels = (uint32_t*) syscall(SYS_mmap, 1, 0, 800 * 600 * sizeof(uint32_t));
-    // syscall(SYS_thread_create, foo, NULL);
+
+    #if 1
+    syscall(SYS_thread_create, bar, NULL);
+    #else
+    for (int i = 0; i < 4; i++) {
+        syscall(SYS_thread_create, foo, NULL);
+    }
+    for (int i = 0; i < 4; i++) {
+        syscall(SYS_thread_create, bar, NULL);
+    }
+    for (int i = 0; i < 4; i++) {
+        syscall(SYS_thread_create, baz, NULL);
+    }
+    #endif
 
     uint8_t mult = 0;
     int width = 800, height = 600, stride = 800;

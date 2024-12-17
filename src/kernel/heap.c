@@ -4,13 +4,14 @@ static Lock heap_lock;
 KernelFreeList* kernel_free_list;
 
 static KernelFreeList* kheap_next(KernelFreeList* n) {
-    return n->has_next ? (KernelFreeList*) &n->data[n->size - sizeof(KernelFreeList)] : NULL;
+    return n->has_next ? (KernelFreeList*) &n->data[n->size] : NULL;
 }
 
 static void kheap_dump(void) {
     kprintf("[kheap] dump\n");
     for (KernelFreeList* list = kernel_free_list; list; list = kheap_next(list)) {
-        kprintf("        %p size=%d (%s)\n", &list->data[0], list->size, list->is_free ? "free" : "used");
+        kassert(list->cookie == 0xABCDABCD, "bad cookie, heap corruption? %p", *(u64*) list);
+        kprintf("        %p size=%d (%s, %s)\n", &list->data[0], list->size, list->is_free ? "free" : "used", list->has_next ? "has next" : "end");
     }
 }
 
@@ -31,6 +32,7 @@ void* kheap_alloc(size_t obj_size) {
         if (list->is_free) {
             if (list->size == obj_size) {
                 // perfect fit
+                list->cookie = 0xABCDABCD;
                 list->is_free = false;
 
                 ON_DEBUG(KHEAP)(kprintf("[kheap] alloc(%d) = %p\n", obj_size, &list->data[0]));
@@ -41,11 +43,12 @@ void* kheap_alloc(size_t obj_size) {
 
                 // split
                 bool had_next = list->has_next;
-                KernelFreeList* split = (KernelFreeList*) &list->data[obj_size - sizeof(KernelFreeList)];
+                KernelFreeList* split = (KernelFreeList*) &list->data[obj_size];
                 list->is_free  = false;
                 list->has_next = true;
                 list->size = obj_size;
 
+                split->cookie = 0xABCDABCD;
                 split->size = full_size - obj_size;
                 split->has_next = had_next;
                 split->is_free = true;
@@ -67,17 +70,21 @@ void kheap_free(void* obj) {
     KernelFreeList* list = &((KernelFreeList*) obj)[-1];
     kassert(!list->is_free, "not allocated... you can't free it");
 
+    ON_DEBUG(KHEAP)(kprintf("[kheap] free(%p)\n", obj));
+
     list->is_free = true;
 
     // if there's free space ahead, merge with it
     KernelFreeList* next = kheap_next(list);
     if (next->is_free) {
+        list->has_next = next->has_next;
         list->size += next->size;
     }
 
     KernelFreeList* prev = list->prev;
     if (list->prev && list->prev->is_free) {
         prev->size += list->size;
+        prev->has_next = list->has_next;
         list = prev;
     }
 

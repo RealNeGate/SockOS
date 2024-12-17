@@ -89,7 +89,7 @@ Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintpt
             round_robin_load_balance = 0;
         }
 
-        kprintf("[sched] created Thread-%p, placed onto CPU-%d (%s)\n", new_thread, i, new_thread->parent ? "USER" : "KERNEL");
+        ON_DEBUG(SCHED)(kprintf("[sched] created Thread-%p, placed onto CPU-%d (%s)\n", new_thread, i, new_thread->parent ? "USER" : "KERNEL"));
 
         PerCPU_Scheduler* sched = boot_info->cores[i].sched;
         spin_lock(&sched->lock);

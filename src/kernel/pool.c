@@ -43,6 +43,7 @@ void kpool_init(MemMap* restrict mem_map) {
             kprintf("Kernel heap: %p - %p (%d MiB)\n", base, base + kernel_heap_size - 1, kernel_heap_size / (1024*1024));
 
             kernel_free_list = paddr2kaddr(base);
+            kernel_free_list->cookie = 0xABCDABCD;
             kernel_free_list->size = kernel_heap_size;
             kernel_free_list->is_free = 1;
             kernel_free_list->has_next = false;
