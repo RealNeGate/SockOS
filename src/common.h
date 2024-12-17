@@ -35,8 +35,8 @@ typedef int8_t              i8;
 #define FOR_N(it, start, end)           for (ptrdiff_t it = (start); it != (end); it++)
 
 // logging options
-#define DEBUG_SYSCALL 1
-#define DEBUG_IRQ     1
+#define DEBUG_SYSCALL 0
+#define DEBUG_IRQ     0
 #define DEBUG_PCI     0
 #define DEBUG_ENV     0
 #define DEBUG_VMEM    0

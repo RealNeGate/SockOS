@@ -5,18 +5,12 @@
 
 typedef unsigned int KHandle;
 
-enum {
-    // sleep(micros)
-    SYS_sleep            = 0,
-    // mmap(vmo, offset, size)
-    SYS_mmap             = 1,
-    // thread_create(start, arg)
-    SYS_thread_create    = 2,
-    // test()
-    SYS_test             = 3,
-    // pci_claim_device()
-    SYS_pci_claim_device = 4,
-};
+typedef enum {
+    #define X(name, ...) SYS_ ## name,
+    #include "../src/kernel/syscall_table.h"
+
+    SYS_MAX,
+} SyscallNum;
 
 void foo(void* arg) {
     for (;;) {
@@ -24,41 +18,39 @@ void foo(void* arg) {
     }
 }
 
-void bar(void* arg) {
-    for (;;) {
-        syscall(SYS_test);
-        syscall(SYS_sleep, 6*1000);
-    }
-}
-
-void baz(void* arg) {
-    for (;;) {
-        syscall(SYS_test);
-        syscall(SYS_sleep, 3*1000);
-    }
-}
+// Bochs video
+enum {
+    VBE_ID          = 0x0,
+    VBE_XRES        = 0x1,
+    VBE_YRES        = 0x2,
+    VBE_BPP         = 0x3,
+    VBE_ENABLE      = 0x4,
+    VBE_BANK        = 0x5,
+    VBE_VIRT_WIDTH  = 0x6,
+    VBE_VIRT_HEIGHT = 0x7,
+    VBE_X_OFFSET    = 0x8,
+    VBE_Y_OFFSET    = 0x9
+};
 
 int _start(KHandle bootstrap_channel) {
-    uint32_t* pixels = (uint32_t*) syscall(SYS_mmap, 1, 0, 800 * 600 * sizeof(uint32_t));
+    uint32_t video_devs[] = { 0x12341111 };
+    int display_pci = syscall(SYS_pci_claim_device, 1, video_devs);
 
-    // uint32_t video_devs[] = { 0x12341111 };
-    // int eth_pci = syscall(SYS_pci_claim_device, 1, video_devs);
+    size_t size;
+    int fb_bar = syscall(SYS_pci_get_bar, display_pci, 0, &size);
+    uint32_t* fb = (uint32_t*) syscall(SYS_mmap, fb_bar, 0, size);
 
-    #if 0
-    for (int i = 0; i < 4; i++) {
-        syscall(SYS_thread_create, foo, NULL);
-    }
-    for (int i = 0; i < 4; i++) {
-        syscall(SYS_thread_create, bar, NULL);
-    }
-    for (int i = 0; i < 4; i++) {
-        syscall(SYS_thread_create, baz, NULL);
-    }
-    #endif
+    int vbe_bar = syscall(SYS_pci_get_bar, display_pci, 2, &size);
+    volatile uint16_t* display_mmio = (volatile uint16_t*) syscall(SYS_mmap, vbe_bar, 0, size);
+
+    volatile uint16_t* vbe = &display_mmio[0x280];
+    int width  = vbe[VBE_XRES], height = vbe[VBE_YRES];
+    int stride = vbe[VBE_VIRT_WIDTH];
 
     uint8_t mult = 0;
-    int width = 800, height = 600, stride = 800;
+    int buffer = 0;
     for (;;) {
+        uint32_t* pixels = &fb[buffer ? (stride * height) : 0];
         uint64_t gradient_x = (width + 255) / 256;
         uint64_t gradient_y = (height + 255) / 256;
 
@@ -74,7 +66,11 @@ int _start(KHandle bootstrap_channel) {
             }
         }
 
-        syscall(SYS_sleep, 16*1000);
+        // swap buffers
+        vbe[VBE_Y_OFFSET] = buffer ? height : 0;
+        buffer = (buffer + 1) % 2;
+
+        syscall(SYS_sleep, 8*1000);
         mult += 1;
     }
     return 0;

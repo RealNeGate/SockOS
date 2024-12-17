@@ -66,7 +66,7 @@ SYS_FN(thread_create) {
 
     Env* env = cpu->current_thread->parent;
     uintptr_t stack_ptr = vmem_map(env, 0, 0, USER_STACK_SIZE, VMEM_PAGE_WRITE | VMEM_PAGE_USER);
-    Thread* thread = thread_create(env, (ThreadEntryFn*) SYS_PARAM0, SYS_PARAM1, stack_ptr, 16384);
+    Thread* thread = thread_create(env, (ThreadEntryFn*) SYS_PARAM0, SYS_PARAM1, stack_ptr, USER_STACK_SIZE);
 
     if (thread == NULL) {
         return 0;
@@ -77,7 +77,7 @@ SYS_FN(thread_create) {
 }
 
 SYS_FN(test) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_test()\n"));
+    ON_DEBUG(SYSCALL)(kprintf("SYS_test(%d)\n", SYS_PARAM0));
     return 0;
 }
 
@@ -113,6 +113,56 @@ SYS_FN(pci_claim_device) {
     } else {
         return 0;
     }
+}
+
+SYS_FN(pci_bar_count) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_pci_bar_count(out_mask=%p)\n", SYS_PARAM0));
+
+    Env* env = cpu->current_thread->parent;
+    PCI_Device* dev = env_get_handle(env, SYS_PARAM0, NULL);
+    if (dev->super.tag != KOBJECT_DEV_PCI) {
+        return 0;
+    }
+
+    // mask of which BARs are memory
+    u32 mask = 0;
+
+    *((u32*) SYS_PARAM0) = mask;
+    return dev->bar_count;
+}
+
+SYS_FN(pci_get_bar) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_pci_get_bar(pci=%d, bar=%d, out_size=%p)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2));
+
+    Env* env = cpu->current_thread->parent;
+    PCI_Device* dev = env_get_handle(env, SYS_PARAM0, NULL);
+    if (dev->super.tag != KOBJECT_DEV_PCI) {
+        return 0;
+    }
+
+    int bar_index = SYS_PARAM1;
+    if (bar_index >= dev->bar_count) {
+        return 0;
+    }
+
+    Raw_BAR* bar = &dev->bar[bar_index];
+
+    // I/O ports can't be mapped in
+    if (bar->value & 0x1) {
+        return 0; // (bar.value >> 2) << 2;
+    }
+
+    size_t size = ~bar->size + 1;
+    uintptr_t addr = (bar->value >> 4) << 4;
+
+    u8 type = (bar->value >> 1) & 0x3;
+    kassert(type == 0, "TODO: Only supports BAR 32-bit");
+    // b.prefetch = (bar.value >> 3) & 0x1;
+
+    *((size_t*) SYS_PARAM2) = size;
+
+    KObject_VMO* vmo_ptr = vmo_create_physical(addr, size);
+    return env_open_handle(env, 0, &vmo_ptr->super);
 }
 
 #undef SYS_PARAM0
