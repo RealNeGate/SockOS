@@ -245,7 +245,7 @@ int nbhm_thread_fn(void* arg) {
         #endif
 
         // no more refs, we can immediately free
-        // NBHM_VIRTUAL_FREE(table, sizeof(NBHM_Table) + table->cap*sizeof(NBHM_Entry));
+        kheap_free(table);
         ON_DEBUG(NBHM)(kprintf("[nbhm] free %p\n", table));
 
         nbhm_free_done++;

@@ -61,6 +61,26 @@ SYS_FN(mmap) {
     }
 }
 
+SYS_FN(munmap) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_munmap()\n"));
+
+    Env* env = cpu->current_thread->parent;
+
+    // we can't have multiple writers on the interval tree at once
+    // but we don't need a TLB shootdown until page writing.
+    rwlock_lock_exclusive(&env->addr_space.lock);
+
+    // modify pages
+    spall_begin_event("shootdown", cpu->core_id);
+    WaitQueue* wq = arch_tlb_lock(env);
+    arch_tlb_unlock(env, wq);
+    spall_end_event(cpu_get()->core_id);
+
+    rwlock_unlock_exclusive(&env->addr_space.lock);
+
+    return 0;
+}
+
 SYS_FN(thread_create) {
     ON_DEBUG(SYSCALL)(kprintf("SYS_thread_create(fn=%d, arg=%p)\n", SYS_PARAM0, SYS_PARAM1));
 

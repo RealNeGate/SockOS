@@ -2,13 +2,27 @@
 
 void spin_lock(Lock* lock) {
     // we shouldn't be spin locking...
-    while (!atomic_compare_exchange_strong(lock, &(uint32_t){ 0 }, 1)) {
+    while (!atomic_compare_exchange_strong(lock, &(u32){ 0 }, 1)) {
         asm volatile ("pause");
     }
 }
 
 void spin_unlock(Lock* lock) {
     atomic_exchange(lock, 0);
+}
+
+bool rwlock_try_lock_shared(RWLock* lock) {
+    u32 old = atomic_load_explicit(lock, memory_order_acquire);
+    do {
+        // it's being exclusively held rn
+        if (old == 1) { return false; }
+        // if there's no hold, let's take it (or if there's one we should tick up)
+    } while (!atomic_compare_exchange_strong(lock, &old, old + 2));
+    return true;
+}
+
+bool rwlock_is_exclusive(RWLock* lock) {
+    return atomic_load_explicit(lock, memory_order_acquire) == 1;
 }
 
 void rwlock_lock_shared(RWLock* lock) {

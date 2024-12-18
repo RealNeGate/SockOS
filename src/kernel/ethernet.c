@@ -163,29 +163,29 @@ static bool init_eth(PCI_Device *eth_dev) {
     kprintf("[eth] MAC: %s\n", mac_to_str(mac, mac_str));
 
     // Allocate RX and TX Rings
-    void *rx_virt_ptr = kheap_alloc(sizeof(rx_descs));
+    void *rx_virt_ptr = kheap_alloc(sizeof(e1000_rx_desc) * ELEM_COUNT(rx_descs));
     uintptr_t rx_phys_addr = kaddr2paddr(rx_virt_ptr);
 
-    void *tx_virt_ptr = kheap_alloc(sizeof(tx_descs));
+    void *tx_virt_ptr = kheap_alloc(sizeof(e1000_tx_desc) * ELEM_COUNT(tx_descs));
     uintptr_t tx_phys_addr = kaddr2paddr(tx_virt_ptr);
 
     e1000_rx_desc *r_descs = (e1000_rx_desc *)rx_virt_ptr;
+    uintptr_t rx_ring = kaddr2paddr(kheap_zalloc(ELEM_COUNT(rx_descs) * 4096));
     for (int i = 0; i < ELEM_COUNT(rx_descs); i++) {
-        rx_descs[i] = (e1000_rx_desc *)((u8 *)(r_descs + i*16));
+        rx_descs[i] = &r_descs[i];
 
-        kprintf("allocating for rx ring: %d\n", i);
-        uintptr_t ring_addr = kaddr2paddr(kheap_zalloc(4096));
-        rx_descs[i]->addr = (u64)ring_addr;
+        kprintf("allocating for rx ring: %d\n", i, rx_descs[i]);
+        rx_descs[i]->addr = rx_ring + i*4096;
         rx_descs[i]->status = 0;
     }
 
     e1000_tx_desc *t_descs = (e1000_tx_desc *)tx_virt_ptr;
+    uintptr_t tx_ring = kaddr2paddr(kheap_zalloc(ELEM_COUNT(tx_descs) * 4096));
     for (int i = 0; i < ELEM_COUNT(tx_descs); i++) {
-        tx_descs[i] = (e1000_tx_desc *)((u8 *)(t_descs + i*16));
+        tx_descs[i] = &t_descs[i];
 
         kprintf("allocating for tx ring: %d\n", i);
-        uintptr_t ring_addr = kaddr2paddr(kheap_zalloc(4096));
-        tx_descs[i]->addr = (u64)ring_addr;
+        tx_descs[i]->addr = rx_ring + i*4096;
         tx_descs[i]->status = 0;
         tx_descs[i]->cmd = 1;
     }

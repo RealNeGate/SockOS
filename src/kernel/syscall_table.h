@@ -1,7 +1,9 @@
 X(sleep)
-X(mmap)
-X(thread_create)
 X(test)
+X(thread_create)
+// VMM
+X(mmap)
+X(munmap)
 // PCI
 X(pci_claim_device)
 X(pci_bar_count)

@@ -226,6 +226,127 @@ void arch_handoff(int core_id) {
     }
 }
 
+uintptr_t timer_interrupt(CPUState* state, uintptr_t cr3, PerCPU* cpu, u64 now) {
+    if (apic_timer_status == APIC_CALIBRATING) {
+        apic_freq = (now - apic_freq) / APIC_CALIBRATION_TICKS;
+
+        kprintf("APIC timer freq = %d\n", apic_freq);
+
+        spall_header();
+        spall_begin_event("main", cpu->core_id);
+        apic_timer_status = APIC_CALIBRATED;
+    }
+
+    cpu->sched->idleing = false;
+
+    u64 now_micros = now / boot_info->tsc_freq;
+
+    u64 next_wake;
+    spin_lock(&cpu->sched->lock);
+    Thread* next = sched_pick_next(cpu, now_micros, &next_wake);
+    spin_unlock(&cpu->sched->lock);
+
+    // if we're switching, save old thread state
+    if (cpu->current_thread != NULL) {
+        cpu->current_thread->state = *state;
+    }
+
+    // send EOI
+    APIC(0xB0) = 0;
+
+    // don't arm the timer again if we're gonna sleep forever
+    uint64_t new_now_time = (__rdtsc() / boot_info->tsc_freq);
+    if (next_wake != UINT64_MAX) {
+        uint64_t until_wake = next_wake > new_now_time ? next_wake - new_now_time : 1;
+
+        // set new one-shot
+        APIC(0x380) = micros_to_apic_time(until_wake);
+
+        #if 1 // DEBUG_SCHED
+        if (cpu->current_thread != next) {
+            ON_DEBUG(IRQ)(kprintf("[irq] CPU-%d: switch %p -> %p for %f ms\n", cpu->core_id, cpu->current_thread, next, until_wake / 1000.0f));
+        } else {
+            ON_DEBUG(IRQ)(kprintf("[irq] CPU-%d: stay on %p for %f ms\n", cpu->core_id, next, until_wake / 1000.0f));
+        }
+        #endif
+    } else {
+        cpu->sched->idleing = true;
+
+        #if 1 // DEBUG_SCHED
+        if (cpu->current_thread != next) {
+            ON_DEBUG(IRQ)(kprintf("[irq] CPU-%d: switch %p -> %p... \"forever\"\n", cpu->core_id, cpu->current_thread, next));
+        } else {
+            ON_DEBUG(IRQ)(kprintf("[irq] CPU-%d: stay on %p... \"forever\"\n", cpu->core_id, next));
+        }
+        #endif
+    }
+
+    if (next == NULL) {
+        spall_end_event(cpu->core_id);
+        spall_begin_event("sleep", cpu->core_id);
+
+        *state = kernel_idle_state;
+        cpu->current_thread   = NULL;
+        cpu->kernel_stack_top = NULL;
+        return kaddr2paddr(boot_info->kernel_pml4);
+    }
+
+    // do thread context switch, if we changed
+    if (cpu->current_thread != next) {
+        *state = next->state;
+
+        cpu->current_thread   = next;
+        cpu->kernel_stack_top = (void*) next->kstack_addr;
+
+    }
+
+    #if DEBUG_SPALL
+    {
+        // switch into thread's address space, for kernel threads they'll use kernel_pml4
+        char str[32];
+        str[0] = 't', str[1] = 'a', str[2] = 's', str[3] = 'k', str[4] = '-';
+
+        const char hex[] = "0123456789abcdef";
+        int i = 5;
+        uint64_t addr = (uint64_t) next;
+        for(int j = 16; j--;) {
+            str[i++] = hex[(addr >> (j*4)) & 0xF];
+        }
+        str[i++] = 0;
+
+        spall_end_event(cpu->core_id);
+        spall_begin_event(str, cpu->core_id);
+    }
+    #endif
+
+    PageTable* next_pml4 = next->parent ? next->parent->addr_space.hw_tables : boot_info->kernel_pml4;
+    return kaddr2paddr(next_pml4);
+}
+
+static void dump_page_fault(CPUState* state, uintptr_t cr3, PerCPU* cpu, Env* env, u64 access_addr) {
+    PageTable* old_address_space = paddr2kaddr(cr3);
+
+    // just throw error
+    kprintf("CPU-%d: Page Fault: error=%#x, env=%p\n", cpu->core_id, state->error, env);
+    kprintf("  cr3=%p\n\n", cr3);
+
+    // print memory access address
+    u64 translated;
+    if (memmap_translate(old_address_space, access_addr, &translated)) {
+        kprintf("  access: %d:%p (translated: %p)\n", state->ss, access_addr, translated);
+    } else {
+        kprintf("  access: %d:%p (NOT PRESENT)\n", state->ss, access_addr);
+    }
+
+    // dissassemble code
+    if (memmap_translate(old_address_space, state->rip, &translated)) {
+        kprintf("  code:   %d:%p (translated: %p, %x)\n\n", state->cs, state->rip, translated, *(u8*) paddr2kaddr(translated));
+        // x86_print_disasm((uint8_t*) translated, 16);
+    } else {
+        kprintf("  code:   %d:%p (NOT PRESENT)\n", state->cs, state->rip);
+    }
+}
+
 uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
     if (apic_timer_status == APIC_CALIBRATED) {
         spall_end_event(cpu->core_id);
@@ -252,7 +373,15 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
         }
 
         if (env != NULL) {
-            rwlock_lock_shared(&env->addr_space.lock);
+            if (!rwlock_try_lock_shared(&env->addr_space.lock)) {
+                spall_end_event(cpu->core_id);
+
+                // if we failed to grab it, we're in the middle of an exclusive
+                // TLB modification, let's yield our time slice for now.
+                sched_wait(0);
+
+                return timer_interrupt(state, cr3, cpu, now);
+            }
 
             // update hardware page tables to match
             VMem_PTEUpdate update;
@@ -325,120 +454,13 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
         }
 
         #if DEBUG_IRQ
-        // just throw error
-        kprintf("CPU-%d: Page Fault: error=%#x, env=%p\n", cpu->core_id, state->error, env);
-        kprintf("  cr3=%p\n\n", cr3);
-
-        // print memory access address
-        u64 translated;
-        if (memmap_translate(old_address_space, access_addr, &translated)) {
-            kprintf("  access: %d:%p (translated: %p)\n", state->ss, access_addr, translated);
-        } else {
-            kprintf("  access: %d:%p (NOT PRESENT)\n", state->ss, access_addr);
-        }
-
-        // dissassemble code
-        if (memmap_translate(old_address_space, state->rip, &translated)) {
-            kprintf("  code:   %d:%p (translated: %p, %x)\n\n", state->cs, state->rip, translated, *(u8*) paddr2kaddr(translated));
-            // x86_print_disasm((uint8_t*) translated, 16);
-        } else {
-            kprintf("  code:   %d:%p (NOT PRESENT)\n", state->cs, state->rip);
-        }
+        dump_page_fault(state, cr3, cpu, env, access_addr);
         #endif
 
         x86_halt();
         return cr3;
-    } else if (state->interrupt_num == 32) {
-        if (apic_timer_status == APIC_CALIBRATING) {
-            apic_freq = (now - apic_freq) / APIC_CALIBRATION_TICKS;
-
-            kprintf("APIC timer freq = %d\n", apic_freq);
-
-            spall_header();
-            spall_begin_event("main", cpu->core_id);
-            apic_timer_status = APIC_CALIBRATED;
-        }
-
-        cpu->sched->idleing = false;
-
-        u64 now_micros = now / boot_info->tsc_freq;
-
-        u64 next_wake;
-        spin_lock(&cpu->sched->lock);
-        Thread* next = sched_pick_next(cpu, now_micros, &next_wake);
-        spin_unlock(&cpu->sched->lock);
-
-        // if we're switching, save old thread state
-        if (cpu->current_thread != NULL) {
-            cpu->current_thread->state = *state;
-        }
-
-        // send EOI
-        APIC(0xB0) = 0;
-
-        // don't arm the timer again if we're gonna sleep forever
-        uint64_t new_now_time = (__rdtsc() / boot_info->tsc_freq);
-        if (next_wake != UINT64_MAX) {
-            uint64_t until_wake = next_wake > new_now_time ? next_wake - new_now_time : 1;
-
-            // set new one-shot
-            APIC(0x380) = micros_to_apic_time(next_wake > new_now_time ? next_wake - new_now_time : 1);
-
-            if (cpu->current_thread != next) {
-                ON_DEBUG(IRQ)(kprintf("[irq] CPU-%d: switch %p -> %p for %f ms\n", cpu->core_id, cpu->current_thread, next, (next_wake - new_now_time) / 1000.0f));
-            } else {
-                ON_DEBUG(IRQ)(kprintf("[irq] CPU-%d: stay on %p for %f ms\n", cpu->core_id, next, (next_wake - new_now_time) / 1000.0f));
-            }
-        } else {
-            cpu->sched->idleing = true;
-
-            if (cpu->current_thread != next) {
-                ON_DEBUG(IRQ)(kprintf("[irq] CPU-%d: switch %p -> %p... \"forever\"\n", cpu->core_id, cpu->current_thread, next));
-            } else {
-                ON_DEBUG(IRQ)(kprintf("[irq] CPU-%d: stay on %p... \"forever\"\n", cpu->core_id, next));
-            }
-        }
-
-        if (next == NULL) {
-            spall_end_event(cpu->core_id);
-            spall_begin_event("sleep", cpu->core_id);
-
-            *state = kernel_idle_state;
-            cpu->current_thread   = NULL;
-            cpu->kernel_stack_top = NULL;
-            return kaddr2paddr(boot_info->kernel_pml4);
-        }
-
-        // do thread context switch, if we changed
-        if (cpu->current_thread != next) {
-            *state = next->state;
-
-            cpu->current_thread   = next;
-            cpu->kernel_stack_top = (void*) next->kstack_addr;
-
-        }
-
-        #if DEBUG_SPALL
-        {
-            // switch into thread's address space, for kernel threads they'll use kernel_pml4
-            char str[32];
-            str[0] = 't', str[1] = 'a', str[2] = 's', str[3] = 'k', str[4] = '-';
-
-            const char hex[] = "0123456789abcdef";
-            int i = 5;
-            uint64_t addr = (uint64_t) next;
-            for(int j = 16; j--;) {
-                str[i++] = hex[(addr >> (j*4)) & 0xF];
-            }
-            str[i++] = 0;
-
-            spall_end_event(cpu->core_id);
-            spall_begin_event(str, cpu->core_id);
-        }
-        #endif
-
-        PageTable* next_pml4 = next->parent ? next->parent->addr_space.hw_tables : boot_info->kernel_pml4;
-        return kaddr2paddr(next_pml4);
+    } else if (state->interrupt_num == 0x20) {
+        return timer_interrupt(state, cr3, cpu, now);
     } else if (state->interrupt_num >= 0x50) {
         // interrupt lines
         InterruptLineCallback* c = &line_callbacks[state->interrupt_num - 0x50];

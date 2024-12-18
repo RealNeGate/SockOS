@@ -4,14 +4,14 @@ static Lock heap_lock;
 KernelFreeList* kernel_free_list;
 
 static KernelFreeList* kheap_next(KernelFreeList* n) {
-    return n->has_next ? (KernelFreeList*) &n->data[n->size] : NULL;
+    return n->has_next ? (KernelFreeList*) &n->data[n->size - sizeof(KernelFreeList)] : NULL;
 }
 
-static void kheap_dump(void) {
+void kheap_dump(void) {
     kprintf("[kheap] dump\n");
     for (KernelFreeList* list = kernel_free_list; list; list = kheap_next(list)) {
-        kassert(list->cookie == 0xABCDABCD, "bad cookie, heap corruption? %p", *(u64*) list);
-        kprintf("        %p size=%d (%s, %s)\n", &list->data[0], list->size, list->is_free ? "free" : "used", list->has_next ? "has next" : "end");
+        kassert(list->cookie == 0xABCDABCD, "bad cookie, heap corruption at %p? %p", list, *(u64*) list);
+        kprintf("        [%p, %p) size=%d (%s, %s)\n", list, (char*) list + list->size, list->size, list->is_free ? "free" : "used", list->has_next ? "has next" : "end");
     }
 }
 
@@ -32,7 +32,6 @@ void* kheap_alloc(size_t obj_size) {
         if (list->is_free) {
             if (list->size == obj_size) {
                 // perfect fit
-                list->cookie = 0xABCDABCD;
                 list->is_free = false;
 
                 ON_DEBUG(KHEAP)(kprintf("[kheap] alloc(%d) = %p\n", obj_size, &list->data[0]));
@@ -43,7 +42,7 @@ void* kheap_alloc(size_t obj_size) {
 
                 // split
                 bool had_next = list->has_next;
-                KernelFreeList* split = (KernelFreeList*) &list->data[obj_size];
+                KernelFreeList* split = (KernelFreeList*) &list->data[obj_size - sizeof(KernelFreeList)];
                 list->is_free  = false;
                 list->has_next = true;
                 list->size = obj_size;
@@ -54,13 +53,14 @@ void* kheap_alloc(size_t obj_size) {
                 split->is_free = true;
                 split->prev = list;
 
-                ON_DEBUG(KHEAP)(kprintf("[kheap] alloc(%d) = %p\n", obj_size, &list->data[0]));
+                ON_DEBUG(KHEAP)(kprintf("[kheap] alloc(%d) = %p - %p\n", obj_size, &list->data[0], &list->data[obj_size - (sizeof(KernelFreeList) + 1)]));
                 spin_unlock(&heap_lock);
                 return &list->data[0];
             }
         }
     }
 
+    kheap_dump();
     kassert(0, "Ran out of kernel memory");
     spin_unlock(&heap_lock);
 }
@@ -88,7 +88,7 @@ void kheap_free(void* obj) {
         list = prev;
     }
 
-    memset(list->data, 0xCD, list->size - sizeof(KernelFreeList));
+    // memset(list->data, 0xCD, list->size - sizeof(KernelFreeList));
     spin_unlock(&heap_lock);
 }
 

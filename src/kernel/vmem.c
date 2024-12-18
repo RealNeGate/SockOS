@@ -214,6 +214,10 @@ uintptr_t vmem_map(Env* env, KHandle vmo, size_t offset, size_t size, VMem_Flags
     return vaddr;
 }
 
+void vmem_unmap(Env* env, uintptr_t vaddr, size_t size) {
+
+}
+
 bool vmem_protect(Env* env, uintptr_t addr, size_t size, VMem_Flags flags) {
     return false;
 }

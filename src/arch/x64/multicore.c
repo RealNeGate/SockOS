@@ -1,4 +1,5 @@
 #include "x64.h"
+#include "../../kernel/threads.h"
 
 // Toaruos SMP boot for reference
 // https://github.com/klange/toaruos/blob/master/kernel/arch/x86_64/smp.c
@@ -15,18 +16,63 @@ void x86_send_ipi(u64 lapic_id, u64 val) {
     APIC(0x310) = lapic_id << 24;
     APIC(0x300) = val;
 
-    while (APIC(0x300) & (1 << 12)) {}
+    while (APIC(0x300) & (1 << 12)) {
+        asm volatile ("pause");
+    }
 }
 
 void arch_wake_up(int core_id) {
-    /* if (cpu_get()->core_id != core_id) {
+    if (cpu_get()->core_id != core_id) {
         u32 lapic_id = boot_info->cores[core_id].lapic_id;
         if (atomic_compare_exchange_strong(&boot_info->cores[core_id].sched->idleing, &(bool){ true }, false)) {
-            // sending an IPI which triggers int#F2 (IPI)
-            x86_send_ipi(lapic_id, 0x48F2);
-            kprintf("Wake! %d\n", lapic_id);
+            // sending an IPI which triggers int#32 (Timer)
+            x86_send_ipi(lapic_id, 0x20);
+            ON_DEBUG(IRQ)(kprintf("[irq] wake up CPU-%d\n", lapic_id));
         }
-    } */
+    }
+}
+
+WaitQueue* arch_tlb_lock(Env* env) {
+    PerCPU* cpu = cpu_get();
+    WaitQueue* wq = waitqueue_alloc();
+
+    // acquire TLB lock
+    Thread* curr = cpu->current_thread;
+    while (!atomic_compare_exchange_strong(&env->addr_space.tlb_lock, &(Thread*){ NULL }, curr)) {
+        asm volatile ("pause");
+    }
+
+    // notify any thread which is running this environment to stand down
+    FOR_N(i, 0, boot_info->core_count) {
+        Thread* t = boot_info->cores[i].current_thread;
+        if (t != curr && t != NULL && t->parent == env) {
+            // sending an IPI which triggers int#32 (Timer)
+            x86_send_ipi(boot_info->cores[i].lapic_id, 0x20);
+            waitqueue_wait(wq, t);
+        }
+    }
+
+    // barrier until all of those threads have been replaced
+    FOR_N(i, 0, boot_info->core_count) {
+        Thread* volatile* t_ptr = (Thread* volatile*) &boot_info->cores[i].current_thread;
+        if (*t_ptr != curr) {
+            Thread* t = NULL;
+            while (t = *t_ptr, t && t->parent == env) {
+                // keep waiting
+                asm volatile ("pause");
+            }
+        }
+    }
+
+    return wq;
+}
+
+void arch_tlb_unlock(Env* env, WaitQueue* wq) {
+    env->addr_space.tlb_lock = NULL;
+
+    // wake up the threads
+    waitqueue_broadcast(wq);
+    waitqueue_free(wq);
 }
 
 static void powernap(u64 micros) {

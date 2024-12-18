@@ -105,6 +105,7 @@ Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintpt
 
         PerCPU_Scheduler* sched = boot_info->cores[i].sched;
         spin_lock(&sched->lock);
+        new_thread->active = true;
         tq_append(&sched->active, new_thread);
         spin_unlock(&sched->lock);
         arch_wake_up(i);

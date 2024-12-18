@@ -18,6 +18,11 @@ struct Thread {
     u64 start_time;
     u64 wake_time;
 
+    bool active;
+
+    // Last core that this thread ran on
+    int core_id;
+
     CPUState state;
 
     // Used for syscalls:
@@ -25,4 +30,6 @@ struct Thread {
     //   when a userland app is running.
     uintptr_t kstack_addr;
 };
+
+bool sched_is_blocked(Thread* t);
 

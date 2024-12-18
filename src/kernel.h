@@ -37,6 +37,9 @@ void spall_end_event(int tid);
 // bottom bit means there's an exclusive lock.
 typedef _Atomic(uint32_t) RWLock;
 
+bool rwlock_try_lock_shared(RWLock* lock);
+bool rwlock_is_exclusive(RWLock* lock);
+
 void rwlock_lock_shared(RWLock* lock);
 void rwlock_unlock_shared(RWLock* lock);
 void rwlock_lock_exclusive(RWLock* lock);
@@ -63,6 +66,7 @@ void* kheap_realloc(void* obj, size_t obj_size);
 void* kheap_alloc(size_t obj_size);
 void* kheap_zalloc(size_t obj_size);
 void kheap_free(void* obj);
+void kheap_dump(void);
 
 ////////////////////////////////
 // Kernel pool
@@ -250,6 +254,8 @@ struct Env {
         //   "backwards progress" requires everyone to acknowledge the changes. For instance, unmapping a page requires everyone
         //   to acknowledge it or else the data might be corrupted, miss an important segfault.
         RWLock lock;
+        //   when TLB locked, this is the only thread which isn't considered blocked.
+        _Atomic(Thread*) tlb_lock;
 
         // B+ tree for intervals
         VMem_Node* root;
@@ -278,8 +284,28 @@ bool env_close_handle(Env* env, KHandle handle);
 ////////////////////////////////
 typedef int ThreadEntryFn(void*);
 
+typedef struct WaitNode WaitNode;
+struct WaitNode {
+    WaitNode* next;
+    Thread* thread;
+};
+
+typedef struct {
+    Lock lock;
+
+    WaitNode* tail;
+    WaitNode dummy;
+} WaitQueue;
+
 Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintptr_t stack, size_t stack_size);
 void thread_kill(Thread* thread);
+
+WaitQueue* waitqueue_alloc(void);
+void waitqueue_free(WaitQueue* wq);
+
+void waitqueue_wait(WaitQueue* wq, Thread* t);
+Thread* waitqueue_wake(WaitQueue* wq);
+void waitqueue_broadcast(WaitQueue* wq);
 
 ////////////////////////////////
 // Scheduler
@@ -294,13 +320,8 @@ struct PerCPU_Scheduler {
 
     atomic_bool idleing;
 
-    // stolen task
-    struct Thread* migrated;
-
     // in micros
     u64 ideal_exec_time;
-    u64 scheduling_period;
-
     u64 min_exec_time;
 
     ThreadQueue active;
@@ -313,6 +334,7 @@ void sched_wait(u64 timeout);
 
 Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us);
 
+void tq_insert(ThreadQueue* tq, Thread* t, bool is_waiter);
 void tq_append(ThreadQueue* tq, Thread* t);
 
 ////////////////////////////////
@@ -324,6 +346,11 @@ void arch_init(int core_id);
 void arch_handoff(int core_id);
 void arch_wake_up(int core_id);
 uintptr_t arch_canonical_addr(uintptr_t p);
+
+// broadcast to all cores running an Env that we need to
+// modify the address space.
+WaitQueue* arch_tlb_lock(Env* env);
+void arch_tlb_unlock(Env* env, WaitQueue* wq);
 
 void arch_backtrace(void);
 

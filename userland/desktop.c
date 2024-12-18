@@ -47,6 +47,8 @@ int _start(KHandle bootstrap_channel) {
     int width  = vbe[VBE_XRES], height = vbe[VBE_YRES];
     int stride = vbe[VBE_VIRT_WIDTH];
 
+    syscall(SYS_thread_create, foo, NULL);
+
     uint8_t mult = 0;
     int buffer = 0;
     for (;;) {
@@ -69,6 +71,8 @@ int _start(KHandle bootstrap_channel) {
         // swap buffers
         vbe[VBE_Y_OFFSET] = buffer ? height : 0;
         buffer = (buffer + 1) % 2;
+
+        syscall(SYS_munmap);
 
         syscall(SYS_sleep, 8*1000);
         mult += 1;
