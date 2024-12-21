@@ -12,8 +12,8 @@ NINJA_SCRIPT: str = "build.ninja"
 LD = 'ld.lld' if platform.system() != 'Windows' else 'ld.lld.exe'
 
 CFLAGS = [
+    '-g',
     '-Wall',
-    '-O1',
     '-std=gnu23',
     '-nostdlib',
     '-masm=intel',
@@ -98,8 +98,8 @@ file.write(f'\n')
 
 kernel_asm = " ".join(asm_outputs["kernel"])
 objs_str = " ".join(objs)
-file.write(f'build bin/kernel.so | output.map: ld {objs_str} {kernel_asm} | link.ld\n')
-file.write(f'  flags = -T link.ld -nostdlib -Map=output.map -pie\n')
+file.write(f'build bin/kernel.so | bin/output.map: ld {objs_str} {kernel_asm} | link.ld\n')
+file.write(f'  flags = -T link.ld -nostdlib -Map=bin/output.map -pie\n')
 file.write(f'\n')
 
 file.close()

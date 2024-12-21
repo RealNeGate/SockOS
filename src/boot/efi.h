@@ -35,7 +35,7 @@ X(EFI_WRITE_PROTECTED)
 typedef enum {
     #define X(name) name,
     EFI_ERRORS
-        #undef X
+    #undef X
 } EFI_Errors;
 
 typedef void*    EFI_HANDLE;
@@ -564,6 +564,8 @@ typedef EFI_STATUS(EFIAPI* EFI_FILE_WRITE_EX)(
 typedef EFI_STATUS(EFIAPI* EFI_FILE_FLUSH_EX)(
     IN struct _EFI_FILE_HANDLE* File, IN OUT EFI_FILE_IO_TOKEN* Token);
 
+#define EFI_FILE_INFO_GUID { 0x09576e92, 0x6d3f, 0x11d2, { 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b } }
+
 typedef struct _EFI_FILE_HANDLE {
     u64              Revision;
     EFI_FILE_OPEN         Open;
@@ -604,7 +606,7 @@ char *efi_errstr(int val) {
         case error:      \
         return #error;
         EFI_ERRORS
-            #undef X
+        #undef X
 
         default: return "???";
     }

@@ -198,5 +198,5 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
     kprintf("[elf] entry=%p\n", elf_header->e_entry);
     kprintf("[elf] stack=%p\n", stack_ptr);
 
-    return thread_create(env, (ThreadEntryFn*) elf_header->e_entry, 0, stack_ptr, USER_STACK_SIZE);
+    return thread_create(env, (ThreadEntryFn*) elf_header->e_entry, boot_info->tsc_freq, stack_ptr, USER_STACK_SIZE);
 }

@@ -36,6 +36,7 @@ void kmain(BootInfo* restrict info) {
     boot_info->cores[0].irq_stack_top = paddr2kaddr((uintptr_t) boot_info->cores[0].irq_stack_top);
 
     // convert pointers into kernel addresses
+    boot_info->map_file = paddr2kaddr((uintptr_t) boot_info->map_file);
     boot_info->kernel_pml4 = paddr2kaddr((uintptr_t) boot_info->kernel_pml4);
     boot_info->mem_map.regions = paddr2kaddr((uintptr_t) boot_info->mem_map.regions);
 
@@ -45,6 +46,13 @@ void kmain(BootInfo* restrict info) {
     static _Alignas(4096) const uint8_t desktop_elf[] = {
         #embed "../../userland/desktop.elf"
     };
+
+    #if 0
+    char* str = boot_info->map_file;
+    for (int i = 0; i < boot_info->map_file_size; i++) {
+        _putchar(str[i]);
+    }
+    #endif
 
     Env* env = env_create();
 

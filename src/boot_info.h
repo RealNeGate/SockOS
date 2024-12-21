@@ -128,6 +128,10 @@ typedef struct {
 
     Framebuffer fb;
 
+    // debug map file
+    size_t map_file_size;
+    char* map_file;
+
     _Atomic(u64) average_exec_time;
 } BootInfo;
 

@@ -126,9 +126,6 @@ SYS_FN(pci_claim_device) {
 
     done:
     if (found != NULL) {
-        kprintf("CLAIMED!!\n");
-        pci_print_device(found);
-
         return env_open_handle(env, 0, &found->super);
     } else {
         return 0;

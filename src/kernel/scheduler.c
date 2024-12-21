@@ -161,18 +161,18 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
         kassert(curr == sched->active.data[sched->active.head], "bad %p", curr);
         u64 delta = now_time - curr->start_time;
 
-        // update exec_time
+        // update exec_time, higher priorities
         curr->exec_time += delta;
         curr->start_time = now_time;
 
-        ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p got %f ms (exec_time = %f ms)\n", cpu->core_id, curr, delta / 1000.0f, curr->exec_time / 1000.0f));
+        // ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p got %f ms (exec_time = %f ms)\n", cpu->core_id, curr, delta / 1000.0f, curr->exec_time / 1000.0f));
 
+        u64 exec_time = curr->exec_time - sched->min_exec_time;
         if (!sched_is_blocked(curr)) {
             // if the task hasn't finished it's time slice, we just keep running it
-            if (curr->exec_time < curr->max_exec_time) {
-                // ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Keep running Thread-%p for another %f ms\n", cpu->core_id, curr, (curr->max_exec_time - curr->exec_time) / 1000.0f));
-
-                *out_wake_us = now_time + (curr->max_exec_time - curr->exec_time);
+            if (exec_time < curr->max_exec_time) {
+                // ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Keep running Thread-%p for another %f ms\n", cpu->core_id, curr, (curr->max_exec_time - exec_time) / 1000.0f));
+                *out_wake_us = now_time + (curr->max_exec_time - exec_time);
                 return curr;
             }
 
@@ -256,7 +256,7 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
         sched->min_exec_time = curr->exec_time;
     }
 
-    ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p with lowest exec time (%f ms)\n", core_id, curr, exec_time / 1000.0f));
+    // ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p with lowest exec time (%f ms)\n", core_id, curr, exec_time / 1000.0f));
 
     // allocate time slice
     curr->start_time = now_time;
@@ -266,7 +266,27 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
         curr->max_exec_time = 1;
     }
 
-    // ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: alloting %d micros to Thread-%p\n", core_id, curr->max_exec_time, curr));
+    // check the next timed wait, if there's something coming up which "deserves" the time more, we'll
+    // truncate our slice and resolve them as quickly as possible.
+    #if 0
+    if (sched->waiters.head != sched->waiters.tail) {
+        Thread* waiter = sched->waiters.data[sched->waiters.head];
+        kassert(now_time < waiter->wake_time, "how is it still in the wait queue? %d %d", now_time, waiter->wake_time);
+
+        uint64_t time_until_wake = waiter->wake_time - now_time;
+
+        // exec time if it ran until the pre-empt point
+        uint64_t next_active  = (curr->exec_time + time_until_wake) - sched->min_exec_time;
+
+        // exec time if it ran normally
+        uint64_t next_active2 = (curr->exec_time + curr->max_exec_time) - sched->min_exec_time;
+
+        ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p gonna wake in %f ms (waiter: %f ms vs active: %f ms vs active2: %f ms)\n", core_id, waiter, (waiter->wake_time - now_time) / 1000.0f, waiter->exec_time / 1000.0f, next_active / 1000.0f, next_active2 / 1000.0f));
+    }
+    #endif
+
+    ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p was alloted %f ms (exec time = %f)\n", core_id, curr, curr->max_exec_time / 1000.0f, exec_time / 1000.0f));
     *out_wake_us = now_time + curr->max_exec_time;
     return curr;
 }
+
