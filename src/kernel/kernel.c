@@ -39,8 +39,16 @@ void kmain(BootInfo* restrict info) {
     boot_info->map_file = paddr2kaddr((uintptr_t) boot_info->map_file);
     boot_info->kernel_pml4 = paddr2kaddr((uintptr_t) boot_info->kernel_pml4);
     boot_info->mem_map.regions = paddr2kaddr((uintptr_t) boot_info->mem_map.regions);
+    boot_info->fb.pixels = paddr2kaddr((uintptr_t) boot_info->fb.pixels);
 
     kprintf("Beginning kernel boot...\n");
+
+    for (size_t j = 0; j < 50; j++) {
+        for (size_t i = 0; i < 50; i++) {
+            boot_info->fb.pixels[i + (j * boot_info->fb.stride)] = 0xFF1F7FFF;
+        }
+    }
+
     arch_init(0);
 
     static _Alignas(4096) const uint8_t desktop_elf[] = {
@@ -58,6 +66,7 @@ void kmain(BootInfo* restrict info) {
 
     void* desktop_elf_ptr = paddr2kaddr(((uintptr_t) desktop_elf - boot_info->elf_virtual_ptr) + boot_info->elf_physical_ptr);
     Thread* mine = env_load_elf(env, desktop_elf_ptr, sizeof(desktop_elf));
+    thread_resume(mine);
 
     arch_handoff(0);
 }

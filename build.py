@@ -82,7 +82,7 @@ for path in Path("src/arch/x64/").rglob("*.c"):
     objs.append("objs/" + path.name + ".o")
 
 for path in Path("src/kernel/").rglob("*.c"):
-    file.write(f'build objs/{path.name}.o: cc {path}\n')
+    file.write(f'build objs/{path.name}.o: cc {path} | objs/desktop.o\n')
     file.write(f'  flags = -I src -fPIC -fno-omit-frame-pointer -target x86_64-linux-gnu -ffreestanding {cflags}\n')
     file.write(f'\n')
     objs.append("objs/" + path.name + ".o")

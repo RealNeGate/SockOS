@@ -8,4 +8,8 @@ X(munmap)
 X(pci_claim_device)
 X(pci_bar_count)
 X(pci_get_bar)
+// RPC
+X(mailbox_create)
+X(mailbox_send)
+X(mailbox_yield)
 #undef X

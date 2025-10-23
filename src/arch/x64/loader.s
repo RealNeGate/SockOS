@@ -6,8 +6,8 @@ section .text
 align 4096
 _start:
     ; switch to new kernel stack
-    mov rsp, rdx
     cli
+    mov rsp, rdx
 
     ; switch page tables
     mov rax, [rcx + 0]

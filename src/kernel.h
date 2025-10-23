@@ -24,6 +24,9 @@ typedef struct KObject KObject;
 
 typedef unsigned int KHandle;
 
+typedef _Atomic(u32) atomic_u32;
+typedef _Atomic(u64) atomic_u64;
+
 ////////////////////////////////
 // Profiling
 ////////////////////////////////
@@ -176,27 +179,23 @@ struct KObject_VMO {
     uintptr_t paddr;
 };
 
-enum { KOBJECT_MAILBOX_SIZE = 65536 };
+enum { KOBJECT_MAILBOX_SIZE = 256 };
 typedef struct {
-    uint16_t handle_count;
-    uint16_t byte_count;
     // who is the message being sent to, 0 for "any"
-    uint32_t rx_id, tx_id;
-    uint8_t data[];
-} Message;
+    u32 rx_id, tx_id;
+    u64 data[7];
+} MailboxMsg;
 
+// Ring buffer of stacks
 typedef struct {
     KObject super; // tag = KOBJECT_MAILBOX
+    u32 cap_log2;
+    void* handler_pc;
 
-    // TODO(NeGate): we must remove this lock
-    // later, it will become an IPC bottleneck.
-    Lock lock;
+    _Alignas(64) atomic_u64 head;
+    _Alignas(64) atomic_u64 tail;
 
-    size_t mask;
-    _Atomic(u64) bot, top;
-
-    // each message is aligned to 8b and has the same header
-    uint8_t data[];
+    atomic_u64 ids_n_items[];
 } KObject_Mailbox;
 
 // 10 cache lines worth of handles
@@ -229,9 +228,13 @@ extern PCI_Device* pci_devs[PCI_MAX_DEVICES];
 
 KObject_VMO* vmo_create_physical(uintptr_t addr, size_t size);
 
-KObject_Mailbox* vmo_mailbox_create(void);
-void vmo_mailbox_send(KObject_Mailbox* mailbox, size_t handle_count, KHandle* handles, size_t data_size, uint8_t* data);
-void vmo_mailbox_recv(KObject_Mailbox* mailbox, size_t handle_count, KHandle* handles, size_t data_size, uint8_t* data);
+KObject_Mailbox* mailbox_create(size_t max_requests);
+
+// return the thread we'll be using the respond
+Thread* mailbox_send(KObject_Mailbox* mailbox);
+
+// hand the thread back, we're now waiting for new messages
+void mailbox_recv(KObject_Mailbox* mailbox, Thread* thread);
 
 ////////////////////////////////
 // Environment (memory + resources accessible bound to some set of threads)
@@ -298,6 +301,7 @@ typedef struct {
 } WaitQueue;
 
 Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintptr_t stack, size_t stack_size);
+void thread_resume(Thread* thread);
 void thread_kill(Thread* thread);
 
 WaitQueue* waitqueue_alloc(void);

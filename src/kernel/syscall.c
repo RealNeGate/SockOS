@@ -44,9 +44,9 @@ SYS_FN(sleep) {
     ON_DEBUG(SYSCALL)(kprintf("SYS_sleep(t=%d us)\n", SYS_PARAM0));
 
     sched_wait(SYS_PARAM0);
+
     state->interrupt_num = 32;
     uintptr_t new_cr3 = x86_irq_int_handler(state, cr3, cpu);
-
     do_context_switch(state, new_cr3);
 }
 
@@ -92,6 +92,7 @@ SYS_FN(thread_create) {
         return 0;
     } else {
         // make an accessible handle for the thread
+        thread_resume(thread);
         return env_open_handle(env, 0, &thread->super);
     }
 }
@@ -180,6 +181,114 @@ SYS_FN(pci_get_bar) {
 
     KObject_VMO* vmo_ptr = vmo_create_physical(addr, size);
     return env_open_handle(env, 0, &vmo_ptr->super);
+}
+
+SYS_FN(mailbox_create) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_create(stack_size=%d, max_rqs=%d, handler=%p)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2));
+
+    Env* env = cpu->current_thread->parent;
+
+    size_t stack_stride = (SYS_PARAM0 + PAGE_SIZE);
+    size_t stack_pool_size = stack_stride*SYS_PARAM1;
+    uintptr_t stack_ptr = vmem_map(env, 0, 0, stack_pool_size, VMEM_PAGE_WRITE | VMEM_PAGE_USER);
+    if (stack_ptr == 0) {
+        return 0;
+    }
+
+    KObject_Mailbox* mailbox = mailbox_create(SYS_PARAM1);
+    if (mailbox == NULL) {
+        return 0;
+    }
+
+    mailbox->handler_pc = (void*) SYS_PARAM2;
+    FOR_N(i, 0, SYS_PARAM1) {
+        uintptr_t sp = stack_ptr + stack_stride*i;
+        Thread* thread = thread_create(env, (ThreadEntryFn*) SYS_PARAM0, SYS_PARAM1, sp, stack_stride);
+        kassert(thread, "BAD BAD TODO");
+
+        thread->wait_obj = mailbox;
+        mailbox_recv(mailbox, thread);
+    }
+
+    return env_open_handle(env, 0, &mailbox->super);
+}
+
+SYS_FN(mailbox_send) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_send(mailbox=%d, %d)\n", SYS_PARAM0, SYS_PARAM1));
+
+    Env* env = cpu->current_thread->parent;
+    Thread* curr = cpu->current_thread;
+
+    KObject_Mailbox* mailbox = env_get_handle(env, SYS_PARAM0, NULL);
+    Thread* next = mailbox_send(mailbox);
+    spin_lock(&cpu->sched->lock);
+
+    u64 now_time = __rdtsc() / boot_info->tsc_freq;
+    u64 delta = now_time - curr->start_time;
+
+    u64 stolen_time = curr->max_exec_time - delta;
+    if (delta >= curr->max_exec_time) {
+        stolen_time = 1;
+    }
+
+    #ifdef __x86_64__
+    next->state.rip = (u64) mailbox->handler_pc;
+    next->state.rdi = SYS_PARAM1;
+    next->state.rsi = SYS_PARAM2;
+    next->state.rdx = SYS_PARAM3;
+    next->state.r10 = SYS_PARAM4;
+    next->state.r8  = SYS_PARAM5;
+    #else
+    #error "TODO"
+    #endif
+
+    next->wake_time = 1;
+    next->max_exec_time += stolen_time;
+    next->wait_obj = NULL;
+    next->calling_thread = curr;
+
+    curr->wait_obj = mailbox;
+
+    tq_append(&cpu->sched->waiters, next);
+    spin_unlock(&cpu->sched->lock);
+
+    // Pick a new task
+    state->interrupt_num = 32;
+    uintptr_t new_cr3 = x86_irq_int_handler(state, cr3, cpu);
+    do_context_switch(state, new_cr3);
+    return 0;
+}
+
+SYS_FN(mailbox_yield) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_yield(handle=%d, ret=%d)\n", SYS_PARAM0, SYS_PARAM1));
+
+    Env* env = cpu->current_thread->parent;
+    Thread* curr = cpu->current_thread;
+    Thread* next = curr->calling_thread;
+    curr->calling_thread = NULL;
+
+    #ifdef __x86_64__
+    next->state.rax = SYS_PARAM1;
+    #else
+    #error "TODO"
+    #endif
+
+    // Wait on mailbox now
+    KObject_Mailbox* mailbox = env_get_handle(env, SYS_PARAM0, NULL);
+
+    spin_lock(&cpu->sched->lock);
+    next->wait_obj = NULL;
+    curr->wait_obj = mailbox;
+    mailbox_recv(mailbox, curr);
+
+    tq_append(&cpu->sched->waiters, next);
+    spin_unlock(&cpu->sched->lock);
+
+    // Pick a new task
+    state->interrupt_num = 32;
+    uintptr_t new_cr3 = x86_irq_int_handler(state, cr3, cpu);
+    do_context_switch(state, new_cr3);
+    return 0;
 }
 
 #undef SYS_PARAM0

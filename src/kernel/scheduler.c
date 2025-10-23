@@ -7,6 +7,12 @@ void tq_append(ThreadQueue* tq, Thread* t) {
     tq->tail = (tq->tail + 1) % 256;
 }
 
+Thread* tq_remove_min(ThreadQueue* tq) {
+    Thread* t = tq->data[tq->head];
+    tq->head = (tq->head + 1) % 256;
+    return t;
+}
+
 void tq_dump(ThreadQueue* tq, bool is_waiter, u64 min_time) {
     kprintf("  %s: [ %d %d : ", is_waiter ? "Wait" : "Act", tq->head, tq->tail);
     for (int i = tq->head; i != tq->tail; i = (i + 1) % 256) {
@@ -136,6 +142,11 @@ bool sched_is_blocked(Thread* t) {
         return true;
     }
 
+    // We're waiting for some object
+    if (atomic_load_explicit(&t->wait_obj, memory_order_acquire)) {
+        return true;
+    }
+
     // Our address space has been locked
     if (t->parent) {
         Thread* tlb_lock = atomic_load_explicit(&t->parent->addr_space.tlb_lock, memory_order_acquire);
@@ -165,7 +176,7 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
         curr->exec_time += delta;
         curr->start_time = now_time;
 
-        // ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p got %f ms (exec_time = %f ms)\n", cpu->core_id, curr, delta / 1000.0f, curr->exec_time / 1000.0f));
+        ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p got %f ms (exec_time = %f ms)\n", cpu->core_id, curr, delta / 1000.0f, curr->exec_time / 1000.0f));
 
         u64 exec_time = curr->exec_time - sched->min_exec_time;
         if (!sched_is_blocked(curr)) {
@@ -176,21 +187,18 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
                 return curr;
             }
 
-            // remove curr
-            sched->active.head = (sched->active.head + 1) % 256;
-
             // if the thread has completed it's time slice, we need to re-insert
             // into the queue with the new exec_time.
             ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p has stopped (max %f ms)\n", cpu->core_id, curr, curr->max_exec_time / 1000.0f));
             tq_insert(&sched->active, curr, false);
         } else {
-            // remove curr
             curr->active = false;
             curr->exec_time -= sched->min_exec_time;
-            sched->active.head = (sched->active.head + 1) % 256;
-
             ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p is blocked after %f ms\n", core_id, curr, curr->exec_time / 1000.0f));
         }
+
+        // remove curr
+        tq_remove_min(&sched->active);
     }
 
     // wake up sleepy guys
@@ -209,8 +217,8 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
         tq_insert(&sched->active, waiter, false);
     }
 
-    // recompute scheduling period
-    if (1) {
+    {
+        // recompute scheduling period
         int active_count = sched->active.tail;
         if (active_count < sched->active.head) {
             active_count += 256;
@@ -220,6 +228,18 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
         if (active_count == 0) {
             sched->ideal_exec_time = 0;
             ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: no tasks, no slice\n", core_id));
+
+            // if there's no active tasks, we just wait on the next sleeper
+            if (sched->waiters.head != sched->waiters.tail) {
+                Thread* waiter = sched->waiters.data[sched->waiters.head];
+
+                ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: sleep for %f ms\n", core_id, (waiter->wake_time - now_time) / 1000.0f));
+                *out_wake_us = waiter->wake_time;
+                return NULL;
+            } else {
+                *out_wake_us = UINT64_MAX;
+                return NULL;
+            }
         } else {
             // N is the number of active threads we can have before
             // resorting to period stretching.
@@ -228,20 +248,6 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
 
             sched->ideal_exec_time = ideal < SCHED_MIN_QUANTA ? SCHED_MIN_QUANTA : ideal;
             ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: ideal slice of %f ms (%d active)\n", core_id, sched->ideal_exec_time / 1000.0f, active_count));
-        }
-    }
-
-    // if there's no active tasks, we just wait on the next sleeper
-    if (sched->active.head == sched->active.tail) {
-        if (sched->waiters.head != sched->waiters.tail) {
-            Thread* waiter = sched->waiters.data[sched->waiters.head];
-
-            ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: sleep for %f ms\n", core_id, (waiter->wake_time - now_time) / 1000.0f));
-            *out_wake_us = waiter->wake_time;
-            return NULL;
-        } else {
-            *out_wake_us = UINT64_MAX;
-            return NULL;
         }
     }
 
@@ -268,7 +274,7 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
 
     // check the next timed wait, if there's something coming up which "deserves" the time more, we'll
     // truncate our slice and resolve them as quickly as possible.
-    #if 0
+    #if 1
     if (sched->waiters.head != sched->waiters.tail) {
         Thread* waiter = sched->waiters.data[sched->waiters.head];
         kassert(now_time < waiter->wake_time, "how is it still in the wait queue? %d %d", now_time, waiter->wake_time);

@@ -1,21 +1,8 @@
-#include <stdint.h>
-#include <stddef.h>
+#include "beans.h"
 
-#include "syscall_helper.h"
-
-typedef unsigned int KHandle;
-
-typedef enum {
-    #define X(name, ...) SYS_ ## name,
-    #include "../src/kernel/syscall_table.h"
-
-    SYS_MAX,
-} SyscallNum;
-
-void foo(void* arg) {
-    for (;;) {
-        syscall(SYS_test);
-    }
+static KHandle mailbox;
+void request_handler(uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64_t e) {
+    syscall(SYS_mailbox_yield, mailbox, a + 1);
 }
 
 // Bochs video
@@ -34,17 +21,13 @@ enum {
 
 uint8_t mult = 0;
 void draw(int width, int height, int stride, uint32_t* pixels) {
-    uint64_t gradient_x = (width + 255) / 256;
-    uint64_t gradient_y = (height + 255) / 256;
+    uint64_t gradient_x = 64; // (width + 255) / 256;
+    uint64_t gradient_y = 64; // (height + 255) / 256;
 
     for (size_t j = 0; j < height; j++) {
-        uint32_t g = ((j / gradient_y) / 2) + 0x7F;
-        g = (g + mult) & 0xFF;
-
+        uint32_t g = (j % gradient_y) * 4;
         for (size_t i = 0; i < width; i++) {
-            uint32_t b = ((i / gradient_x) / 2) + 0x7F;
-            b = (b + mult) & 0xFF;
-
+            uint32_t b = ((i + mult) % gradient_x) * 4;
             pixels[i + (j * stride)] = 0xFF000000 | (g << 16) | (b << 8);
         }
     }
@@ -52,7 +35,7 @@ void draw(int width, int height, int stride, uint32_t* pixels) {
 
 int _start(KHandle bootstrap_channel) {
     uint32_t video_devs[] = { 0x12341111 };
-    int display_pci = syscall(SYS_pci_claim_device, 1, video_devs);
+    KHandle display_pci = syscall(SYS_pci_claim_device, 1, video_devs);
 
     size_t size;
     int fb_bar = syscall(SYS_pci_get_bar, display_pci, 0, &size);
@@ -66,8 +49,10 @@ int _start(KHandle bootstrap_channel) {
     int stride = vbe[VBE_VIRT_WIDTH];
     int buffer = 0;
 
-    syscall(SYS_thread_create, foo, NULL);
+    // create & install mailbox
+    mailbox = syscall(SYS_mailbox_create, 8192, 4, request_handler);
 
+    int i = 0;
     for (;;) {
         uint64_t start = __rdtsc();
 
@@ -82,6 +67,9 @@ int _start(KHandle bootstrap_channel) {
         if (elapsed < 16666) {
             syscall(SYS_sleep, 16666 - elapsed);
         }
+
+        i = syscall(SYS_mailbox_send, mailbox, i);
     }
     return 0;
 }
+

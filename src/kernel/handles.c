@@ -11,18 +11,60 @@ KObject_VMO* vmo_create_physical(uintptr_t addr, size_t size) {
     return obj;
 }
 
-KObject_Mailbox* vmo_mailbox_create(void) {
-    KObject_Mailbox* obj = kheap_alloc(sizeof(KObject_Mailbox) + KOBJECT_MAILBOX_SIZE);
+KObject_Mailbox* mailbox_create(size_t max_requests) {
+    size_t log2 = 63 - __builtin_clzll(max_requests);
+    KObject_Mailbox* obj = kheap_zalloc(sizeof(KObject_Mailbox) + max_requests*sizeof(atomic_u64[2]));
     *obj = (KObject_Mailbox){
-        .super= {
+        .super = {
             .tag = KOBJECT_VMO,
         },
-        .mask = KOBJECT_MAILBOX_SIZE - 1,
+        .cap_log2 = log2
     };
     return obj;
 }
 
-void vmo_mailbox_send(KObject_Mailbox* mailbox, size_t handle_count, KHandle* handles, size_t data_size, uint8_t* data) {
+Thread* mailbox_send(KObject_Mailbox* restrict mailbox) {
+    // pop a stack from the mailbox, transfer control
+    u64 exp  = mailbox->cap_log2;
+    u64 mask = (1ull << exp) - 1;
+    u64 max_id = UINT64_MAX >> (exp+1);
+
+    u64 ticket = atomic_fetch_add_explicit(&mailbox->head, 1, memory_order_acq_rel);
+    u64 target = ticket & mask;
+    u64 id = ((ticket >> exp) * 2) + 1;
+    while (atomic_load_explicit(&mailbox->ids_n_items[target], memory_order_acquire) != id) {
+        // TODO(NeGate): we should put a wait queue on this, ideally
+        // we don't spinlock on a mailbox
+    }
+
+    // grab the stack we'll be using
+    Thread* thread = (Thread*) mailbox->ids_n_items[(1ull << exp) + target];
+
+    // notify that the slot can be reused now
+    id += 1;
+    atomic_store_explicit(&mailbox->ids_n_items[target], id != max_id ? id : 0, memory_order_release);
+    return thread;
+}
+
+void mailbox_recv(KObject_Mailbox* mailbox, Thread* thread) {
+    // push to stack from the mailbox, go to sleep
+    u64 exp  = mailbox->cap_log2;
+    u64 mask = (1ull << exp) - 1;
+    u64 max_id = UINT64_MAX >> (exp+1);
+
+    u64 ticket = atomic_fetch_add_explicit(&mailbox->tail, 1, memory_order_acq_rel);
+    u64 target = ticket & mask;
+    u64 id = ((ticket >> exp) * 2);
+    while (atomic_load_explicit(&mailbox->ids_n_items[target], memory_order_acquire) != id) {
+        // TODO(NeGate): we should put a wait queue on this, ideally
+        // we don't spinlock on a mailbox
+    }
+
+    mailbox->ids_n_items[(1ull << exp) + target] = (u64) thread;
+
+    // notify that the slot can be reused now
+    id += 1;
+    atomic_store_explicit(&mailbox->ids_n_items[target], id != max_id ? id : 0, memory_order_release);
 }
 
 void* env_get_handle(Env* env, KHandle handle, KAccessRights* rights) {

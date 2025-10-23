@@ -23,6 +23,12 @@ struct Thread {
     // Last core that this thread ran on
     int core_id;
 
+    // waiting on signalling objects
+    _Atomic(void*) wait_obj;
+
+    // Mailbox threads need to notify their calling thread
+    Thread* calling_thread;
+
     CPUState state;
 
     // Used for syscalls:

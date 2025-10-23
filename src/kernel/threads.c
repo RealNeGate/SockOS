@@ -94,24 +94,25 @@ Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintpt
         spin_unlock(&env->lock);
     }
 
-    // put into schedule
-    {
-        int i = round_robin_load_balance;
-        if (++round_robin_load_balance == boot_info->core_count) {
-            round_robin_load_balance = 0;
-        }
+    return new_thread;
+}
 
-        ON_DEBUG(SCHED)(kprintf("[sched] created Thread-%p, placed onto CPU-%d (%s)\n", new_thread, i, new_thread->parent ? "USER" : "KERNEL"));
-
-        PerCPU_Scheduler* sched = boot_info->cores[i].sched;
-        spin_lock(&sched->lock);
-        new_thread->active = true;
-        tq_append(&sched->active, new_thread);
-        spin_unlock(&sched->lock);
-        arch_wake_up(i);
+void thread_resume(Thread* thread) {
+    int i = round_robin_load_balance;
+    if (++round_robin_load_balance == boot_info->core_count) {
+        round_robin_load_balance = 0;
     }
 
-    return new_thread;
+    ON_DEBUG(SCHED)(kprintf("[sched] created Thread-%p, placed onto CPU-%d (%s)\n", thread, i, thread->parent ? "USER" : "KERNEL"));
+
+    // Put to sleep on a core
+    PerCPU_Scheduler* sched = boot_info->cores[i].sched;
+    spin_lock(&sched->lock);
+    thread->wake_time = 1;
+    tq_insert(&sched->waiters, thread, true);
+    spin_unlock(&sched->lock);
+
+    arch_wake_up(i);
 }
 
 void thread_kill(Thread* thread) {

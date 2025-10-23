@@ -32,19 +32,19 @@ typedef int8_t              i8;
 
 // common iterators (also macros but i logically separate them in my head)
 // FOREACH_N(i, 0, 10) sum += i*i;
-#define FOR_N(it, start, end)           for (ptrdiff_t it = (start); it != (end); it++)
+#define FOR_N(it, start, end) for (ptrdiff_t it = (start); it != (end); it++)
 
 // logging options
-#define DEBUG_SYSCALL 0
+#define DEBUG_SYSCALL 1
 #define DEBUG_IRQ     0
 #define DEBUG_PCI     0
 #define DEBUG_ENV     0
 #define DEBUG_VMEM    0
 #define DEBUG_KHEAP   0
 #define DEBUG_KPOOL   0
-#define DEBUG_SCHED   1
+#define DEBUG_SCHED   0
 #define DEBUG_NBHM    0
-#define DEBUG_SPALL   1
+#define DEBUG_SPALL   0
 #define DEBUG_EFI     0
 
 #define ON_DEBUG(cond) CONCAT(DO_IF_, CONCAT(DEBUG_, cond))

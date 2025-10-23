@@ -58,7 +58,7 @@ typedef struct {
 
 static size_t estimate_page_table_count(size_t size) {
     size_t count = 0;
-    count += PAGE_4K(size); // 4KiB pages
+    // count += PAGE_4K(size); // 4KiB pages
     count += PAGE_2M(size); // 2MiB pages
     count += PAGE_1G(size); // 1GiB pages
     return count;
@@ -387,7 +387,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     ON_DEBUG(EFI)(printf("Kernel stack: %X .. %X\n", kstack_base, kstack_end));
 
     // Allocate space for our page tables before we exit UEFI
-    size_t page_tables_count = (16ull * 1024 * 1024) / 4096;
+    size_t page_tables_count = estimate_page_table_count(16ull * 1024 * 1024 * 1024);
     ON_DEBUG(EFI)(printf("Allocating %X bytes for page tables\n", page_tables_count * 4096));
     PageTable* page_tables = efi_alloc_pages(st, page_tables_count);
     if (page_tables == NULL) {
@@ -518,7 +518,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 
     LoaderFunction loader = (LoaderFunction) (kernel_boot_info.elf_physical_ptr + kernel_module.entry_addr);
     // printf("TSS_PTR=%X\n", tss_ptr);
-    // printf("Jumping to the kernel: %X (sp=%X)\n", loader, kstack_end);
+    // printf("Jumping to the kernel: %X (sp=%X) %X\n", loader, kstack_end, kernel_boot_info.elf_virtual_entry);
 
     kernel_boot_info.elf_virtual_entry = kernel_boot_info.elf_virtual_ptr + kernel_module.entry_addr;
     loader(&kernel_boot_info, kstack_end, kernel_boot_info.identity_map_ptr + (uintptr_t) kernel_boot_info.cores[0].gdt_pointer);
