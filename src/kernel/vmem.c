@@ -23,7 +23,6 @@ bool vmem_addrhm_cmp(const void* a, const void* b) {
 }
 
 #define NBHM_FN(n) vmem_addrhm_ ## n
-#define NBHM_IMPL
 #include <nbhm.h>
 
 static size_t vmem_node_bin_search(VMem_Node* node, uint32_t key, int start_i) {

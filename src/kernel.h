@@ -9,12 +9,6 @@ enum {
     USER_STACK_SIZE = 2*1024*1024,
 };
 
-#define NBHM_VIRTUAL_ALLOC(size)     memset(kernelfl_alloc(size), 0, size)
-#define NBHM_VIRTUAL_FREE(ptr, size) kernelfl_free(ptr)
-#define NBHM_ASSERT(x) kassert(x, ":(")
-#define NBHM_REALLOC(ptr, size) kernelfl_realloc(ptr, size)
-#include <nbhm.h>
-
 typedef struct Env Env;
 typedef struct Thread Thread;
 typedef struct CPUState CPUState;
@@ -27,26 +21,8 @@ typedef unsigned int KHandle;
 typedef _Atomic(u32) atomic_u32;
 typedef _Atomic(u64) atomic_u64;
 
-////////////////////////////////
-// Profiling
-////////////////////////////////
-void spall_header(void);
-void spall_begin_event(const char* name, int tid);
-void spall_end_event(int tid);
-
-////////////////////////////////
-// Read-write lock
-////////////////////////////////
-// bottom bit means there's an exclusive lock.
-typedef _Atomic(uint32_t) RWLock;
-
-bool rwlock_try_lock_shared(RWLock* lock);
-bool rwlock_is_exclusive(RWLock* lock);
-
-void rwlock_lock_shared(RWLock* lock);
-void rwlock_unlock_shared(RWLock* lock);
-void rwlock_lock_exclusive(RWLock* lock);
-void rwlock_unlock_exclusive(RWLock* lock);
+PerCPU* cpu_get(void);
+void sleep(u64 timeout);
 
 ////////////////////////////////
 // Kernel heap
@@ -70,6 +46,30 @@ void* kheap_alloc(size_t obj_size);
 void* kheap_zalloc(size_t obj_size);
 void kheap_free(void* obj);
 void kheap_dump(void);
+
+#define NBHM_ASSERT(x) kassert(x, ":(")
+#include <nbhm.h>
+
+////////////////////////////////
+// Profiling
+////////////////////////////////
+void spall_header(void);
+void spall_begin_event(const char* name, int tid);
+void spall_end_event(int tid);
+
+////////////////////////////////
+// Read-write lock
+////////////////////////////////
+// bottom bit means there's an exclusive lock.
+typedef _Atomic(uint32_t) RWLock;
+
+bool rwlock_try_lock_shared(RWLock* lock);
+bool rwlock_is_exclusive(RWLock* lock);
+
+void rwlock_lock_shared(RWLock* lock);
+void rwlock_unlock_shared(RWLock* lock);
+void rwlock_lock_exclusive(RWLock* lock);
+void rwlock_unlock_exclusive(RWLock* lock);
 
 ////////////////////////////////
 // Kernel pool
@@ -355,7 +355,6 @@ uintptr_t arch_canonical_addr(uintptr_t p);
 // modify the address space.
 WaitQueue* arch_tlb_lock(Env* env);
 void arch_tlb_unlock(Env* env, WaitQueue* wq);
-
 void arch_backtrace(void);
 
 CPUState new_thread_state(void* entrypoint, uintptr_t arg, uintptr_t stack, size_t stack_size, bool is_user);

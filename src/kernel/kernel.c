@@ -1,5 +1,11 @@
 #include <kernel.h>
 
+#define EBR_IMPL
+#include "ebr.h"
+
+#define NBHM_IMPL
+#include "nbhm.h"
+
 BootInfo* boot_info;
 
 // murmur3 32-bit
@@ -50,6 +56,7 @@ void kmain(BootInfo* restrict info) {
     }
 
     arch_init(0);
+    ebr_init();
 
     static _Alignas(4096) const uint8_t desktop_elf[] = {
         #embed "../../userland/desktop.elf"

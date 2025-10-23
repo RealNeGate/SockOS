@@ -35,8 +35,8 @@ typedef int8_t              i8;
 #define FOR_N(it, start, end) for (ptrdiff_t it = (start); it != (end); it++)
 
 // logging options
-#define DEBUG_SYSCALL 1
-#define DEBUG_IRQ     0
+#define DEBUG_SYSCALL 0
+#define DEBUG_IRQ     1
 #define DEBUG_PCI     0
 #define DEBUG_ENV     0
 #define DEBUG_VMEM    0
@@ -74,7 +74,8 @@ void spin_unlock(Lock* lock);
 void kprintf(const char *fmt, ...);
 void print_ring_init(void);
 
+void arch_backtrace(void);
 uint64_t get_time_ticks(void);
 
-#define kassert(cond, ...) ((cond) ? 0 : (kprintf("%s:%d: assertion failed!\n  %s\n  ", __FILE__, __LINE__, #cond), kprintf(__VA_ARGS__), kprintf("\n\n"), __builtin_trap()))
+#define kassert(cond, ...) ((cond) ? 0 : (kprintf("%s:%d: assertion failed!\n  %s\n  ", __FILE__, __LINE__, #cond), kprintf(__VA_ARGS__), kprintf("\n\n"), arch_backtrace(), __builtin_trap()))
 #define panic(...) (kprintf("%s:%d: panic!\n", __FILE__, __LINE__), kprintf(__VA_ARGS__), __builtin_trap())

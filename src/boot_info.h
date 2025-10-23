@@ -87,6 +87,7 @@ struct PerCPU {
 
     // NBHM crap
     _Alignas(64) _Atomic uint64_t ebr_time;
+    _Alignas(64) _Atomic uint64_t ebr_checkpoint;
 
     // Logging
     struct LogBuffer* log_buffer;
