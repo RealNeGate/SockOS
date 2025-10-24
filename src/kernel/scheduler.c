@@ -1,52 +1,30 @@
 #include "threads.h"
 
-// wait queue
-
-void tq_append(ThreadQueue* tq, Thread* t) {
-    tq->data[tq->tail] = t;
-    tq->tail = (tq->tail + 1) % 256;
+static int runqueue_cmp(Thread* a, Thread* b) {
+    return a->exec_time - b->exec_time;
 }
 
-Thread* tq_remove_min(ThreadQueue* tq) {
-    Thread* t = tq->data[tq->head];
-    tq->head = (tq->head + 1) % 256;
-    return t;
+static int wakequeue_cmp(Thread* a, Thread* b) {
+    return b->wake_time - a->wake_time;
 }
+
+#define PRIO_ELEM     Thread*
+#define PRIO_TYPE     ThreadQueue
+#define PRIO_FN(name) runqueue_ ## name
+#include "prio_queue.h"
+
+#define PRIO_ELEM     Thread*
+#define PRIO_TYPE     ThreadQueue
+#define PRIO_FN(name) wakequeue_ ## name
+#include "prio_queue.h"
 
 void tq_dump(ThreadQueue* tq, bool is_waiter, u64 min_time) {
-    kprintf("  %s: [ %d %d : ", is_waiter ? "Wait" : "Act", tq->head, tq->tail);
-    for (int i = tq->head; i != tq->tail; i = (i + 1) % 256) {
+    kprintf("  %s: [ %d : ", is_waiter ? "Wait" : "Act", tq->count);
+    for (int i = 0; i < tq->count; i++) {
         Thread* t = tq->data[i];
         kprintf("Thread-%p (%d) ", t, t->exec_time - min_time);
     }
     kprintf("]\n");
-}
-
-void tq_insert(ThreadQueue* tq, Thread* t, bool is_waiter) {
-    /*if (!is_waiter) {
-        kprintf("  BEFORE(%p):\n", t); tq_dump(tq, is_waiter);
-    }*/
-
-    // shift up
-    int j = tq->tail;
-    if (j < tq->head) { j += 256; }
-
-    if (is_waiter) { // sort by wake time
-        while (j-- > tq->head && tq->data[j % 256]->wake_time > t->wake_time) {
-            tq->data[(j + 1) % 256] = tq->data[j % 256];
-        }
-    } else {
-        while (j-- > tq->head && tq->data[j % 256]->exec_time > t->exec_time) {
-            tq->data[(j + 1) % 256] = tq->data[j % 256];
-        }
-    }
-
-    tq->tail = (tq->tail + 1) % 256;
-    tq->data[(j + 1) % 256] = t;
-
-    /*if (!is_waiter) {
-        kprintf("  AFTER:\n"); tq_dump(tq, is_waiter);
-    }*/
 }
 
 void sleep(u64 timeout) {
@@ -63,10 +41,8 @@ void sched_wait(u64 timeout) {
     PerCPU* cpu = cpu_get();
     Thread* t = cpu->current_thread;
 
-    uint64_t now_time = __rdtsc() / boot_info->tsc_freq;
-    // kprintf("sched_wait(now=%d, timeout=%d): %p\n", now_time, timeout, t);
-
     // TODO(NeGate): there's potential logic & overflow bugs if now_time exceeds end_time
+    uint64_t now_time = __rdtsc() / boot_info->tsc_freq;
     if (timeout == 0) {
         // give up rest of time slice
         t->wake_time = 1;
@@ -75,7 +51,7 @@ void sched_wait(u64 timeout) {
         t->wake_time = wake_time;
     }
 
-    tq_insert(&cpu->sched->waiters, t, true);
+    wakequeue_insert(&cpu->sched->waiters, t);
 }
 
 // keeps moving tasks to try to keep the exec times near each other
@@ -137,26 +113,7 @@ enum {
 };
 
 bool sched_is_blocked(Thread* t) {
-    // We're asleep
-    if (t->wake_time != 0) {
-        return true;
-    }
-
-    // We're waiting for some object
-    if (atomic_load_explicit(&t->wait_obj, memory_order_acquire)) {
-        return true;
-    }
-
-    // Our address space has been locked
-    if (t->parent) {
-        Thread* tlb_lock = atomic_load_explicit(&t->parent->addr_space.tlb_lock, memory_order_acquire);
-        if (tlb_lock && t != tlb_lock) {
-            ON_DEBUG(SCHED)(kprintf("[sched] shot down! Thread-%p\n", t));
-            return true;
-        }
-    }
-
-    return false;
+    return t->wake_time != 0 || atomic_load_explicit(&t->wait_obj, memory_order_relaxed);
 }
 
 Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
@@ -169,7 +126,7 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
     // running task.
     Thread* curr = cpu->current_thread;
     if (curr != NULL) {
-        kassert(curr == sched->active.data[sched->active.head], "bad %p", curr);
+        kassert(curr == runqueue_peek(&sched->active), "bad %p", curr);
         u64 delta = now_time - curr->start_time;
 
         // update exec_time, higher priorities
@@ -187,75 +144,83 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
                 return curr;
             }
 
+            // remove curr
+            runqueue_pop(&sched->active);
+
             // if the thread has completed it's time slice, we need to re-insert
             // into the queue with the new exec_time.
             ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p has stopped (max %f ms)\n", cpu->core_id, curr, curr->max_exec_time / 1000.0f));
-            tq_insert(&sched->active, curr, false);
+            runqueue_insert(&sched->active, curr);
         } else {
-            curr->active = false;
+            // remove curr
+            runqueue_pop(&sched->active);
+
             curr->exec_time -= sched->min_exec_time;
             ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p is blocked after %f ms\n", core_id, curr, curr->exec_time / 1000.0f));
         }
+        curr->status = THREAD_STATE_READY;
+    }
 
-        // remove curr
-        tq_remove_min(&sched->active);
+    // everything in this list should be ready to run, if not then we still remove it because that means it's
+    // someone else's job to wake it up.
+    Thread* blocked = atomic_exchange_explicit(&cpu->blocked_threads, NULL, memory_order_acq_rel);
+    while (blocked) {
+        ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p is unblocked now (exec time was %d us)\n", core_id, blocked, blocked->exec_time));
+        blocked->exec_time += sched->min_exec_time;
+        blocked->status = THREAD_STATE_READY;
+        runqueue_insert(&sched->active, blocked);
+
+        blocked = blocked->next_in_blocked;
     }
 
     // wake up sleepy guys
-    while (sched->waiters.head != sched->waiters.tail) {
-        Thread* waiter = sched->waiters.data[sched->waiters.head];
+    while (sched->waiters.count > 0) {
+        Thread* waiter = wakequeue_peek(&sched->waiters);
         if (now_time < waiter->wake_time) {
             break;
         }
 
         ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p is awake now (exec time was %d us)\n", core_id, waiter, waiter->exec_time));
-        sched->waiters.head = (sched->waiters.head + 1) % 256;
-
-        waiter->exec_time += sched->min_exec_time;
+        wakequeue_pop(&sched->waiters);
         waiter->wake_time = 0;
-        waiter->active = false;
-        tq_insert(&sched->active, waiter, false);
+        waiter->exec_time += sched->min_exec_time;
+        waiter->status = THREAD_STATE_READY;
+        runqueue_insert(&sched->active, waiter);
     }
 
-    {
-        // recompute scheduling period
-        int active_count = sched->active.tail;
-        if (active_count < sched->active.head) {
-            active_count += 256;
-        }
-        active_count -= sched->active.head;
-
-        if (active_count == 0) {
-            sched->ideal_exec_time = 0;
-            ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: no tasks, no slice\n", core_id));
-
-            // if there's no active tasks, we just wait on the next sleeper
-            if (sched->waiters.head != sched->waiters.tail) {
-                Thread* waiter = sched->waiters.data[sched->waiters.head];
-
-                ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: sleep for %f ms\n", core_id, (waiter->wake_time - now_time) / 1000.0f));
-                *out_wake_us = waiter->wake_time;
-                return NULL;
-            } else {
-                *out_wake_us = UINT64_MAX;
-                return NULL;
-            }
-        } else {
-            // N is the number of active threads we can have before
-            // resorting to period stretching.
-            int N = SCHED_LATENCY / SCHED_MIN_QUANTA;
-            u64 ideal = SCHED_LATENCY / active_count;
-
-            sched->ideal_exec_time = ideal < SCHED_MIN_QUANTA ? SCHED_MIN_QUANTA : ideal;
-            ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: ideal slice of %f ms (%d active)\n", core_id, sched->ideal_exec_time / 1000.0f, active_count));
-        }
-    }
-
+    // tq_dump(&sched->waiters, true, 0);
     // tq_dump(&sched->active, false, sched->min_exec_time);
 
-    // use leftmost thread
-    curr = sched->active.data[sched->active.head];
+    // recompute scheduling period
+    if (sched->active.count == 0) {
+        sched->ideal_exec_time = 0;
+        ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: no tasks, no slice\n", core_id));
+
+        // if there's no active tasks, we just wait on the next sleeper
+        if (sched->waiters.count > 0) {
+            Thread* waiter = wakequeue_peek(&sched->waiters);
+
+            ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: sleep for %f ms\n", core_id, (waiter->wake_time - now_time) / 1000.0f));
+            *out_wake_us = waiter->wake_time;
+            return NULL;
+        } else {
+            *out_wake_us = UINT64_MAX;
+            return NULL;
+        }
+    } else {
+        // N is the number of active threads we can have before
+        // resorting to period stretching.
+        int N = SCHED_LATENCY / SCHED_MIN_QUANTA;
+        u64 ideal = SCHED_LATENCY / sched->active.count;
+
+        sched->ideal_exec_time = ideal < SCHED_MIN_QUANTA ? SCHED_MIN_QUANTA : ideal;
+        ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: ideal slice of %f ms (%d active)\n", core_id, sched->ideal_exec_time / 1000.0f, sched->active.count));
+    }
+
+    // use lowest exec time thread
+    curr = runqueue_peek(&sched->active);
     curr->core_id = core_id;
+    curr->status = THREAD_STATE_RUNNING;
 
     u64 exec_time = curr->exec_time - sched->min_exec_time;
     if (sched->min_exec_time < curr->exec_time) {
@@ -274,8 +239,8 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
 
     // check the next timed wait, if there's something coming up which "deserves" the time more, we'll
     // truncate our slice and resolve them as quickly as possible.
-    #if 1
-    if (sched->waiters.head != sched->waiters.tail) {
+    #if 0
+    if (sched->waiters.count > 0) {
         Thread* waiter = sched->waiters.data[sched->waiters.head];
         kassert(now_time < waiter->wake_time, "how is it still in the wait queue? %d %d", now_time, waiter->wake_time);
 

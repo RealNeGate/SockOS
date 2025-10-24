@@ -37,20 +37,7 @@ Thread* waitqueue_wake(WaitQueue* wq) {
     kheap_free(head);
     spin_unlock(&wq->lock);
 
-    PerCPU_Scheduler* sched = boot_info->cores[t->core_id].sched;
-    spin_lock(&sched->lock);
-    bool signal = false;
-    if (!t->active && !sched_is_blocked(t)) {
-        t->active = true;
-        t->exec_time += sched->min_exec_time;
-        tq_insert(&sched->active, t, false);
-        signal = true;
-    }
-    spin_unlock(&sched->lock);
-
-    if (signal) {
-        arch_wake_up(t->core_id);
-    }
+    thread_resume(t);
     return t;
 }
 

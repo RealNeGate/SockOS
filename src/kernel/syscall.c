@@ -70,11 +70,11 @@ SYS_FN(munmap) {
     // but we don't need a TLB shootdown until page writing.
     rwlock_lock_exclusive(&env->addr_space.lock);
 
-    // modify pages
+    // shootdown forces all runners to flush, once
+    // we do that we can recycle the pages.
     spall_begin_event("shootdown", cpu->core_id);
-    WaitQueue* wq = arch_tlb_lock(env);
-    arch_tlb_unlock(env, wq);
-    spall_end_event(cpu_get()->core_id);
+    arch_tlb_shootdown(env);
+    spall_end_event(cpu->core_id);
 
     rwlock_unlock_exclusive(&env->addr_space.lock);
 
@@ -206,6 +206,7 @@ SYS_FN(mailbox_create) {
         Thread* thread = thread_create(env, (ThreadEntryFn*) SYS_PARAM0, SYS_PARAM1, sp, stack_stride);
         kassert(thread, "BAD BAD TODO");
 
+        thread->saved_sp = thread->state.rsp;
         thread->wait_obj = mailbox;
         mailbox_recv(mailbox, thread);
     }
@@ -221,17 +222,16 @@ SYS_FN(mailbox_send) {
 
     KObject_Mailbox* mailbox = env_get_handle(env, SYS_PARAM0, NULL);
     Thread* next = mailbox_send(mailbox);
-    spin_lock(&cpu->sched->lock);
 
     u64 now_time = __rdtsc() / boot_info->tsc_freq;
     u64 delta = now_time - curr->start_time;
-
     u64 stolen_time = curr->max_exec_time - delta;
     if (delta >= curr->max_exec_time) {
         stolen_time = 1;
     }
 
     #ifdef __x86_64__
+    next->state.rsp = next->saved_sp;
     next->state.rip = (u64) mailbox->handler_pc;
     next->state.rdi = SYS_PARAM1;
     next->state.rsi = SYS_PARAM2;
@@ -242,15 +242,13 @@ SYS_FN(mailbox_send) {
     #error "TODO"
     #endif
 
-    next->wake_time = 1;
     next->max_exec_time += stolen_time;
     next->wait_obj = NULL;
     next->calling_thread = curr;
 
+    // TODO(NeGate): force the mailbox thread to run next... it really should be an "always" thing.
     curr->wait_obj = mailbox;
-
-    tq_append(&cpu->sched->waiters, next);
-    spin_unlock(&cpu->sched->lock);
+    thread_resume(next);
 
     // Pick a new task
     state->interrupt_num = 32;
@@ -275,14 +273,10 @@ SYS_FN(mailbox_yield) {
 
     // Wait on mailbox now
     KObject_Mailbox* mailbox = env_get_handle(env, SYS_PARAM0, NULL);
-
-    spin_lock(&cpu->sched->lock);
     next->wait_obj = NULL;
     curr->wait_obj = mailbox;
     mailbox_recv(mailbox, curr);
-
-    tq_append(&cpu->sched->waiters, next);
-    spin_unlock(&cpu->sched->lock);
+    thread_resume(next);
 
     // Pick a new task
     state->interrupt_num = 32;

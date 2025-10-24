@@ -32,9 +32,8 @@ void arch_wake_up(int core_id) {
     }
 }
 
-WaitQueue* arch_tlb_lock(Env* env) {
+void arch_tlb_shootdown(Env* env) {
     PerCPU* cpu = cpu_get();
-    WaitQueue* wq = waitqueue_alloc();
 
     // acquire TLB lock
     Thread* curr = cpu->current_thread;
@@ -43,36 +42,26 @@ WaitQueue* arch_tlb_lock(Env* env) {
     }
 
     // notify any thread which is running this environment to stand down
+    int checkpoint_count = 0;
     FOR_N(i, 0, boot_info->core_count) {
+        spin_lock(&boot_info->cores[i].sched->lock);
         Thread* t = boot_info->cores[i].current_thread;
         if (t != curr && t != NULL && t->parent == env) {
             // sending an IPI which triggers int#32 (Timer)
             x86_send_ipi(boot_info->cores[i].lapic_id, 0x20);
-            waitqueue_wait(wq, t);
+            checkpoint_count++;
         }
+        spin_unlock(&boot_info->cores[i].sched->lock);
     }
 
-    // barrier until all of those threads have been replaced
-    FOR_N(i, 0, boot_info->core_count) {
-        Thread* volatile* t_ptr = (Thread* volatile*) &boot_info->cores[i].current_thread;
-        if (*t_ptr != curr) {
-            Thread* t = NULL;
-            while (t = *t_ptr, t && t->parent == env) {
-                // keep waiting
-                asm volatile ("pause");
-            }
-        }
+    // barrier until all of those threads have crossed the checkpoint
+    while (env->addr_space.checkpoint_done != checkpoint_count) {
+        // keep waiting
+        asm volatile ("pause");
     }
 
-    return wq;
-}
-
-void arch_tlb_unlock(Env* env, WaitQueue* wq) {
+    env->addr_space.checkpoint_done = 0;
     env->addr_space.tlb_lock = NULL;
-
-    // wake up the threads
-    waitqueue_broadcast(wq);
-    waitqueue_free(wq);
 }
 
 static void powernap(u64 micros) {

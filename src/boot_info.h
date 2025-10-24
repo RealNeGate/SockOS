@@ -73,11 +73,13 @@ struct PerCPU {
     void* user_stack_scratch;
     void* irq_stack_top;
 
+    u32 core_id, lapic_id;
+
     // Scheduler info
     struct Thread* current_thread;
     PerCPU_Scheduler* sched;
 
-    u32 core_id, lapic_id;
+    _Alignas(64) _Atomic(struct Thread*) blocked_threads;
 
     // 4KiB page heap
     PageFreeList* heap;

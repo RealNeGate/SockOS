@@ -21,6 +21,8 @@ typedef unsigned int KHandle;
 typedef _Atomic(u32) atomic_u32;
 typedef _Atomic(u64) atomic_u64;
 
+#define atomic_cas_acq_rel(addr, old, new) atomic_compare_exchange_strong_explicit(addr, old, new, memory_order_acq_rel, memory_order_acquire)
+
 PerCPU* cpu_get(void);
 void sleep(u64 timeout);
 
@@ -268,6 +270,9 @@ struct Env {
 
         // hardware page table
         PageTable* hw_tables;
+
+        // TLB shootdown checkpoint
+        _Alignas(64) atomic_u32 checkpoint_done;
     } addr_space;
 
     // Handle table
@@ -315,7 +320,7 @@ void waitqueue_broadcast(WaitQueue* wq);
 // Scheduler
 ////////////////////////////////
 typedef struct {
-    int head, tail;
+    int count;
     Thread* data[256];
 } ThreadQueue;
 
@@ -351,10 +356,8 @@ void arch_handoff(int core_id);
 void arch_wake_up(int core_id);
 uintptr_t arch_canonical_addr(uintptr_t p);
 
-// broadcast to all cores running an Env that we need to
-// modify the address space.
-WaitQueue* arch_tlb_lock(Env* env);
-void arch_tlb_unlock(Env* env, WaitQueue* wq);
+// broadcast to all cores running an Env that we've modified the address space
+void arch_tlb_shootdown(Env* env);
 void arch_backtrace(void);
 
 CPUState new_thread_state(void* entrypoint, uintptr_t arg, uintptr_t stack, size_t stack_size, bool is_user);

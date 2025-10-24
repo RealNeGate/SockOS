@@ -98,18 +98,22 @@ Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintpt
 }
 
 void thread_resume(Thread* thread) {
-    int i = round_robin_load_balance;
+    /*int i = round_robin_load_balance;
     if (++round_robin_load_balance == boot_info->core_count) {
         round_robin_load_balance = 0;
-    }
+    }*/
+    // ON_DEBUG(SCHED)(kprintf("[sched] created Thread-%p, placed onto CPU-%d (%s)\n", thread, i, thread->parent ? "USER" : "KERNEL"));
 
-    ON_DEBUG(SCHED)(kprintf("[sched] created Thread-%p, placed onto CPU-%d (%s)\n", thread, i, thread->parent ? "USER" : "KERNEL"));
+    int i = 0;
 
     // Put to sleep on a core
     PerCPU_Scheduler* sched = boot_info->cores[i].sched;
     spin_lock(&sched->lock);
-    thread->wake_time = 1;
-    tq_insert(&sched->waiters, thread, true);
+    kassert(!sched_is_blocked(thread), "we shouldn't be blocked atm... why are you resuming us");
+    Thread* latest = atomic_load_explicit(&boot_info->cores[i].blocked_threads, memory_order_relaxed);
+    do {
+        thread->next_in_blocked = latest;
+    } while (!atomic_compare_exchange_strong_explicit(&boot_info->cores[i].blocked_threads, &latest, thread, memory_order_acq_rel, memory_order_acquire));
     spin_unlock(&sched->lock);
 
     arch_wake_up(i);

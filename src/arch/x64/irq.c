@@ -244,7 +244,6 @@ uintptr_t timer_interrupt(CPUState* state, uintptr_t cr3, PerCPU* cpu, u64 now) 
     u64 next_wake;
     spin_lock(&cpu->sched->lock);
     Thread* next = sched_pick_next(cpu, now_micros, &next_wake);
-    spin_unlock(&cpu->sched->lock);
 
     // if we're switching, save old thread state
     if (cpu->current_thread != NULL) {
@@ -288,6 +287,8 @@ uintptr_t timer_interrupt(CPUState* state, uintptr_t cr3, PerCPU* cpu, u64 now) 
         *state = kernel_idle_state;
         cpu->current_thread   = NULL;
         cpu->kernel_stack_top = NULL;
+
+        spin_unlock(&cpu->sched->lock);
         return kaddr2paddr(boot_info->kernel_pml4);
     }
 
@@ -297,8 +298,8 @@ uintptr_t timer_interrupt(CPUState* state, uintptr_t cr3, PerCPU* cpu, u64 now) 
 
         cpu->current_thread   = next;
         cpu->kernel_stack_top = (void*) next->kstack_addr;
-
     }
+    spin_unlock(&cpu->sched->lock);
 
     #if DEBUG_SPALL
     {
@@ -328,7 +329,8 @@ static void dump_page_fault(CPUState* state, uintptr_t cr3, PerCPU* cpu, Env* en
 
     // just throw error
     kprintf("CPU-%d: Page Fault: error=%#x, env=%p\n", cpu->core_id, state->error, env);
-    kprintf("  cr3=%p\n\n", cr3);
+    kprintf("  cr3=%p\n",   cr3);
+    kprintf("  rsp=%p\n\n", state->rsp);
 
     // print memory access address
     u64 translated;

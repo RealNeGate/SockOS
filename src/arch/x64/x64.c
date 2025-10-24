@@ -122,7 +122,7 @@ struct StackFrame_x64 {
 };
 
 void arch_backtrace(void) {
-    kprintf("CPU-%d: ALLOC:\n", cpu_get()->core_id);
+    kprintf("CPU-%d: BACKTRACE:\n", cpu_get()->core_id);
     StackFrame_x64* frame = __builtin_frame_address(0);
     while (frame) {
         kprintf("  %p\n", frame->rip);
