@@ -4,14 +4,14 @@ static size_t cpu_alloc_queue_mask;
 
 void kpool_init(MemMap* restrict mem_map) {
     size_t total_chunks = 0;
-    int biggest = -1;
+    int biggest = 0;
     FOR_N(i, 0, mem_map->nregions) {
         MemRegion* region = &mem_map->regions[i];
         if (region->type != MEM_REGION_USABLE || region->base < 0x100000) {
             continue;
         }
 
-        if (region->pages > mem_map->regions[biggest].pages) {
+        if (biggest < 0 || region->pages > mem_map->regions[biggest].pages) {
             biggest = i;
         }
 

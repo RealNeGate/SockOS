@@ -45,7 +45,7 @@ typedef int8_t              i8;
 #define DEBUG_SCHED   0
 #define DEBUG_NBHM    0
 #define DEBUG_SPALL   0
-#define DEBUG_EFI     1
+#define DEBUG_EFI     0
 
 #define ON_DEBUG(cond) CONCAT(DO_IF_, CONCAT(DEBUG_, cond))
 

@@ -189,11 +189,11 @@ int _start(KHandle bootstrap_channel) {
     terminal_used = 0;
 
     // BOCHS VBE display
-    /* static uint32_t bochs_pcids[] = { 0x12341111 };
+    static uint32_t bochs_pcids[] = { 0x12341111 };
     KHandle display_pci = syscall(SYS_pci_claim_device, 1, bochs_pcids);
     if (display_pci != 0) {
         bochs_vbe_driver(display_pci, bootstrap_channel);
-    } */
+    }
 
     uint64_t info[4];
     int fb_bar = syscall(SYS_fb_grab, info);
@@ -201,7 +201,7 @@ int _start(KHandle bootstrap_channel) {
 
     // Intel HD graphics
     static uint32_t i915_pcids[] = { 0x80863E92 };
-    KHandle display_pci = syscall(SYS_pci_claim_device, 1, i915_pcids);
+    display_pci = syscall(SYS_pci_claim_device, 1, i915_pcids);
     if (display_pci != 0) {
         printf("Hello, World! handle=%p\n", display_pci);
         intel_gpu_driver(display_pci, bootstrap_channel);

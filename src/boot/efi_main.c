@@ -254,6 +254,35 @@ static bool mem_map_verify(MemMap* mem_map) {
     return true;
 }
 
+static void* efi_load_file(EFI_SYSTEM_TABLE* st, EFI_FILE* fs_root, i16* path, size_t* out_size) {
+    ON_DEBUG(EFI)(printf("Loading '%S'...\n", path));
+
+    EFI_FILE* file;
+    EFI_STATUS status = fs_root->Open(fs_root, &file, path, EFI_FILE_MODE_READ, EFI_FILE_READ_ONLY | EFI_FILE_SYSTEM);
+    if (status != 0) {
+        panic("Failed to open file!\nStatus: %X\n", status);
+    }
+
+    EFI_GUID info_guid = EFI_FILE_INFO_GUID;
+    EFI_FILE_INFO file_info;
+    size_t file_info_size = sizeof(EFI_FILE_INFO);
+    status = file->GetInfo(file, &info_guid, &file_info_size, &file_info);
+    if (status != 0) {
+        panic("Bad file? Failed to get size\nStatus: %X\n", status);
+    }
+
+    *out_size = file_info.file_size;
+    void* buffer = efi_alloc(st, file_info.file_size);
+
+    status = file->Read(file, &file_info.file_size, buffer);
+    if (status != 0) {
+        panic("Bad file? Failed to read\nStatus: %X\n", status);
+    }
+
+    file->Close(file);
+    return buffer;
+}
+
 EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     EFI_STATUS status = st->ConOut->ClearScreen(st->ConOut);
     printf("EFI Booting...\n");
@@ -292,13 +321,8 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 
     // Load the kernel from disk
     char* kernel_buffer;
-    size_t kernel_size = KERNEL_BUFFER_SIZE;
+    size_t kernel_size;
     {
-        kernel_buffer = efi_alloc(st, KERNEL_BUFFER_SIZE);
-        if (kernel_buffer == NULL) {
-            panic("Failed to allocate space for kernel!\nStatus: %X\n", status);
-        }
-
         EFI_GUID loaded_img_proto_guid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
         EFI_LOADED_IMAGE_PROTOCOL* loaded_img_proto;
         status = st->BootServices->OpenProtocol(img_handle, &loaded_img_proto_guid,
@@ -322,46 +346,12 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
             panic("Failed to open fs root!\nStatus: %X\n", status);
         }
 
-        EFI_FILE* kernel_file;
-        status = fs_root->Open(fs_root, &kernel_file, (i16*)KERNEL_FILENAME, EFI_FILE_MODE_READ, EFI_FILE_READ_ONLY | EFI_FILE_SYSTEM);
-        if (status != 0) {
-            panic("Failed to open kernel file!\nStatus: %X\n", status);
-        }
-
-        kernel_file->Read(kernel_file, &kernel_size, kernel_buffer);
-        if (kernel_size >= KERNEL_BUFFER_SIZE) {
-            panic("Kernel too large to fit into buffer!\n");
-        }
+        kernel_buffer = efi_load_file(st, fs_root, (i16*) KERNEL_FILENAME, &kernel_size);
+        map_file_data = efi_load_file(st, fs_root, (i16*) L"output.map", &map_file_size);
 
         // Verify ELF magic number
-        if (memcmp(kernel_buffer, (u8[]) { 0x7F, 'E', 'L', 'F' }, 4) != 0) {
+        if (kernel_size < 4 || memcmp(kernel_buffer, (u8[]) { 0x7F, 'E', 'L', 'F' }, 4) != 0) {
             panic("Kernel is not a valid ELF file!\n");
-        }
-
-        kernel_file->Close(kernel_file);
-
-        // Optional, load the map file
-        EFI_FILE* map_file;
-        status = fs_root->Open(fs_root, &map_file, (i16*) L"output.map", EFI_FILE_MODE_READ, EFI_FILE_READ_ONLY | EFI_FILE_SYSTEM);
-        if (status == 0) {
-            ON_DEBUG(EFI)(printf("Loading map file...\n"));
-
-            EFI_GUID info_guid = EFI_FILE_INFO_GUID;
-            EFI_FILE_INFO file_info;
-            size_t file_info_size = sizeof(EFI_FILE_INFO);
-            status = map_file->GetInfo(map_file, &info_guid, &file_info_size, &file_info);
-            if (status != 0) {
-                panic("Bad MAP file? Failed to get size\n");
-            }
-
-            map_file_size = file_info.file_size;
-            map_file_data = efi_alloc(st, map_file_size);
-            map_file->Read(map_file, &file_info.file_size, map_file_data);
-            if (status != 0) {
-                panic("Bad MAP file? Failed to read\n");
-            }
-            map_file_data[map_file_size] = 0;
-            map_file->Close(map_file);
         }
 
         fs_root->Close(fs_root);

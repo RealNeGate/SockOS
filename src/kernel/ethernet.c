@@ -261,10 +261,10 @@ static bool exit_eth(PCI_Device *eth_dev) {
     return false;
 }
 
-__attribute__((section(".driver"))) Device_Driver driver = {
+/* __attribute__((section(".driver"))) Device_Driver driver = {
     .name = "82540EM Gigabit Ethernet Controller",
     .vendor_id = 0x8086,
     .device_id = 0x100E,
     .init = init_eth,
     .exit = exit_eth,
-};
+}; */

@@ -133,6 +133,12 @@ static inline void vprintf(char* fmt, va_list args) {
                     char ch = va_arg(args, int);
                     writec(ch);
                 } break;
+                case 'S': {
+                    i16* str = va_arg(args, i16*);
+                    while(*str) {
+                        writec(*str++);
+                    }
+                } break;
                 case 's': {
                     char* str = va_arg(args, char*);
                     writes(str);

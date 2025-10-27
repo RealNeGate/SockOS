@@ -154,9 +154,6 @@ char *pin_names[] = { "NONE", "A", "B", "C" "D" };
 
 void pci_print_device(PCI_Device *dev) {
     kprintf("[pci] Found %x:%x\n", dev->vendor_id, dev->device_id);
-    kprintf("%p\n", pci_class_names);
-    kprintf("%p\n", pci_class_names[6]);
-    kprintf("%s\n", pci_class_names[6]);
 
     const char *subclass_tag;
     if (dev->subclass == 0x80) {
@@ -387,7 +384,7 @@ void pci_init(void) {
         for (u32 device = 0; device < 32; device++) {
             for (u8 func = 0; func < 8; func++) {
                 if (pci_check_device(dev, bus, device, func)) {
-                    pci_print_device(dev);
+                    ON_DEBUG(PCI)(pci_print_device(dev));
 
                     // kernel-sided drivers
                     for (Device_Driver* driver = _DRIVER_START; driver != _DRIVER_END; driver++) {
