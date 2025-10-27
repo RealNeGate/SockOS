@@ -210,6 +210,7 @@ void arch_handoff(int core_id) {
         apic_freq = __rdtsc();
         APIC(0x380) = APIC_CALIBRATION_TICKS;
 
+        asm volatile ("sti");
         for (;;) {
             asm volatile ("hlt");
         }
@@ -222,6 +223,7 @@ void arch_handoff(int core_id) {
         kprintf("CPU-%d is now ready to work!\n", core_id);
         spall_begin_event("main", core_id);
 
+        asm volatile ("sti");
         asm volatile ("int 32");
     }
 }
@@ -285,8 +287,7 @@ uintptr_t timer_interrupt(CPUState* state, uintptr_t cr3, PerCPU* cpu, u64 now) 
         spall_begin_event("sleep", cpu->core_id);
 
         *state = kernel_idle_state;
-        cpu->current_thread   = NULL;
-        cpu->kernel_stack_top = NULL;
+        cpu->current_thread = NULL;
 
         spin_unlock(&cpu->sched->lock);
         return kaddr2paddr(boot_info->kernel_pml4);
@@ -295,9 +296,7 @@ uintptr_t timer_interrupt(CPUState* state, uintptr_t cr3, PerCPU* cpu, u64 now) 
     // do thread context switch, if we changed
     if (cpu->current_thread != next) {
         *state = next->state;
-
-        cpu->current_thread   = next;
-        cpu->kernel_stack_top = (void*) next->kstack_addr;
+        cpu->current_thread = next;
     }
     spin_unlock(&cpu->sched->lock);
 

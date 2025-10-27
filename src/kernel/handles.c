@@ -16,7 +16,7 @@ KObject_Mailbox* mailbox_create(size_t max_requests) {
     KObject_Mailbox* obj = kheap_zalloc(sizeof(KObject_Mailbox) + max_requests*sizeof(atomic_u64[2]));
     *obj = (KObject_Mailbox){
         .super = {
-            .tag = KOBJECT_VMO,
+            .tag = KOBJECT_MAILBOX,
         },
         .cap_log2 = log2
     };

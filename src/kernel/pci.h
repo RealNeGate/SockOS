@@ -14,6 +14,10 @@ struct PCI_Device {
     // the interrupts as well.
     _Atomic(Env*) parent;
 
+    u8 bus;
+    u8 device;
+    u8 func;
+
     u16 vendor_id;
     u16 device_id;
 
@@ -52,3 +56,6 @@ typedef struct {
 
 BAR parse_bar(Raw_BAR bar);
 void pci_print_device(PCI_Device *dev);
+
+u32 pci_read_u32(u32 bus, u32 device, u32 func, u32 offs);
+void pci_write_u32(u32 bus, u32 device, u32 func, u32 offs, u32 value);

@@ -48,11 +48,6 @@ struct Thread {
     uintptr_t saved_sp;
 
     CPUState state;
-
-    // Used for syscalls:
-    //   on x64 it's hooked to kernel GS base
-    //   when a userland app is running.
-    uintptr_t kstack_addr;
 };
 
 bool sched_is_blocked(Thread* t);

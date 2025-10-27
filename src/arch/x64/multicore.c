@@ -34,6 +34,7 @@ void arch_wake_up(int core_id) {
 
 void arch_tlb_shootdown(Env* env) {
     PerCPU* cpu = cpu_get();
+    spall_begin_event("shootdown", cpu->core_id);
 
     // acquire TLB lock
     Thread* curr = cpu->current_thread;
@@ -62,6 +63,7 @@ void arch_tlb_shootdown(Env* env) {
 
     env->addr_space.checkpoint_done = 0;
     env->addr_space.tlb_lock = NULL;
+    spall_end_event(cpu->core_id);
 }
 
 static void powernap(u64 micros) {

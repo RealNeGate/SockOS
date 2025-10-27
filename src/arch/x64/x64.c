@@ -86,6 +86,7 @@ void arch_init(int core_id) {
     }
 
     PerCPU* cpu = &boot_info->cores[core_id];
+    cpu->kernel_stack_top = kpool_alloc_page() + KERNEL_STACK_SIZE;
 
     // setup TSS, it'll store the relevant kernel stack
     {

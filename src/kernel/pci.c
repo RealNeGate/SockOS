@@ -123,13 +123,13 @@ typedef enum {
     #undef X
 } PCI_Subclass_Storage;
 
-static inline u32 pci_read_u32(u32 bus, u32 device, u32 func, u32 offs) {
+u32 pci_read_u32(u32 bus, u32 device, u32 func, u32 offs) {
     u32 address = PCI_BASE_ADDR | (bus << 16) | (device << 11) | (func << 8) | (offs & 0xFC);
     io_out32(PCI_ADDR_PORT, address);
     return io_in32(PCI_VALUE_PORT);
 }
 
-static inline void pci_write_u32(u32 bus, u32 device, u32 func, u32 offs, u32 value) {
+void pci_write_u32(u32 bus, u32 device, u32 func, u32 offs, u32 value) {
     u32 address = PCI_BASE_ADDR | (bus << 16) | (device << 11) | (func << 8) | (offs & 0xFC);
     io_out32(PCI_ADDR_PORT, address);
     io_out32(PCI_VALUE_PORT, value);
@@ -154,22 +154,29 @@ char *pin_names[] = { "NONE", "A", "B", "C" "D" };
 
 void pci_print_device(PCI_Device *dev) {
     kprintf("[pci] Found %x:%x\n", dev->vendor_id, dev->device_id);
+    kprintf("%p\n", pci_class_names);
+    kprintf("%p\n", pci_class_names[6]);
+    kprintf("%s\n", pci_class_names[6]);
 
-    char *subclass_tag;
+    const char *subclass_tag;
     if (dev->subclass == 0x80) {
         subclass_tag = "Other";
     } else {
         switch (dev->class) {
             case PCI_CLASS_BRIDGE: {
-                subclass_tag = (char *)pci_subclass_bridge_names[dev->subclass];
+                kabc(dev->subclass, pci_subclass_bridge_names);
+                subclass_tag = pci_subclass_bridge_names[dev->subclass];
             } break;
             case PCI_CLASS_NETWORK_CTL: {
+                kabc(dev->subclass, pci_subclass_net_names);
                 subclass_tag = (char *)pci_subclass_net_names[dev->subclass];
             } break;
             case PCI_CLASS_DISPLAY_CTL: {
+                kabc(dev->subclass, pci_subclass_display_names);
                 subclass_tag = (char *)pci_subclass_display_names[dev->subclass];
             } break;
             case PCI_CLASS_STORAGE_CTL: {
+                kabc(dev->subclass, pci_subclass_storage_names);
                 subclass_tag = (char *)pci_subclass_storage_names[dev->subclass];
             } break;
             default: {
@@ -302,6 +309,9 @@ static bool pci_check_device(PCI_Device *dev, u32 bus, u32 device, u8 func) {
         hdr.regs[i] = pci_read_u32(bus, device, func, i * sizeof(u32));
     }
 
+    dev->bus       = bus;
+    dev->device    = device;
+    dev->func      = func;
     dev->device_id = hdr.device_id;
     dev->vendor_id = hdr.vendor_id;
     dev->class     = hdr.class;

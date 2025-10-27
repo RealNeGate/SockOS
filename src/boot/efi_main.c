@@ -72,7 +72,7 @@ inline static size_t align_up(size_t a, size_t b) {
 
 static PageTable* get_or_alloc(PageTableContext* ctx, PageTable* table, int index) {
     if (table->entries[index] == 0) {
-        if (ctx->used + 1 >= ctx->capacity) {
+        if (ctx->used >= ctx->capacity) {
             panic("Fuck!\n");
         }
 
@@ -323,7 +323,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         }
 
         EFI_FILE* kernel_file;
-        status = fs_root->Open(fs_root, &kernel_file, (i16*)KERNEL_FILENAME, EFI_FILE_MODE_READ, EFI_FILE_READ_ONLY);
+        status = fs_root->Open(fs_root, &kernel_file, (i16*)KERNEL_FILENAME, EFI_FILE_MODE_READ, EFI_FILE_READ_ONLY | EFI_FILE_SYSTEM);
         if (status != 0) {
             panic("Failed to open kernel file!\nStatus: %X\n", status);
         }
@@ -342,7 +342,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 
         // Optional, load the map file
         EFI_FILE* map_file;
-        status = fs_root->Open(fs_root, &map_file, (i16*) L"output.map", EFI_FILE_MODE_READ, EFI_FILE_READ_ONLY);
+        status = fs_root->Open(fs_root, &map_file, (i16*) L"output.map", EFI_FILE_MODE_READ, EFI_FILE_READ_ONLY | EFI_FILE_SYSTEM);
         if (status == 0) {
             ON_DEBUG(EFI)(printf("Loading map file...\n"));
 
@@ -361,7 +361,6 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
                 panic("Bad MAP file? Failed to read\n");
             }
             map_file_data[map_file_size] = 0;
-
             map_file->Close(map_file);
         }
 

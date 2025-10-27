@@ -45,7 +45,7 @@ typedef int8_t              i8;
 #define DEBUG_SCHED   0
 #define DEBUG_NBHM    0
 #define DEBUG_SPALL   0
-#define DEBUG_EFI     0
+#define DEBUG_EFI     1
 
 #define ON_DEBUG(cond) CONCAT(DO_IF_, CONCAT(DEBUG_, cond))
 
@@ -76,6 +76,9 @@ void print_ring_init(void);
 
 void arch_backtrace(void);
 uint64_t get_time_ticks(void);
+
+// Kernel Array Bounds Check
+#define kabc(i, arr) kassert(i < ELEM_COUNT(arr), "Out of bounds access of %s[%d]", #arr, i)
 
 #define kassert(cond, ...) ((cond) ? 0 : (kprintf("%s:%d: assertion failed!\n  %s\n  ", __FILE__, __LINE__, #cond), kprintf(__VA_ARGS__), kprintf("\n\n"), arch_backtrace(), __builtin_trap()))
 #define panic(...) (kprintf("%s:%d: panic!\n", __FILE__, __LINE__), kprintf(__VA_ARGS__), __builtin_trap())

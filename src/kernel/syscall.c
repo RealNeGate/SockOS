@@ -72,9 +72,7 @@ SYS_FN(munmap) {
 
     // shootdown forces all runners to flush, once
     // we do that we can recycle the pages.
-    spall_begin_event("shootdown", cpu->core_id);
     arch_tlb_shootdown(env);
-    spall_end_event(cpu->core_id);
 
     rwlock_unlock_exclusive(&env->addr_space.lock);
 
@@ -99,6 +97,7 @@ SYS_FN(thread_create) {
 
 SYS_FN(test) {
     ON_DEBUG(SYSCALL)(kprintf("SYS_test(%d)\n", SYS_PARAM0));
+    kprintf("SYS_test(%d)\n", SYS_PARAM0);
     return 0;
 }
 
@@ -154,7 +153,7 @@ SYS_FN(pci_get_bar) {
 
     Env* env = cpu->current_thread->parent;
     PCI_Device* dev = env_get_handle(env, SYS_PARAM0, NULL);
-    if (dev->super.tag != KOBJECT_DEV_PCI) {
+    if (dev == NULL || dev->super.tag != KOBJECT_DEV_PCI) {
         return 0;
     }
 
@@ -183,34 +182,53 @@ SYS_FN(pci_get_bar) {
     return env_open_handle(env, 0, &vmo_ptr->super);
 }
 
-SYS_FN(mailbox_create) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_create(stack_size=%d, max_rqs=%d, handler=%p)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2));
+SYS_FN(fb_grab) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_fb_grab(%p)\n", SYS_PARAM0));
 
     Env* env = cpu->current_thread->parent;
+    uint64_t* info = (uint64_t*) SYS_PARAM0;
+    info[0] = boot_info->fb.width;
+    info[1] = boot_info->fb.height;
+    info[2] = boot_info->fb.stride;
+    info[3] = boot_info->fb.stride * 4 * boot_info->fb.height;
 
-    size_t stack_stride = (SYS_PARAM0 + PAGE_SIZE);
-    size_t stack_pool_size = stack_stride*SYS_PARAM1;
-    uintptr_t stack_ptr = vmem_map(env, 0, 0, stack_pool_size, VMEM_PAGE_WRITE | VMEM_PAGE_USER);
-    if (stack_ptr == 0) {
+    KObject_VMO* vmo_ptr = vmo_create_physical(kaddr2paddr(boot_info->fb.pixels), info[3]);
+    return env_open_handle(env, 0, &vmo_ptr->super);
+}
+
+SYS_FN(pci_read_config_32) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_pci_read_config_32(pci=%d, offset=%d)\n", SYS_PARAM0, SYS_PARAM1));
+
+    Env* env = cpu->current_thread->parent;
+    PCI_Device* dev = env_get_handle(env, SYS_PARAM0, NULL);
+    if (dev == NULL || dev->super.tag != KOBJECT_DEV_PCI) {
         return 0;
     }
 
-    KObject_Mailbox* mailbox = mailbox_create(SYS_PARAM1);
+    return pci_read_u32(dev->bus, dev->device, dev->func, SYS_PARAM1);
+}
+
+SYS_FN(pci_write_config_32) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_pci_write_config_32(pci=%d, offset=%d, val=%d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2));
+
+    Env* env = cpu->current_thread->parent;
+    PCI_Device* dev = env_get_handle(env, SYS_PARAM0, NULL);
+    if (dev == NULL || dev->super.tag != KOBJECT_DEV_PCI) {
+        return 0;
+    }
+
+    pci_write_u32(dev->bus, dev->device, dev->func, SYS_PARAM1, SYS_PARAM2);
+    return 0;
+}
+
+SYS_FN(mailbox_create) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_create(max_rqs=%d)\n", SYS_PARAM0));
+
+    Env* env = cpu->current_thread->parent;
+    KObject_Mailbox* mailbox = mailbox_create(SYS_PARAM0);
     if (mailbox == NULL) {
         return 0;
     }
-
-    mailbox->handler_pc = (void*) SYS_PARAM2;
-    FOR_N(i, 0, SYS_PARAM1) {
-        uintptr_t sp = stack_ptr + stack_stride*i;
-        Thread* thread = thread_create(env, (ThreadEntryFn*) SYS_PARAM0, SYS_PARAM1, sp, stack_stride);
-        kassert(thread, "BAD BAD TODO");
-
-        thread->saved_sp = thread->state.rsp;
-        thread->wait_obj = mailbox;
-        mailbox_recv(mailbox, thread);
-    }
-
     return env_open_handle(env, 0, &mailbox->super);
 }
 
@@ -218,71 +236,107 @@ SYS_FN(mailbox_send) {
     ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_send(mailbox=%d, %d)\n", SYS_PARAM0, SYS_PARAM1));
 
     Env* env = cpu->current_thread->parent;
-    Thread* curr = cpu->current_thread;
-
     KObject_Mailbox* mailbox = env_get_handle(env, SYS_PARAM0, NULL);
-    Thread* next = mailbox_send(mailbox);
-
-    u64 now_time = __rdtsc() / boot_info->tsc_freq;
-    u64 delta = now_time - curr->start_time;
-    u64 stolen_time = curr->max_exec_time - delta;
-    if (delta >= curr->max_exec_time) {
-        stolen_time = 1;
+    if (mailbox == NULL || mailbox->super.tag != KOBJECT_MAILBOX) {
+        return -1;
     }
 
-    #ifdef __x86_64__
-    next->state.rsp = next->saved_sp;
-    next->state.rip = (u64) mailbox->handler_pc;
-    next->state.rdi = SYS_PARAM1;
-    next->state.rsi = SYS_PARAM2;
-    next->state.rdx = SYS_PARAM3;
-    next->state.r10 = SYS_PARAM4;
-    next->state.r8  = SYS_PARAM5;
-    #else
-    #error "TODO"
-    #endif
+    Thread* curr = cpu->current_thread;
+    Thread* next = mailbox_send(mailbox);
+    u64 now_time = __rdtsc() / boot_info->tsc_freq;
 
-    next->max_exec_time += stolen_time;
+    spin_lock(&cpu->sched->lock);
+    // if we're switching, save old thread state
+    curr->state = *state;
+
+    // transfer our time
+    next->start_time = curr->start_time;
+    next->exec_time = curr->exec_time;
+    next->max_exec_time = curr->max_exec_time;
     next->wait_obj = NULL;
     next->calling_thread = curr;
-
-    // TODO(NeGate): force the mailbox thread to run next... it really should be an "always" thing.
+    // the sender thread is now blocked
     curr->wait_obj = mailbox;
-    thread_resume(next);
 
-    // Pick a new task
-    state->interrupt_num = 32;
-    uintptr_t new_cr3 = x86_irq_int_handler(state, cr3, cpu);
-    do_context_switch(state, new_cr3);
-    return 0;
-}
-
-SYS_FN(mailbox_yield) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_yield(handle=%d, ret=%d)\n", SYS_PARAM0, SYS_PARAM1));
-
-    Env* env = cpu->current_thread->parent;
-    Thread* curr = cpu->current_thread;
-    Thread* next = curr->calling_thread;
-    curr->calling_thread = NULL;
-
+    // passthru the params
     #ifdef __x86_64__
     next->state.rax = SYS_PARAM1;
     #else
     #error "TODO"
     #endif
 
-    // Wait on mailbox now
+    cpu->current_thread = next;
+    cpu->sched->active.data[0] = next;
+
+    spin_unlock(&cpu->sched->lock);
+
+    kassert(next->parent, "mailboxes can't live in kernel-threads");
+    uintptr_t new_cr3 = kaddr2paddr(next->parent->addr_space.hw_tables);
+    do_context_switch(&next->state, new_cr3);
+}
+
+SYS_FN(mailbox_wait) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_wait(handle=%d, msg=%p)\n", SYS_PARAM0, SYS_PARAM1));
+
+    Env* env = cpu->current_thread->parent;
+    Thread* curr = cpu->current_thread;
     KObject_Mailbox* mailbox = env_get_handle(env, SYS_PARAM0, NULL);
-    next->wait_obj = NULL;
+    if (mailbox == NULL || mailbox->super.tag != KOBJECT_MAILBOX) {
+        return -1;
+    }
+
+    // Wait on mailbox
+    spin_lock(&cpu->sched->lock);
     curr->wait_obj = mailbox;
     mailbox_recv(mailbox, curr);
-    thread_resume(next);
+    spin_unlock(&cpu->sched->lock);
 
     // Pick a new task
     state->interrupt_num = 32;
     uintptr_t new_cr3 = x86_irq_int_handler(state, cr3, cpu);
     do_context_switch(state, new_cr3);
-    return 0;
+}
+
+SYS_FN(mailbox_reply) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_reply(handle=%d, msg=%p)\n", SYS_PARAM0, SYS_PARAM1));
+    Env* env = cpu->current_thread->parent;
+    KObject_Mailbox* mailbox = env_get_handle(env, SYS_PARAM0, NULL);
+    if (mailbox == NULL || mailbox->super.tag != KOBJECT_MAILBOX) {
+        return -1;
+    }
+
+    Thread* curr = cpu->current_thread;
+    Thread* next = curr->calling_thread;
+    u64 now_time = __rdtsc() / boot_info->tsc_freq;
+
+    spin_lock(&cpu->sched->lock);
+    // save old thread state
+    curr->state = *state;
+
+    // transfer our time
+    next->start_time = curr->start_time;
+    next->exec_time = curr->exec_time;
+    next->max_exec_time = curr->max_exec_time;
+    next->wait_obj = NULL;
+    // the mailbox thread is now blocked
+    curr->calling_thread = NULL;
+    curr->wait_obj = mailbox;
+    mailbox_recv(mailbox, curr);
+
+    // passthru the params
+    #ifdef __x86_64__
+    next->state.rax = SYS_PARAM1;
+    #else
+    #error "TODO"
+    #endif
+
+    cpu->current_thread = next;
+    cpu->sched->active.data[0] = next;
+    spin_unlock(&cpu->sched->lock);
+
+    kassert(next->parent, "mailboxes can't live in kernel-threads");
+    uintptr_t new_cr3 = kaddr2paddr(next->parent->addr_space.hw_tables);
+    do_context_switch(&next->state, new_cr3);
 }
 
 #undef SYS_PARAM0

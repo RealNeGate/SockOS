@@ -102,6 +102,7 @@ static bool elf_load(EFI_SYSTEM_TABLE* st, void* elf_base, ELF_Module *module) {
             }
         }
     }
+
     module->entry_addr = elf_header->e_entry;
     module->phys_base = (u64) phys_base;
     module->virt_base = virt_base;

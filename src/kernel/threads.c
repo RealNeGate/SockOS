@@ -67,12 +67,11 @@ Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintpt
 
     // userland programs need an extra stack for syscall handling
     if (is_user) {
-        void* page = kpool_alloc_page();
-
-        new_thread->kstack_addr = (uintptr_t) page + PAGE_SIZE;
-        memmap_view(boot_info->kernel_pml4, kaddr2paddr(page), (uintptr_t) page, PAGE_SIZE, VMEM_PAGE_WRITE);
-
-        kprintf("[env] Thread kernel stack: %p - %p\n", new_thread->kstack_addr, new_thread->kstack_addr + PAGE_SIZE - 1);
+        // map all kernel stacks
+        FOR_N(i, 0, boot_info->core_count) {
+            char* page = ((char*) boot_info->cores[i].kernel_stack_top) - KERNEL_STACK_SIZE;
+            memmap_view(boot_info->kernel_pml4, kaddr2paddr(page), (uintptr_t) page, KERNEL_STACK_SIZE, VMEM_PAGE_WRITE);
+        }
     }
 
     // attach to env
@@ -155,7 +154,7 @@ void thread_kill(Thread* thread) {
 // this is the trusted ELF loader for priveleged programs, normal apps will probably
 // be loaded via a shared object.
 Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
-    kprintf("Loading a program! %p\n", program);
+    ON_DEBUG(ENV)(kprintf("Loading a program! %p\n", program));
     Elf64_Ehdr* elf_header = (Elf64_Ehdr*) program;
 
     KObject_VMO* vmo_ptr = vmo_create_physical(kaddr2paddr((void*) program), program_size);
@@ -182,10 +181,10 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
         uintptr_t vaddr = segment->p_vaddr & -PAGE_SIZE;
         size_t offset   = segment->p_offset & -PAGE_SIZE;
 
-        // kprintf("[elf] segment: %p (%d) => %p (%d)\n", vaddr, segment->p_memsz, paddr, segment->p_filesz);
-
         size_t file_size = (segment->p_filesz + PAGE_SIZE - 1) & -PAGE_SIZE;
         size_t mem_size  = (segment->p_memsz  + PAGE_SIZE - 1) & -PAGE_SIZE;
+
+        ON_DEBUG(ENV)(kprintf("[elf] segment: %p (%d) => ... (%d)\n", segment->p_vaddr, segment->p_memsz, segment->p_filesz));
 
         if (file_size > 0) {
             vmem_add_range(env, elf_vmo, vaddr, offset, file_size, VMEM_PAGE_WRITE | VMEM_PAGE_USER);
@@ -193,15 +192,15 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
 
         if (mem_size > file_size) {
             // zero pages
-            vmem_add_range(env, 0, vaddr+mem_size, file_size - mem_size, 0, VMEM_PAGE_WRITE | VMEM_PAGE_USER);
+            vmem_add_range(env, 0, vaddr + file_size, 0, mem_size - file_size, VMEM_PAGE_WRITE | VMEM_PAGE_USER);
         }
     }
 
     // tiny i know
     uintptr_t stack_ptr = vmem_map(env, 0, 0, USER_STACK_SIZE, VMEM_PAGE_WRITE | VMEM_PAGE_USER);
 
-    kprintf("[elf] entry=%p\n", elf_header->e_entry);
-    kprintf("[elf] stack=%p\n", stack_ptr);
+    ON_DEBUG(ENV)(kprintf("[elf] entry=%p\n", elf_header->e_entry));
+    ON_DEBUG(ENV)(kprintf("[elf] stack=%p\n", stack_ptr));
 
     return thread_create(env, (ThreadEntryFn*) elf_header->e_entry, boot_info->tsc_freq, stack_ptr, USER_STACK_SIZE);
 }

@@ -2,17 +2,17 @@ ENTRY(_start)
 SECTIONS
 {
 	. = 0x100000;
-	.text : {
+	.text : ALIGN(4096) {
 		*(.text)
 	}
-	.rodata : {
+	.rodata : ALIGN(4096) {
 		*(.rodata)
 		*(.rodata.*)
 	}
-	.data : {
+	.data : ALIGN(4096) {
 		 *(.data)
 	}
-	.bss : {
+	.bss : ALIGN(4096) {
 		*(.bss)
 		*(COMMON)
 	}

@@ -6,7 +6,6 @@ extern x86_irq_int_handler, syscall_table_count, syscall_table, boot_info
 section .text
 irq_enable:
     lidt [rdi]
-    sti
     ret
 
 irq_disable:
