@@ -135,6 +135,11 @@ void _putchar(char ch) {
     io_out8(0x3f8, ch);
 }
 
+void arch_set_address_space(Env* env) {
+    uintptr_t new_cr3 = kaddr2paddr(env->addr_space.hw_tables);
+    asm volatile ("mov cr3, %q0" :: "a" (new_cr3));
+}
+
 PerCPU* cpu_get(void) {
     u64 result;
     asm volatile ("mov %q0, gs:[0]" : "=a" (result));

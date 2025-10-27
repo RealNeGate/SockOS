@@ -5,30 +5,23 @@ typedef uint8_t u8;
 #include "../src/boot/term_font.c"
 
 static KHandle mailbox;
-void request_handler(void* arg) {
-    #if 1
-    uint64_t msg[5];
-    uint64_t fn = syscall(SYS_mailbox_wait, mailbox);
-    for (;;) {
-        // reply and wait for the next message
-        fn = syscall(SYS_mailbox_reply, mailbox, fn + 1);
-    }
-    #else
-    uint64_t msg[5];
-    uint64_t fn = syscall(SYS_mailbox_wait, mailbox, &msg);
-    for (;;) {
-        // process message
-
-        // reply and wait for the next message
-        fn = syscall(SYS_mailbox_reply, mailbox, &msg);
-    }
-    #endif
-}
 
 int terminal_used;
 char terminal_buffer[10000];
 void _putchar(char ch) {
     terminal_buffer[terminal_used++] = ch;
+}
+
+void request_handler(void* arg) {
+    uint64_t msg[4];
+    uint64_t fn = syscall(SYS_mailbox_wait, mailbox, msg);
+    for (;;) {
+        // process message
+        syscall(SYS_test, msg[0]);
+
+        // reply and wait for the next message
+        fn = syscall(SYS_mailbox_reply, mailbox, msg, msg[0] + 1, 0);
+    }
 }
 
 #include "../src/kernel/printf.c"
@@ -104,12 +97,6 @@ static int bochs_vbe_driver(KHandle display_pci, uint64_t freq) {
     int stride = vbe[VBE_VIRT_WIDTH];
     int buffer = 0;
 
-    // create & install mailbox
-    mailbox = syscall(SYS_mailbox_create, 4);
-    for (int i = 0; i < 4; i++) {
-        syscall(SYS_thread_create, request_handler, NULL);
-    }
-
     int i = 0;
     for (;;) {
         uint64_t start = __rdtsc();
@@ -126,7 +113,7 @@ static int bochs_vbe_driver(KHandle display_pci, uint64_t freq) {
             syscall(SYS_sleep, 16666 - elapsed);
         }
 
-        i = syscall(SYS_mailbox_send, mailbox, i);
+        i = syscall(SYS_mailbox_send, mailbox, 0, i, 0, 0);
     }
 }
 
@@ -187,6 +174,15 @@ static int intel_gpu_driver(KHandle display_pci, uint64_t freq) {
 
 int _start(KHandle bootstrap_channel) {
     terminal_used = 0;
+
+    // create & install mailbox
+    mailbox = syscall(SYS_mailbox_create, 4);
+    for (int i = 0; i < 4; i++) {
+        syscall(SYS_thread_create, request_handler, NULL);
+    }
+
+    // We have access to the PS/2 interrupts
+    // syscall(SYS_thread_create, mailbox, request_handler);
 
     // BOCHS VBE display
     static uint32_t bochs_pcids[] = { 0x12341111 };

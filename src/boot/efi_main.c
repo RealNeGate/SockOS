@@ -254,7 +254,7 @@ static bool mem_map_verify(MemMap* mem_map) {
     return true;
 }
 
-static void* efi_load_file(EFI_SYSTEM_TABLE* st, EFI_FILE* fs_root, i16* path, size_t* out_size) {
+static void* efi_load_file(EFI_SYSTEM_TABLE* st, EFI_FILE* fs_root, i16* path, size_t* out_size, bool is_cstr) {
     ON_DEBUG(EFI)(printf("Loading '%S'...\n", path));
 
     EFI_FILE* file;
@@ -271,12 +271,16 @@ static void* efi_load_file(EFI_SYSTEM_TABLE* st, EFI_FILE* fs_root, i16* path, s
         panic("Bad file? Failed to get size\nStatus: %X\n", status);
     }
 
-    *out_size = file_info.file_size;
-    void* buffer = efi_alloc(st, file_info.file_size);
+    *out_size = file_info.file_size + is_cstr;
+    char* buffer = efi_alloc(st, file_info.file_size + is_cstr);
 
     status = file->Read(file, &file_info.file_size, buffer);
     if (status != 0) {
         panic("Bad file? Failed to read\nStatus: %X\n", status);
+    }
+
+    if (is_cstr) {
+        buffer[file_info.file_size] = 0;
     }
 
     file->Close(file);
@@ -346,8 +350,8 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
             panic("Failed to open fs root!\nStatus: %X\n", status);
         }
 
-        kernel_buffer = efi_load_file(st, fs_root, (i16*) KERNEL_FILENAME, &kernel_size);
-        map_file_data = efi_load_file(st, fs_root, (i16*) L"output.map", &map_file_size);
+        kernel_buffer = efi_load_file(st, fs_root, (i16*) KERNEL_FILENAME, &kernel_size, false);
+        map_file_data = efi_load_file(st, fs_root, (i16*) L"output.map", &map_file_size, true);
 
         // Verify ELF magic number
         if (kernel_size < 4 || memcmp(kernel_buffer, (u8[]) { 0x7F, 'E', 'L', 'F' }, 4) != 0) {

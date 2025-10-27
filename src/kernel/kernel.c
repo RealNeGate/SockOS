@@ -62,12 +62,46 @@ void kmain(BootInfo* restrict info) {
         #embed "../../userland/desktop.elf"
     };
 
-    #if 0
-    char* str = boot_info->map_file;
-    for (int i = 0; i < boot_info->map_file_size; i++) {
-        _putchar(str[i]);
+    if (0) {
+        char* stream = boot_info->map_file;
+        char* end = stream + boot_info->map_file_size;
+
+        // Skip description line
+        while (*stream && *stream != '\n') {
+            stream++;
+        }
+
+        while (stream != end) {
+            stream += 1;
+
+            int cnt = 0;
+            const char* line = stream;
+            const char* row[10];
+
+            bool prev_word = false;
+            while (*stream && *stream != '\n') {
+                bool in_word = *stream != ' ' && *stream != '\n';
+                if (in_word && !prev_word) {
+                    row[cnt++] = stream;
+                }
+
+                if (!in_word && prev_word) {
+                    stream[0] = 0;
+                }
+                prev_word = in_word, stream += 1;
+            }
+            stream[0] = 0;
+
+            printf("ROW %d ", cnt);
+            FOR_N(i, 0, cnt) {
+                printf("'%s' ", row[i]);
+            }
+            printf("\n");
+            if (cnt == 0) {
+                break;
+            }
+        }
     }
-    #endif
 
     Env* env = env_create();
 

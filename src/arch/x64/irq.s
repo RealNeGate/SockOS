@@ -272,9 +272,13 @@ syscall_handler.bad_syscall:
 ; RSI - PageTable*
 do_context_switch:
     ; switch to new address space
+    test rsi, rsi
+    jz  .skip
     mov cr3, rsi
-
+.skip:
     ; use CPUState as the stack
+    test rdi, rdi
+    jz .skip2
     mov rsp, rdi
 
     ; fxrstor also needs to be aligned to 16bytes
@@ -301,3 +305,5 @@ do_context_switch:
 
     add rsp, 16 ; pop interrupt_num and error code
     iretq
+.skip2:
+    ret

@@ -32,6 +32,8 @@ void arch_wake_up(int core_id) {
     }
 }
 
+// TODO(NeGate): this function is spin-locking for an unbounded
+// amount of time in a non-preemptible environment...
 void arch_tlb_shootdown(Env* env) {
     PerCPU* cpu = cpu_get();
     spall_begin_event("shootdown", cpu->core_id);

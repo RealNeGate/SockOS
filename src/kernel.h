@@ -164,6 +164,7 @@ struct KObject {
         // memory
         KOBJECT_VMO,
         // IPC
+        KOBJECT_PIPE,
         KOBJECT_MAILBOX,
         // Devices
         KOBJECT_DEV_PCI,
@@ -181,13 +182,6 @@ struct KObject_VMO {
     uintptr_t paddr;
 };
 
-enum { KOBJECT_MAILBOX_SIZE = 256 };
-typedef struct {
-    // who is the message being sent to, 0 for "any"
-    u32 rx_id, tx_id;
-    u64 data[7];
-} MailboxMsg;
-
 // Ring buffer of stacks
 typedef struct {
     KObject super; // tag = KOBJECT_MAILBOX
@@ -199,6 +193,20 @@ typedef struct {
 
     atomic_u64 ids_n_items[];
 } KObject_Mailbox;
+
+enum {
+    // each read/write will force a flush
+    KBOJECT_PIPE_FLUSH_ALL,
+};
+
+typedef struct {
+    KObject super; // tag = KOBJECT_PIPE
+    uint32_t flags;
+
+    // handler mailbox
+    KObject_Mailbox* mailbox;
+    size_t size, capacity;
+} KObject_Pipe;
 
 // 10 cache lines worth of handles
 typedef struct {
@@ -224,7 +232,7 @@ struct KHandleTable {
 
 typedef struct PCI_Device PCI_Device;
 
-enum { PCI_MAX_DEVICES = 10 };
+enum { PCI_MAX_DEVICES = 20 };
 extern int pci_dev_count;
 extern PCI_Device* pci_devs[PCI_MAX_DEVICES];
 
@@ -355,6 +363,7 @@ void arch_init(int core_id);
 void arch_handoff(int core_id);
 void arch_wake_up(int core_id);
 uintptr_t arch_canonical_addr(uintptr_t p);
+void arch_set_address_space(Env* env);
 
 // broadcast to all cores running an Env that we've modified the address space
 void arch_tlb_shootdown(Env* env);

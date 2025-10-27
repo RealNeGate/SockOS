@@ -96,7 +96,6 @@ SYS_FN(thread_create) {
 }
 
 SYS_FN(test) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_test(%d)\n", SYS_PARAM0));
     kprintf("SYS_test(%d)\n", SYS_PARAM0);
     return 0;
 }
@@ -233,7 +232,7 @@ SYS_FN(mailbox_create) {
 }
 
 SYS_FN(mailbox_send) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_send(mailbox=%d, %d)\n", SYS_PARAM0, SYS_PARAM1));
+    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_send(mailbox=%d, arg0=%d, arg1=%d, arg2=%d, arg3=%d, arg4=%d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2, SYS_PARAM3, SYS_PARAM4, SYS_PARAM5));
 
     Env* env = cpu->current_thread->parent;
     KObject_Mailbox* mailbox = env_get_handle(env, SYS_PARAM0, NULL);
@@ -241,9 +240,12 @@ SYS_FN(mailbox_send) {
         return -1;
     }
 
+    if (SYS_PARAM1 > 5) {
+        return -1;
+    }
+
     Thread* curr = cpu->current_thread;
     Thread* next = mailbox_send(mailbox);
-    u64 now_time = __rdtsc() / boot_info->tsc_freq;
 
     spin_lock(&cpu->sched->lock);
     // if we're switching, save old thread state
@@ -258,25 +260,32 @@ SYS_FN(mailbox_send) {
     // the sender thread is now blocked
     curr->wait_obj = mailbox;
 
-    // passthru the params
+    cpu->current_thread = next;
+    cpu->sched->active.data[0] = next;
+    spin_unlock(&cpu->sched->lock);
+
+    kassert(next->parent, "mailboxes can't live in kernel-threads");
+    arch_set_address_space(next->parent);
+
+    // TODO(NeGate): verify address
+    uint64_t* msg = (uint64_t*) next->state.rsi;
+
+    // forward params
     #ifdef __x86_64__
     next->state.rax = SYS_PARAM1;
+    msg[0] = SYS_PARAM2;
+    msg[1] = SYS_PARAM3;
+    msg[2] = SYS_PARAM4;
+    msg[3] = SYS_PARAM5;
     #else
     #error "TODO"
     #endif
 
-    cpu->current_thread = next;
-    cpu->sched->active.data[0] = next;
-
-    spin_unlock(&cpu->sched->lock);
-
-    kassert(next->parent, "mailboxes can't live in kernel-threads");
-    uintptr_t new_cr3 = kaddr2paddr(next->parent->addr_space.hw_tables);
-    do_context_switch(&next->state, new_cr3);
+    do_context_switch(&next->state, 0);
 }
 
 SYS_FN(mailbox_wait) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_wait(handle=%d, msg=%p)\n", SYS_PARAM0, SYS_PARAM1));
+    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_wait(mailbox=%d, data=%p)\n", SYS_PARAM0, SYS_PARAM1));
 
     Env* env = cpu->current_thread->parent;
     Thread* curr = cpu->current_thread;
@@ -298,7 +307,7 @@ SYS_FN(mailbox_wait) {
 }
 
 SYS_FN(mailbox_reply) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_reply(handle=%d, msg=%p)\n", SYS_PARAM0, SYS_PARAM1));
+    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_reply(mailbox=%d, msg=%p, ret0=%d, ret1=%d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2, SYS_PARAM3));
     Env* env = cpu->current_thread->parent;
     KObject_Mailbox* mailbox = env_get_handle(env, SYS_PARAM0, NULL);
     if (mailbox == NULL || mailbox->super.tag != KOBJECT_MAILBOX) {
@@ -307,12 +316,10 @@ SYS_FN(mailbox_reply) {
 
     Thread* curr = cpu->current_thread;
     Thread* next = curr->calling_thread;
-    u64 now_time = __rdtsc() / boot_info->tsc_freq;
 
     spin_lock(&cpu->sched->lock);
     // save old thread state
     curr->state = *state;
-
     // transfer our time
     next->start_time = curr->start_time;
     next->exec_time = curr->exec_time;
@@ -323,16 +330,17 @@ SYS_FN(mailbox_reply) {
     curr->wait_obj = mailbox;
     mailbox_recv(mailbox, curr);
 
-    // passthru the params
-    #ifdef __x86_64__
-    next->state.rax = SYS_PARAM1;
-    #else
-    #error "TODO"
-    #endif
-
     cpu->current_thread = next;
     cpu->sched->active.data[0] = next;
     spin_unlock(&cpu->sched->lock);
+
+    // passthru the params
+    #ifdef __x86_64__
+    next->state.rax = SYS_PARAM2;
+    next->state.rdx = SYS_PARAM3;
+    #else
+    #error "TODO"
+    #endif
 
     kassert(next->parent, "mailboxes can't live in kernel-threads");
     uintptr_t new_cr3 = kaddr2paddr(next->parent->addr_space.hw_tables);
