@@ -51,17 +51,7 @@ typedef struct {
     MemRegion* regions;
 } MemMap;
 
-// lock-free queue
-typedef struct {
-    _Atomic int64_t bot;
-    _Atomic int64_t top;
-    _Atomic(void*)* data;
-} PerCPU_PageAllocator;
-
-typedef struct PageFreeList {
-    struct PageFreeList* next;
-    char data[];
-} PageFreeList;
+typedef struct Heap Heap;
 
 typedef struct PerCPU_Scheduler PerCPU_Scheduler;
 typedef struct PerCPU PerCPU;
@@ -80,12 +70,6 @@ struct PerCPU {
     PerCPU_Scheduler* sched;
 
     _Alignas(64) _Atomic(struct Thread*) blocked_threads;
-
-    // 4KiB page heap
-    PageFreeList* heap;
-
-    // 2MiB heap
-    _Alignas(64) PerCPU_PageAllocator alloc;
 
     // NBHM crap
     _Alignas(64) _Atomic uint64_t ebr_time;

@@ -43,6 +43,13 @@ struct Thread {
     // waiting on signalling objects
     _Atomic(void*) wait_obj;
 
+    // Address space optimization, we track the last faulted address.
+    // If we keep faulting in an array like
+    struct {
+        uintptr_t base_addr;
+        uintptr_t next_addr;
+    } last_touch;
+
     // Mailbox threads need to notify their calling thread
     Thread* calling_thread;
     uintptr_t saved_sp;

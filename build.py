@@ -10,6 +10,7 @@ NINJA_SCRIPT: str = "build.ninja"
 # Note(flysand): Apparently it doesn't work if it is specified without
 # .exe on windows.
 LD = 'ld.lld' if platform.system() != 'Windows' else 'ld.lld.exe'
+OPT = ''
 
 CFLAGS = [
     '-g',
@@ -64,7 +65,7 @@ file.write(f'\n')
 if True:
     # build desktop
     file.write(f'build objs/desktop.o: cc userland/desktop.c\n')
-    file.write(f'  flags = -target x86_64-linux-gnu -ffreestanding -nostdlib -fpic\n')
+    file.write(f'  flags = -target x86_64-linux-gnu -ffreestanding -nostdlib -fpic {OPT}\n')
     file.write(f'\n')
     file.write(f'build userland/desktop.elf: ld objs/desktop.o\n')
     file.write(f'  flags = -T userland/link.ld\n')
@@ -77,19 +78,19 @@ for path in Path("src/arch/x64/").rglob("*.c"):
         file.write(f'build objs/{path.name}.o: cc {path} | userland/desktop.elf\n')
     else:
         file.write(f'build objs/{path.name}.o: cc {path}\n')
-    file.write(f'  flags = -I src -fPIC -fno-omit-frame-pointer -target x86_64-linux-gnu -ffreestanding {cflags}\n')
+    file.write(f'  flags = -I src -fPIC -fno-omit-frame-pointer -target x86_64-linux-gnu -ffreestanding {cflags} {OPT}\n')
     file.write(f'\n')
     objs.append("objs/" + path.name + ".o")
 
 for path in Path("src/kernel/").rglob("*.c"):
     file.write(f'build objs/{path.name}.o: cc {path} | objs/desktop.o\n')
-    file.write(f'  flags = -I src -fPIC -fno-omit-frame-pointer -target x86_64-linux-gnu -ffreestanding {cflags}\n')
+    file.write(f'  flags = -I src -fPIC -fno-omit-frame-pointer -target x86_64-linux-gnu -ffreestanding {cflags} {OPT}\n')
     file.write(f'\n')
     objs.append("objs/" + path.name + ".o")
 
 # build EFI app
 file.write(f'build objs/efi.o: cc src/boot/efi_main.c\n')
-file.write(f'  flags = -target x86_64-pc-win32-coff -fuse-ld=lld-link -I src -fno-PIC -fshort-wchar {cflags}\n')
+file.write(f'  flags = -target x86_64-pc-win32-coff -fuse-ld=lld-link -I src -fno-PIC -fshort-wchar {cflags} {OPT}\n')
 file.write(f'\n')
 
 file.write(f'build bin/efi/boot/bootx64.efi: link objs/efi.o\n')

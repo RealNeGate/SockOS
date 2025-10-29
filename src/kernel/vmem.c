@@ -1,4 +1,5 @@
 #include <kernel.h>
+#include "threads.h"
 
 uint32_t vmem_addrhm_hash(const void* k) {
     uint32_t* addr = (uint32_t*) &k;
@@ -243,23 +244,7 @@ void vmem_add_range(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_
     }
 }
 
-static _Alignas(4096) const uint8_t VMEM_ZERO_PAGE[4096];
-bool vmem_segfault(Env* env, uintptr_t access_addr, bool is_write, VMem_PTEUpdate* out_update) {
-    VMem_Cursor cursor = vmem_node_lookup(env, access_addr);
-    if (cursor.node == NULL) {
-        // literally no pages
-        return false;
-    }
-
-    // check if we're in range
-    VMem_PageDesc* desc  = &cursor.node->vals[cursor.index];
-    uintptr_t start_addr = cursor.node->keys[cursor.index];
-    uintptr_t end_addr   = start_addr + desc->size;
-    if (!desc->valid || access_addr < start_addr || access_addr >= end_addr) {
-        // we're in the gap between page descriptor
-        return NULL;
-    }
-
+static void try_commit(Env* env, VMem_PageDesc* desc, uintptr_t access_addr, uintptr_t start_addr, uintptr_t end_addr) {
     // attempt to commit page
     uintptr_t actual_page = (uintptr_t) vmem_addrhm_get(&env->addr_space.commit_table, (void*) access_addr);
     if (actual_page == 0) {
@@ -274,19 +259,75 @@ bool vmem_segfault(Env* env, uintptr_t access_addr, bool is_write, VMem_PTEUpdat
 
             ON_DEBUG(VMEM)(kprintf("[vmem] first touch on VMO (%p), paddr=%p\n", access_addr, new_page));
         } else {
-            void* page = kpool_alloc_page();
+            void* page = kheap_alloc(PAGE_SIZE);
             memset(page, 0, PAGE_SIZE);
             new_page = kaddr2paddr(page);
         }
 
         actual_page = (uintptr_t) vmem_addrhm_put_if_null(&env->addr_space.commit_table, (void*) access_addr, (void*) new_page);
-        if (actual_page != new_page && desc->vmo_handle == 0) {
-            ON_DEBUG(VMEM)(kprintf("[vmem] first touch on private page (%p), paddr=%p\n", access_addr, new_page));
-            kpool_free_page(paddr2kaddr(new_page));
+        if (actual_page == new_page) {
+            if (desc->vmo_handle == 0) {
+                ON_DEBUG(VMEM)(kprintf("[vmem] first touch on private page (%p), paddr=%p\n", access_addr, new_page));
+            }
+
+        } else if (desc->vmo_handle == 0) {
+            kheap_free(paddr2kaddr(new_page), PAGE_SIZE);
         }
     }
 
-    out_update->translated = actual_page;
-    out_update->flags = desc->flags;
+    arch_pte_update(env, access_addr & -PAGE_SIZE, actual_page, desc->flags);
+}
+
+static _Alignas(4096) const uint8_t VMEM_ZERO_PAGE[4096];
+bool vmem_segfault(Env* env, uintptr_t access_addr, bool is_write) {
+    // we don't care where in the page it's located
+    access_addr &= -PAGE_SIZE;
+
+    VMem_Cursor cursor = vmem_node_lookup(env, access_addr);
+    if (cursor.node == NULL) {
+        // literally no pages
+        return false;
+    }
+
+    // check if we're in range
+    VMem_PageDesc* desc  = &cursor.node->vals[cursor.index];
+    uintptr_t start_addr = cursor.node->keys[cursor.index];
+    uintptr_t end_addr   = start_addr + desc->size;
+    if (!desc->valid || access_addr < start_addr || access_addr >= end_addr) {
+        // we're in the gap between page descriptor
+        return false;
+    }
+
+    size_t pages_to_commit = 1;
+    Thread* thread = cpu_get()->current_thread;
+    if (access_addr == thread->last_touch.next_addr) {
+        size_t readahead = access_addr - thread->last_touch.base_addr;
+        if (readahead > 128*1024) {
+            readahead = 128*1024;
+        }
+
+        size_t dist_to_end = end_addr - access_addr;
+        if (readahead > dist_to_end) {
+            readahead = dist_to_end;
+        }
+
+        if (dist_to_end == 0) {
+            // If we can't prefetch anymore, kill the readahead
+            ON_DEBUG(VMEM)(kprintf("[vmem] prefetch miss %p\n", access_addr));
+            thread->last_touch.base_addr = thread->last_touch.next_addr = 0;
+        } else {
+            ON_DEBUG(VMEM)(kprintf("[vmem] prefetch hit  %p, commit ahead %zu pages (base=%p, dist=%zu)\n", access_addr, thread->last_touch.base_addr, readahead, readahead / PAGE_SIZE));
+            thread->last_touch.next_addr = access_addr + readahead;
+            pages_to_commit = readahead / PAGE_SIZE;
+        }
+    } else {
+        ON_DEBUG(VMEM)(kprintf("[vmem] prefetch miss %p\n", access_addr));
+        thread->last_touch.base_addr = access_addr;
+        thread->last_touch.next_addr = access_addr + PAGE_SIZE;
+    }
+
+    FOR_N(i, 0, pages_to_commit) {
+        try_commit(env, desc, access_addr + i*PAGE_SIZE, start_addr, end_addr);
+    }
     return true;
 }

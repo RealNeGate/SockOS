@@ -19,7 +19,7 @@ Env* env_create(void) {
 
     #ifdef __x86_64__
     // copy over the kernel's higher half pages bar for bar.
-    env->addr_space.hw_tables = kpool_alloc_page();
+    env->addr_space.hw_tables = kheap_alloc(PAGE_SIZE);
     for (size_t i = 512; (i--) > 256;) {
         u64 src_page = boot_info->kernel_pml4->entries[i];
         if (src_page == 0) { break; }
@@ -52,7 +52,7 @@ static int round_robin_load_balance;
 Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintptr_t stack, size_t stack_size) {
     bool is_user = env != NULL;
 
-    Thread* new_thread = kpool_alloc_page();
+    Thread* new_thread = kheap_alloc(sizeof(Thread));
     *new_thread = (Thread){
         .super = {
             .tag = KOBJECT_THREAD,
@@ -66,7 +66,7 @@ Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintpt
     };
 
     // userland programs need an extra stack for syscall handling
-    if (is_user) {
+    if (0 && is_user) {
         // map all kernel stacks
         FOR_N(i, 0, boot_info->core_count) {
             char* page = ((char*) boot_info->cores[i].kernel_stack_top) - KERNEL_STACK_SIZE;
@@ -119,7 +119,7 @@ void thread_resume(Thread* thread) {
 }
 
 void thread_kill(Thread* thread) {
-    kheap_free(thread);
+    kheap_free(thread, sizeof(Thread));
 
     // TODO(NeGate): remove from schedule
     // ...

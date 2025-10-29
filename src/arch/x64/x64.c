@@ -60,7 +60,7 @@ void arch_init(int core_id) {
         get_cpu_str(brand_str);
         kprintf("Booting %s\n", brand_str);
 
-        kpool_init(&boot_info->mem_map);
+        kheap_init(&boot_info->mem_map);
 
         x86_parse_acpi();
         kprintf("ACPI processed...\n");
@@ -68,10 +68,9 @@ void arch_init(int core_id) {
         x86_enable_apic();
         kprintf("Found %d cores | TSC freq %d MHz\n", boot_info->core_count, boot_info->tsc_freq);
 
-        kpool_subdivide(boot_info->core_count);
+        kheap_multicore(boot_info->core_count);
         pci_init();
         ps2_init();
-
         sched_init();
 
         kernel_idle_state = new_thread_state(kernel_idle, 0, 0, 0, false);
@@ -86,7 +85,7 @@ void arch_init(int core_id) {
     }
 
     PerCPU* cpu = &boot_info->cores[core_id];
-    cpu->kernel_stack_top = kpool_alloc_page() + KERNEL_STACK_SIZE;
+    cpu->kernel_stack_top = kheap_alloc(KERNEL_STACK_SIZE) + KERNEL_STACK_SIZE;
 
     // setup TSS, it'll store the relevant kernel stack
     {

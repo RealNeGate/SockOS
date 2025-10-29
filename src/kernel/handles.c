@@ -224,13 +224,13 @@ KHandle env_open_handle(Env* env, KAccessRights rights, KObject* obj) {
 
         // CAS latest -> new_table, if another thread wins the race we'll use its table
         if (!atomic_compare_exchange_strong(&env->handles, &latest, new_table)) {
-            kheap_free(new_table);
+            kheap_free(new_table, sizeof(KHandleTable) + new_cap*sizeof(KHandleEntry));
             prev = atomic_load(&latest->prev);
         } else {
             prev   = latest;
             latest = new_table;
 
-            size_t s = sizeof(KernelFreeList) + sizeof(KHandleTable) + new_cap*sizeof(KHandleEntry);
+            size_t s = sizeof(KHandleTable) + new_cap*sizeof(KHandleEntry);
             ON_DEBUG(ENV)(kprintf("[env] resize handle table to %d bytes (cap=%d)\n", s, new_cap));
         }
     }

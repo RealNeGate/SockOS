@@ -86,24 +86,14 @@ void x86_boot_cores(void) {
     u64* gdt_table = kheap_alloc(boot_info->core_count * sizeof(u64));
     gdt_table[0] = 0;
 
-    char* chunk = kpool_alloc_chunk();
-    size_t mark = 0;
-
     FOR_N(k, 1, boot_info->core_count) {
-        if (mark + 65536 >= CHUNK_SIZE) {
-            chunk = kpool_alloc_chunk();
-            mark  = 0;
-        }
-
-        char* sp = &chunk[mark];
-        mark += 65536;
-
-        kprintf("KernelStack[%d]: %p - %p\n", k, sp, sp + 65535);
+        char* sp = kheap_alloc(KERNEL_STACK_SIZE);
+        kprintf("KernelStack[%d]: %p - %p\n", k, sp, sp + KERNEL_STACK_SIZE);
 
         // if windows can get away with small kernel stacks so can we
         PerCPU* restrict cpu = &boot_info->cores[k];
         cpu->self = cpu;
-        cpu->irq_stack_top = sp + 65536;
+        cpu->irq_stack_top = sp + KERNEL_STACK_SIZE;
 
         // setup per-core GDT
         u64 gdt_base = (u64) boot_info->cores[k].gdt;

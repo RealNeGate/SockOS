@@ -9,8 +9,7 @@
 #include <stdatomic.h>
 
 #define EBR_VIRTUAL_ALLOC(size)     memset(kheap_alloc(size), 0, size)
-#define EBR_VIRTUAL_FREE(ptr, size) kheap_free(ptr)
-#define EBR_REALLOC(ptr, size)      kheap_realloc(ptr, size)
+#define EBR_VIRTUAL_FREE(ptr, size) kheap_free(ptr, size)
 
 void ebr_init(void);
 void ebr_deinit(void);
@@ -107,7 +106,7 @@ static int ebr_thread_fn(void* arg) {
             EBR_FreeNode* list = last_free_list;
             while (list) {
                 EBR_FreeNode* next = list->next;
-                EBR_REALLOC(list, 0);
+                kheap_free(list, sizeof(EBR_FreeNode));
                 list = next;
             }
             last_free_list = NULL;
@@ -133,11 +132,11 @@ static int ebr_thread_fn(void* arg) {
 }
 
 void ebr_init(void) {
-    thread_create(NULL, ebr_thread_fn, 0, (uintptr_t) kpool_alloc_page(), 4096);
+    thread_create(NULL, ebr_thread_fn, 0, (uintptr_t) kheap_alloc(KERNEL_STACK_SIZE), KERNEL_STACK_SIZE);
 }
 
 void ebr_free(void* ptr, size_t size) {
-    EBR_FreeNode* node = EBR_REALLOC(NULL, sizeof(EBR_FreeNode));
+    EBR_FreeNode* node = kheap_alloc(sizeof(EBR_FreeNode));
     node->ptr  = ptr;
     node->size = size;
 

@@ -385,80 +385,17 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
             }
 
             // update hardware page tables to match
-            VMem_PTEUpdate update;
             bool is_write = state->error & 2;
-            if (vmem_segfault(env, access_addr, is_write, &update)) {
-                // there's two events:
-                //   update software PTEs => update hardware PTEs
-                //
-                // if we lose the CASes to write hardware PTEs but win the software ones, threads which
-                // acknowledged the incorrect value will simply segfault again and update to a consistent
-                // view. If the memory map update makes "backwards progress" (new form causes more segfaults,
-                // thus updates can't be accomodated for in existing segfaults), we'll require TLB shootdowns
-                // and an exclusive lock on the address space.
-                static const uint64_t shifts[3] = { 39, 30, 21 };
+            bool success = vmem_segfault(env, access_addr, is_write);
+            rwlock_unlock_shared(&env->addr_space.lock);
+        } else {
+            #if DEBUG_IRQ
+            dump_page_fault(state, cr3, cpu, env, access_addr);
+            #endif
 
-                // convert software page properties into hardware page flags
-                uint64_t page_flags = 0;
-                if (update.flags & VMEM_PAGE_USER)  { page_flags |= PAGE_USER;  }
-                if (update.flags & VMEM_PAGE_WRITE) { page_flags |= PAGE_WRITE; }
-
-                PageTable* curr = env->addr_space.hw_tables;
-                kassert(curr == old_address_space, "aren't we editting the old_address_space?");
-
-                for (size_t i = 0; i < 3; i++) {
-                    size_t index = (access_addr >> shifts[i]) & 0x1FF;
-
-                    // the intermediate page tables need to have permissions that are "above" the child pages, so we'll OR our
-                    // flags with it.
-                    u64 entry = atomic_load_explicit(&curr->entries[index], memory_order_relaxed);
-                    for (;;) {
-                        u64 new_entry = entry;
-                        // no table? add one
-                        PageTable* new_pt = NULL;
-                        if (entry & PAGE_PRESENT) {
-                            // bits missing? add one
-                            new_entry |= page_flags;
-                        } else {
-                            new_pt = kpool_alloc_page();
-                            memset(new_pt, 0, sizeof(PageTable));
-
-                            new_entry = kaddr2paddr(new_pt) | page_flags | PAGE_PRESENT;
-                        }
-                        // no progress necessary, it's already behaving
-                        if (entry == new_entry) { break; }
-                        // transaction, if we fail at least someone allocate the
-                        // physical page (so we don't spam allocations as much)
-                        if (atomic_compare_exchange_strong(&curr->entries[index], &entry, new_entry)) { entry = new_entry; break; }
-                        // throw away our new_pt
-                        if (new_pt == NULL) { kpool_free_page(new_pt); }
-                    }
-
-                    curr = paddr2kaddr(entry & ~0x1FF);
-                    kassert(curr != NULL, "missing page table, didn't we just insert it?");
-                }
-
-                size_t pte_index = (access_addr >> 12) & 0x1FF; // 4KiB
-
-                u64 old_pte = curr->entries[pte_index];
-                u64 new_pte = (update.translated & 0xFFFFFFFFF000) | page_flags | PAGE_PRESENT;
-                if (old_pte != new_pte) {
-                    atomic_compare_exchange_strong(&curr->entries[pte_index], &old_pte, new_pte);
-                    ON_DEBUG(VMEM)(kprintf("[vmem] updated PTE %p -> %p!\n", old_pte, new_pte));
-                }
-
-                rwlock_unlock_shared(&env->addr_space.lock);
-                return cr3;
-            } else {
-                rwlock_unlock_shared(&env->addr_space.lock);
-            }
+            x86_halt();
         }
 
-        #if DEBUG_IRQ
-        dump_page_fault(state, cr3, cpu, env, access_addr);
-        #endif
-
-        x86_halt();
         return cr3;
     } else if (state->interrupt_num == 0x20) {
         return timer_interrupt(state, cr3, cpu, now);
@@ -476,6 +413,65 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
     } else {
         x86_halt();
         return cr3;
+    }
+}
+
+// there's two events:
+//   update software PTEs => update hardware PTEs
+//
+// if we lose the CASes to write hardware PTEs but win the software ones, threads which
+// acknowledged the incorrect value will simply segfault again and update to a consistent
+// view. If the memory map update makes "backwards progress" (new form causes more segfaults,
+// thus updates can't be accomodated for in existing segfaults), we'll require TLB shootdowns
+// and an exclusive lock on the address space.
+void arch_pte_update(Env* env, uintptr_t access_addr, uintptr_t translated, VMem_Flags flags) {
+    static const uint64_t shifts[3] = { 39, 30, 21 };
+
+    // convert software page properties into hardware page flags
+    uint64_t page_flags = 0;
+    if (flags & VMEM_PAGE_USER)  { page_flags |= PAGE_USER;  }
+    if (flags & VMEM_PAGE_WRITE) { page_flags |= PAGE_WRITE; }
+
+    PageTable* curr = env->addr_space.hw_tables;
+    for (size_t i = 0; i < 3; i++) {
+        size_t index = (access_addr >> shifts[i]) & 0x1FF;
+
+        // the intermediate page tables need to have permissions that are "above" the child pages, so we'll OR our
+        // flags with it.
+        u64 entry = atomic_load_explicit(&curr->entries[index], memory_order_relaxed);
+        for (;;) {
+            u64 new_entry = entry;
+            // no table? add one
+            PageTable* new_pt = NULL;
+            if (entry & PAGE_PRESENT) {
+                // bits missing? add one
+                new_entry |= page_flags;
+            } else {
+                new_pt = kheap_alloc(PAGE_SIZE);
+                memset(new_pt, 0, sizeof(PageTable));
+
+                new_entry = kaddr2paddr(new_pt) | page_flags | PAGE_PRESENT;
+            }
+            // no progress necessary, it's already behaving
+            if (entry == new_entry) { break; }
+            // transaction, if we fail at least someone allocate the
+            // physical page (so we don't spam allocations as much)
+            if (atomic_compare_exchange_strong(&curr->entries[index], &entry, new_entry)) { entry = new_entry; break; }
+            // throw away our new_pt
+            if (new_pt == NULL) { kheap_free(new_pt, PAGE_SIZE); }
+        }
+
+        curr = paddr2kaddr(entry & ~0x1FF);
+        kassert(curr != NULL, "missing page table, didn't we just insert it?");
+    }
+
+    size_t pte_index = (access_addr >> 12) & 0x1FF; // 4KiB
+
+    u64 old_pte = curr->entries[pte_index];
+    u64 new_pte = (translated & 0xFFFFFFFFF000) | page_flags | PAGE_PRESENT;
+    if (old_pte != new_pte) {
+        atomic_compare_exchange_strong(&curr->entries[pte_index], &old_pte, new_pte);
+        ON_DEBUG(VMEM)(kprintf("[vmem] updated PTE [%p] %p -> %p!\n", access_addr, old_pte, new_pte));
     }
 }
 

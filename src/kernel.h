@@ -29,25 +29,12 @@ void sleep(u64 timeout);
 ////////////////////////////////
 // Kernel heap
 ////////////////////////////////
-typedef struct KernelFreeList KernelFreeList;
-struct KernelFreeList {
-    uint32_t cookie;
-    // next node is directly after the end size of this one
-    uint32_t size     : 30;
-    uint32_t is_free  : 1;
-    uint32_t has_next : 1;
-    // used to track coalescing correctly
-    KernelFreeList* prev;
-    char data[];
-};
-
-extern KernelFreeList* kernel_free_list;
-
-void* kheap_realloc(void* obj, size_t obj_size);
-void* kheap_alloc(size_t obj_size);
-void* kheap_zalloc(size_t obj_size);
-void kheap_free(void* obj);
-void kheap_dump(void);
+void  kheap_init(MemMap* mem_map);
+void  kheap_multicore(size_t num_cores);
+void* kheap_alloc(size_t size);
+void* kheap_zalloc(size_t size);
+void  kheap_free(void* obj, size_t size);
+void  kheap_dump(void);
 
 #define NBHM_ASSERT(x) kassert(x, ":(")
 #include <nbhm.h>
@@ -72,17 +59,6 @@ void rwlock_lock_shared(RWLock* lock);
 void rwlock_unlock_shared(RWLock* lock);
 void rwlock_lock_exclusive(RWLock* lock);
 void rwlock_unlock_exclusive(RWLock* lock);
-
-////////////////////////////////
-// Kernel pool
-////////////////////////////////
-void* kpool_alloc_chunk(void);
-void* kpool_alloc_page(void);
-void  kpool_free_chunk(void* ptr);
-void  kpool_free_page(void* ptr);
-
-void kpool_init(MemMap* restrict mem_map);
-void kpool_subdivide(int num_cores);
 
 ////////////////////////////////
 // Virtual memory
@@ -133,11 +109,6 @@ typedef struct {
     size_t index;
 } VMem_Cursor;
 
-typedef struct {
-    uintptr_t  translated;
-    VMem_Flags flags;
-} VMem_PTEUpdate;
-
 uintptr_t vmem_map(Env* env, KHandle vmo, size_t offset, size_t size, VMem_Flags flags);
 void vmem_add_range(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_t vsize, VMem_Flags flags);
 
@@ -145,7 +116,7 @@ void vmem_add_range(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_
 void vmem_commit_page(Env* env, uintptr_t vaddr, void* kaddr);
 
 bool vmem_protect(Env* env, uintptr_t addr, size_t size, VMem_Flags flags);
-bool vmem_segfault(Env* env, uintptr_t access_addr, bool is_write, VMem_PTEUpdate* out_update);
+bool vmem_segfault(Env* env, uintptr_t access_addr, bool is_write);
 
 ////////////////////////////////
 // Kernel objects
@@ -364,6 +335,8 @@ void arch_handoff(int core_id);
 void arch_wake_up(int core_id);
 uintptr_t arch_canonical_addr(uintptr_t p);
 void arch_set_address_space(Env* env);
+
+void arch_pte_update(Env* env, uintptr_t access_addr, uintptr_t translated, VMem_Flags flags);
 
 // broadcast to all cores running an Env that we've modified the address space
 void arch_tlb_shootdown(Env* env);
