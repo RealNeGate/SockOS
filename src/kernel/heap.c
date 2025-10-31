@@ -51,20 +51,34 @@ static int heap_size_class(size_t obj_size) {
 
 // check if there's any block in here which can hold the alloc
 static void* fl_alloc_fit(HeapFreeList* list, size_t size, size_t align) {
+    // we shouldn't really call this everytime
+    if (1) {
+        // no blocks? "compact" the lists together
+        list->free = list->local_free;
+        list->local_free = NULL;
+
+        // append the stuff that other threads freed
+        HeapBlock* other = atomic_exchange_explicit(&list->thread_free, NULL, memory_order_acq_rel);
+        if (other != NULL) {
+            other->next = list->free;
+            list->free = other;
+        }
+    }
+
     for (HeapBlock *block = list->free, *prev = NULL; block; prev = block, block = block->next) {
         if (size <= block->size) {
             // Replace free-list node due to imperfect split
             if (size != block->size) {
                 kassert(block->size - size >= sizeof(HeapBlock), "fragmentation smaller than HeapBlock");
                 HeapBlock* next = (HeapBlock*) ((char*) block + size);
-                next->next = block->next;
+                next->next = list->local_free;
                 next->size = block->size - size;
+                list->local_free = next;
 
-                // add to segment freelist
                 if (prev) {
-                    prev->next = next;
+                    prev->next = block->next;
                 } else {
-                    list->free = next;
+                    list->free = block->next;
                 }
             }
             list->used += 1;
@@ -104,7 +118,7 @@ static bool fl_free(HeapFreeList* list, void* obj, size_t size) {
     block->size = size;
 
     bool discard = false;
-    if (list->thread_id == cpu_get()->core_id) {
+    if (list->thread_id == cpu_get_index()) {
         ON_DEBUG(KHEAP)(kprintf("[kheap] free(%p, %zu)\n", obj, size));
 
         // Local free
@@ -262,7 +276,7 @@ static HeapSegment* gimme_segment(HeapFreeList* list, size_t size, bool is_small
     } else {
         HeapBlock* block = (HeapBlock*) (base + size);
         block->next = list->local_free;
-        block->size = size;
+        block->size = SEGMENT_SIZE - size;
         list->local_free = block;
     }
 
@@ -271,12 +285,14 @@ static HeapSegment* gimme_segment(HeapFreeList* list, size_t size, bool is_small
 }
 
 void* kheap_alloc(size_t obj_size) {
-    int core_id = cpu_get()->core_id;
+    int core_id = cpu_get_index();
     Heap* heap = &local_heaps[core_id];
 
     if (obj_size <= 4096) {
-        int size_class = heap_size_class(obj_size);
-        obj_size = 16ull << size_class;
+        int size_class  = heap_size_class(obj_size);
+        size_t new_size = 16ull << size_class;
+        kassert(new_size >= obj_size, "woah");
+        obj_size = new_size;
 
         HeapFreeList* list = &heap->page_classes[size_class];
         void* obj = fl_alloc_exact(list);
@@ -318,7 +334,7 @@ void* kheap_alloc(size_t obj_size) {
 }
 
 void kheap_free(void* obj, size_t obj_size) {
-    uintptr_t index = kaddr2paddr(obj) / SEGMENT_SIZE;
+    /*uintptr_t index = kaddr2paddr(obj) / SEGMENT_SIZE;
     kassert(index < heap_segment_count, "we're trying to free an invalid object, %p (index=%d, limit=%d)", obj, index, heap_segment_count);
 
     int size_class = heap_size_class(obj_size);
@@ -327,5 +343,5 @@ void kheap_free(void* obj, size_t obj_size) {
     HeapSegment* segment = &heap_segments[index];
     HeapFreeList* list = segment->owner;
     if (fl_free(list, obj, obj_size)) {
-    }
+    }*/
 }

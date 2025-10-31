@@ -7,8 +7,6 @@
 
 #include "crt.c"
 #include "com.c"
-#include "term.c"
-#include "efi_print.c"
 
 #undef panic
 #define panic(fmt, ...)       \
@@ -18,6 +16,7 @@ do {                          \
 } while (false);
 
 #include "efi.h"
+#include "efi_print.c"
 #include "efi_util.c"
 #include "elf.h"
 #include "elf_loader.c"
@@ -86,7 +85,7 @@ static PageTable* get_or_alloc(PageTableContext* ctx, PageTable* table, int inde
     }
 }
 
-static void map_pages(PageTableContext* ctx, u64 virt_addr, u64 phys_addr, u64 page_count) {
+static void map_pages(PageTableContext* ctx, u64 virt_addr, u64 phys_addr, u64 page_count, bool is_fb) {
     ON_DEBUG(EFI)(printf("  Making a map %X -> %X .. %X\n", virt_addr, phys_addr, phys_addr + page_count*4096 - 1));
 
     PageTable* address_space = &ctx->tables[0];
@@ -105,14 +104,14 @@ static void map_pages(PageTableContext* ctx, u64 virt_addr, u64 phys_addr, u64 p
 
         // 4KB
         // | 3 is because we make the pages both PRESENT and WRITABLE
-        curr->entries[pte_index] = (phys_addr & 0xFFFFFFFFF000) | 3;
+        curr->entries[pte_index] = (phys_addr & 0xFFFFFFFFF000) | 3 | (is_fb ? 16 : 0);
         phys_addr += PAGE_SIZE;
         virt_addr += PAGE_SIZE;
     }
 }
 
 static void map_pages_id(PageTableContext* ctx, u64 addr, u64 page_count) {
-    map_pages(ctx, addr, addr, page_count);
+    map_pages(ctx, addr, addr, page_count, false);
 }
 
 static void mem_map_mark(MemMap* mem_map, u64 base, u64 npages, u64 type) {
@@ -289,15 +288,9 @@ static void* efi_load_file(EFI_SYSTEM_TABLE* st, EFI_FILE* fs_root, i16* path, s
 
 EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     EFI_STATUS status = st->ConOut->ClearScreen(st->ConOut);
-    printf("EFI Booting...\n");
 
-    if(!com_init(PORT_COM1, COM_DEFAULT_BAUD)) {
-        efi_println(st, L"Failed to initialize COM1 port output");
-    }
-    if(!com_init(PORT_COM2, COM_DEFAULT_BAUD)) {
-        efi_println(st, L"Failed to initialize COM2 port output");
-    }
-    com_writes("COM1 port output success!\n");
+    dummy_st = st;
+    efi_println(st, L"EFI Booting...");
 
     // Get linear framebuffer
     Framebuffer fb;
@@ -315,8 +308,13 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         fb.stride = graphics_output_protocol->Mode->Info->PixelsPerScanline;
         fb.pixels = (u32*)graphics_output_protocol->Mode->FrameBufferBase;
     }
-    term_set_framebuffer(fb);
-    term_set_wrap(true);
+
+    if(!com_init(PORT_COM1, COM_DEFAULT_BAUD)) {
+        efi_println(st, L"Failed to initialize COM1 port output");
+    }
+    if(!com_init(PORT_COM2, COM_DEFAULT_BAUD)) {
+        efi_println(st, L"Failed to initialize COM2 port output");
+    }
 
     ON_DEBUG(EFI)(printf("Framebuffer at %X\n", (u64) fb.pixels));
 
@@ -426,26 +424,25 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         panic("MemMap contains overlapping ranges");
     }
 
-    status = st->BootServices->ExitBootServices(img_handle, map_key);
-    if (status != 0) {
-        panic("Failed to exit EFI\nStatus: %X", status);
-    }
-
     // Print memory map
-    #if DEBUG_EFI
+    /*#if DEBUG_EFI
     printf("Memory map (%d entries):\n", mem_map.nregions);
     for(int i = 0; i != mem_map.nregions; ++i) {
         MemRegion region = mem_map.regions[i];
         char* name = mem_region_name(region.type);
         printf("%d: %X .. %X [%s]\n", i, region.base, region.base + region.pages*4096, name);
     }
-    #endif
+    #endif*/
 
     kernel_boot_info.map_file_size = map_file_size;
     kernel_boot_info.map_file = map_file_data;
-
     kernel_boot_info.identity_map_ptr = (kernel_module.virt_base + kernel_module.size + 0x40000000 - 1) & -0x40000000;
-    ON_DEBUG(EFI)(printf("Identity map @ %X\n", kernel_boot_info.identity_map_ptr));
+    // ON_DEBUG(EFI)(printf("Identity map @ %X\n", kernel_boot_info.identity_map_ptr));
+
+    status = st->BootServices->ExitBootServices(img_handle, map_key);
+    if (status != 0) {
+        panic("Failed to exit EFI\nStatus: %X", status);
+    }
 
     // Generate the page tables
     // Map everything in the memory map that's ever been allocated
@@ -457,17 +454,17 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
             if(region.type != MEM_REGION_KERNEL) {
                 panic("Something bad is located at kernel's paddr");
             }
-            map_pages(&ctx, kernel_module.virt_base, region.base, region.pages);
+            map_pages(&ctx, kernel_module.virt_base, region.base, region.pages, false);
         }
 
-        map_pages(&ctx, kernel_boot_info.identity_map_ptr + region.base, region.base, region.pages);
+        map_pages(&ctx, kernel_boot_info.identity_map_ptr + region.base, region.base, region.pages, region.type == MEM_REGION_FRAMEBUFFER);
     }
 
     // Map the loader's trampoline page in, when loader.s installs the new address space we need the
     // code there to stick around long enough to jump away.
-    ON_DEBUG(EFI)(printf("  Making trampoline mapping %X\n", kernel_module.phys_base + kernel_module.entry_addr));
+    // ON_DEBUG(EFI)(printf("  Making trampoline mapping %X\n", kernel_module.phys_base + kernel_module.entry_addr));
     map_pages_id(&ctx, kernel_module.phys_base + kernel_module.entry_addr, 1);
-    map_pages(&ctx, kernel_boot_info.identity_map_ptr + (uintptr_t) &kernel_boot_info, (uintptr_t) &kernel_boot_info, (sizeof(BootInfo) + 4095) / 4096);
+    map_pages(&ctx, kernel_boot_info.identity_map_ptr + (uintptr_t) &kernel_boot_info, (uintptr_t) &kernel_boot_info, (sizeof(BootInfo) + 4095) / 4096, false);
 
     // memset(framebuffer, 0, framebuffer_stride * framebuffer_height * sizeof(u32));
     for (size_t j = 0; j < 50; j++) {
@@ -475,11 +472,6 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
             fb.pixels[i + (j * fb.stride)] = 0xFFFF7F1F;
         }
     }
-
-    #if 0
-    printf("TSS descriptor:\n");
-    memdump(tss, 16);
-    #endif
 
     kernel_boot_info.elf_virtual_ptr = kernel_module.virt_base;
     kernel_boot_info.elf_physical_ptr = kernel_module.phys_base;

@@ -47,11 +47,15 @@ static atomic_int cores_ready;
 
 void pci_init(void);
 void ps2_init(void);
-void arch_init(int core_id) {
+void arch_init(int id) {
     // Stuff we only handle once
-    x86_set_kernel_gs(core_id);
+    x86_set_kernel_gs(id);
 
-    if (core_id == 0) {
+    // Double checking
+    uint32_t val = 0x1F80;
+    asm volatile ("ldmxcsr [%q0]" :: "r"(&val));
+
+    if (id == 0) {
         if (!has_cpu_support()) {
             panic("Here's a nickel, kid. Buy yourself a computer.\n");
         }
@@ -75,16 +79,16 @@ void arch_init(int core_id) {
 
         kernel_idle_state = new_thread_state(kernel_idle, 0, 0, 0, false);
 
-        x86_irq_startup(core_id);
+        x86_irq_startup(id);
         x86_boot_cores();
-
-        // thread_create(NULL, sched_load_balancer, 0, (uintptr_t) kpool_alloc_page(), 4096, false);
     } else {
+        // kprintf("Booting core %d...\n", id);
+
         sched_init();
-        x86_irq_startup(core_id);
+        x86_irq_startup(id);
     }
 
-    PerCPU* cpu = &boot_info->cores[core_id];
+    PerCPU* cpu = &boot_info->cores[id];
     cpu->kernel_stack_top = kheap_alloc(KERNEL_STACK_SIZE) + KERNEL_STACK_SIZE;
 
     // setup TSS, it'll store the relevant kernel stack
@@ -106,7 +110,7 @@ void arch_init(int core_id) {
         asm volatile ("mov ax, 0x28\nltr ax" ::: "ax");
     }
 
-    kprintf("Hello Mr. CPU! %p %d\n", cpu, core_id);
+    kprintf("Hello Mr. CPU! %p %d\n", cpu, id);
 
     // fence to wait for all CPUs to finish init
     cores_ready++;
@@ -122,7 +126,7 @@ struct StackFrame_x64 {
 };
 
 void arch_backtrace(void) {
-    kprintf("CPU-%d: BACKTRACE:\n", cpu_get()->core_id);
+    kprintf("CPU-%d: BACKTRACE:\n", cpu_get_index());
     StackFrame_x64* frame = __builtin_frame_address(0);
     while (frame) {
         kprintf("  %p\n", frame->rip);
@@ -130,9 +134,9 @@ void arch_backtrace(void) {
     }
 }
 
-void _putchar(char ch) {
+/* void _putchar(char ch) {
     io_out8(0x3f8, ch);
-}
+} */
 
 void arch_set_address_space(Env* env) {
     uintptr_t new_cr3 = kaddr2paddr(env->addr_space.hw_tables);
@@ -143,6 +147,10 @@ PerCPU* cpu_get(void) {
     u64 result;
     asm volatile ("mov %q0, gs:[0]" : "=a" (result));
     return (PerCPU*) result;
+}
+
+size_t cpu_get_index(void) {
+    return cpu_get() - boot_info->cores;
 }
 
 u64 x86_get_cr2(void) {
@@ -176,15 +184,15 @@ void x86_writemsr(u32 r, u64 v) {
     asm volatile ("wrmsr" : : "c" (r), "a" (eax), "d" (edx));
 }
 
-static inline void x86_cli() {
+static inline void x86_cli(void) {
     asm volatile ("cli");
 }
 
-static inline void x86_sti() {
+static inline void x86_sti(void) {
     asm volatile ("sti");
 }
 
-static inline void x86_hlt() {
+static inline void x86_hlt(void) {
     asm volatile ("hlt");
 }
 

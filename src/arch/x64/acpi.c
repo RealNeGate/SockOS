@@ -116,6 +116,15 @@ const char* entry_to_string(int type) {
     }
 }
 
+static uintptr_t id_map(uintptr_t addr) {
+    size_t offset = addr & (PAGE_SIZE - 1);
+
+    addr &= -PAGE_SIZE;
+    addr = (uintptr_t) memmap_view(boot_info->kernel_pml4, addr, (u64) paddr2kaddr(addr), PAGE_SIZE*2, VMEM_PAGE_WRITE);
+
+    return addr + offset;
+}
+
 void x86_parse_acpi(void) {
     ACPI_RSDP_Desc_V2 *header = paddr2kaddr(boot_info->rsdp_addr);
     u8 rsdp_magic[] = {'R', 'S', 'D', ' ', 'P', 'T', 'R', ' ' };
@@ -159,9 +168,11 @@ void x86_parse_acpi(void) {
                 switch (entry->type) {
                     case APIC_ENTRY_LAPIC: {
                         ACPI_APIC_LAPIC_Entry *entry = (ACPI_APIC_LAPIC_Entry *)buf_ptr;
-                        boot_info->cores[core_count].core_id  = entry->processor_id;
+                        boot_info->cores[core_count].physical_id = entry->processor_id;
                         boot_info->cores[core_count].lapic_id = entry->apic_id;
                         core_count += 1;
+
+                        // kprintf("Core%u spotted with LAPIC_ID=%u\n", entry->processor_id, entry->apic_id);
                     } break;
                     case APIC_ENTRY_IOAPIC: {
                         ACPI_APIC_IOAPIC_Entry *entry = (ACPI_APIC_IOAPIC_Entry *)buf_ptr;
@@ -220,8 +231,8 @@ void x86_parse_acpi(void) {
     kprintf("Found the I/O APIC: %p (vaddr=%p)\n", boot_info->ioapic_base, paddr2kaddr(boot_info->ioapic_base));
 
     // Map into the higher half
-    boot_info->lapic_base  = (u64) memmap_view(boot_info->kernel_pml4, boot_info->lapic_base, (u64) paddr2kaddr(boot_info->lapic_base), PAGE_SIZE, VMEM_PAGE_WRITE);
-    boot_info->ioapic_base = (u64) memmap_view(boot_info->kernel_pml4, boot_info->ioapic_base, (u64) paddr2kaddr(boot_info->ioapic_base), PAGE_SIZE, VMEM_PAGE_WRITE);
+    boot_info->lapic_base  = id_map(boot_info->lapic_base);
+    boot_info->ioapic_base = id_map(boot_info->ioapic_base);
 }
 
 // Enable APIC

@@ -135,31 +135,14 @@ void pci_write_u32(u32 bus, u32 device, u32 func, u32 offs, u32 value) {
     io_out32(PCI_VALUE_PORT, value);
 }
 
-BAR parse_bar(Raw_BAR bar) {
-    BAR b = {};
-    b.is_mem = !(bar.value & 0x1);
-    b.size = ~(bar.size) + 1;
-
-    if (b.is_mem) {
-        b.type = (bar.value >> 1) & 0x3;
-        b.addr = (bar.value >> 4) << 4;
-        kassert(b.type == 0, "TODO: Only supports BAR 32-bit");
-        b.prefetch = (bar.value >> 3) & 0x1;
-    } else {
-        b.addr = (bar.value >> 2) << 2;
-    }
-    return b;
-}
 char *pin_names[] = { "NONE", "A", "B", "C" "D" };
 
 void pci_print_device(PCI_Device *dev) {
-    kprintf("[pci] Found %x:%x\n", dev->vendor_id, dev->device_id);
-
     const char *subclass_tag;
     if (dev->subclass == 0x80) {
         subclass_tag = "Other";
     } else {
-        switch (dev->class) {
+        /*&switch (dev->class) {
             case PCI_CLASS_BRIDGE: {
                 kabc(dev->subclass, pci_subclass_bridge_names);
                 subclass_tag = pci_subclass_bridge_names[dev->subclass];
@@ -179,16 +162,33 @@ void pci_print_device(PCI_Device *dev) {
             default: {
                 subclass_tag = "Unknown";
             } break;
+        }*/
+        switch (dev->class) {
+            case PCI_CLASS_BRIDGE: {
+                subclass_tag = "Bridge";
+            } break;
+            case PCI_CLASS_NETWORK_CTL: {
+                subclass_tag = "Network";
+            } break;
+            case PCI_CLASS_DISPLAY_CTL: {
+                subclass_tag = "Display";
+            } break;
+            case PCI_CLASS_STORAGE_CTL: {
+                subclass_tag = "Storage";
+            } break;
+            default: {
+                subclass_tag = "Unknown";
+            } break;
         }
     }
 
-    kprintf("\tclass: (%d) %s, subclass: (%d) %s\n",
+    kprintf("[pci] Found %x:%x, class: (%d) %s, subclass: (%d) %s, prog if: %d revision: %d\n",
+        dev->vendor_id,
+        dev->device_id,
         dev->class,
         pci_class_names[dev->class],
         dev->subclass,
-        subclass_tag
-    );
-    kprintf("\tprog if: %d, revision: %d\n",
+        subclass_tag,
         dev->prog_IF,
         dev->revision
     );
@@ -197,12 +197,26 @@ void pci_print_device(PCI_Device *dev) {
             continue;
         }
 
-        BAR bar = parse_bar(dev->bar[i]);
-        kprintf("\t - BAR%d %s addr: %p, size: %x\n", i, bar.is_mem ? "mem" : "io", bar.addr, bar.size);
+        size_t size = ~(dev->bar[i].size) + 1;
+        if (dev->bar[i].value & 1) {
+            // IO
+            uintptr_t addr = (dev->bar[i].value >> 2) << 2;
+            kprintf("  - BAR%d I/O addr: %p, size: %x\n", i, addr, size);
+        } else {
+            uintptr_t addr = (dev->bar[i].value >> 4) << 4;
+            u8 type = (dev->bar[i].value >> 1) & 0x3;
+            if (type == 2) {
+                addr |= (uintptr_t) dev->bar[i+1].value << 32ull;
+            }
+            kprintf("  - BAR%d MEM addr: %p, size: %x\n", i, addr, size);
+            if (type == 2) {
+                i += 1;
+            }
+        }
     }
 
     if (dev->irq_line != 0xFF) {
-        kprintf("\tirq: %d, pin: %s\n", dev->irq_line, pin_names[dev->irq_pin]);
+        kprintf("  irq: %d, pin: %s\n", dev->irq_line, pin_names[dev->irq_pin]);
     }
 }
 

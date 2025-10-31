@@ -55,12 +55,11 @@ void sched_wait(u64 timeout) {
 }
 
 // keeps moving tasks to try to keep the exec times near each other
-#if 0
 int sched_load_balancer(void*) {
     static i64 total_exec[256];
     for (;;) {
         // find average
-        u64 avg = 0;
+        /*u64 avg = 0;
         FOR_N(i, 0, boot_info->core_count) {
             total_exec[i] = boot_info->cores[i].sched->total_exec;
         }
@@ -100,12 +99,12 @@ int sched_load_balancer(void*) {
 
                 spin_lock(&sched->lock);
             }
-        }
+        }*/
 
-        sleep(100000);
+        kprintf("POLL!\n");
+        sleep(1000000);
     }
 }
-#endif
 
 enum {
     SCHED_MIN_QUANTA =  1000,
@@ -117,7 +116,7 @@ bool sched_is_blocked(Thread* t) {
 }
 
 Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
-    int core_id = cpu->core_id;
+    int core_id = cpu - boot_info->cores;
     PerCPU_Scheduler* sched = cpu->sched;
 
     // kprintf("sched_pick_next(now=%d)\n", now_time);

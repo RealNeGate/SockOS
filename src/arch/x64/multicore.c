@@ -3,9 +3,20 @@
 
 // Toaruos SMP boot for reference
 // https://github.com/klange/toaruos/blob/master/kernel/arch/x86_64/smp.c
+static atomic_int core_awake;
 void smp_main(PerCPU* cpu) {
-    arch_init(cpu->core_id);
-    arch_handoff(cpu->core_id);
+    core_awake = 1;
+
+    int id = cpu - boot_info->cores;
+    int offset = id * 50;
+    for (size_t j = 0; j < 50; j++) {
+        for (size_t i = 0; i < 50; i++) {
+            boot_info->fb.pixels[offset + i + (j * boot_info->fb.stride)] = 0xFFFF00FF;
+        }
+    }
+
+    arch_init(id);
+    arch_handoff(id);
 }
 
 u32 apic_get_errors(void) {
@@ -22,7 +33,7 @@ void x86_send_ipi(u64 lapic_id, u64 val) {
 }
 
 void arch_wake_up(int core_id) {
-    if (cpu_get()->core_id != core_id) {
+    if (cpu_get_index() != core_id) {
         u32 lapic_id = boot_info->cores[core_id].lapic_id;
         if (atomic_compare_exchange_strong(&boot_info->cores[core_id].sched->idleing, &(bool){ true }, false)) {
             // sending an IPI which triggers int#32 (Timer)
@@ -36,7 +47,7 @@ void arch_wake_up(int core_id) {
 // amount of time in a non-preemptible environment...
 void arch_tlb_shootdown(Env* env) {
     PerCPU* cpu = cpu_get();
-    spall_begin_event("shootdown", cpu->core_id);
+    spall_begin_event("shootdown", cpu_get_index());
 
     // acquire TLB lock
     Thread* curr = cpu->current_thread;
@@ -65,7 +76,7 @@ void arch_tlb_shootdown(Env* env) {
 
     env->addr_space.checkpoint_done = 0;
     env->addr_space.tlb_lock = NULL;
-    spall_end_event(cpu->core_id);
+    spall_end_event(cpu_get_index());
 }
 
 static void powernap(u64 micros) {
@@ -88,7 +99,7 @@ void x86_boot_cores(void) {
 
     FOR_N(k, 1, boot_info->core_count) {
         char* sp = kheap_alloc(KERNEL_STACK_SIZE);
-        kprintf("KernelStack[%d]: %p - %p\n", k, sp, sp + KERNEL_STACK_SIZE);
+        // kprintf("KernelStack[%d]: %p - %p\n", k, sp, sp + KERNEL_STACK_SIZE);
 
         // if windows can get away with small kernel stacks so can we
         PerCPU* restrict cpu = &boot_info->cores[k];
@@ -135,19 +146,21 @@ void x86_boot_cores(void) {
     slots[4] = (u64) premain;
     slots[5] = (u64) gdt_table;
 
-    // Walk the cores and boot them
     FOR_N(i, 1, boot_info->core_count) {
-        u32 lapic_id = boot_info->cores[i].lapic_id;
-        // Send a CPU INIT
-        x86_send_ipi(lapic_id, 0x4501);
-    }
+        uint32_t id = boot_info->cores[i].lapic_id;
+        slots[6] = i;
+        core_awake = 0;
 
-    powernap(1000000);
+        // INIT-SIPI
+        x86_send_ipi(id, 0x4500);
+        // 10 millisecond delay
+        powernap(10000);
+        x86_send_ipi(id, 0x4601);
 
-    FOR_N(i, 1, boot_info->core_count) {
-        u32 lapic_id = boot_info->cores[i].lapic_id;
-        // Send a STARTUP IPI
-        x86_send_ipi(lapic_id, 0x4601);
+        // wait until the thread has advanced
+        while (core_awake == 0) {
+            asm volatile ("pause");
+        }
     }
 }
 

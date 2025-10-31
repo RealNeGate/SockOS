@@ -54,7 +54,7 @@ struct Thread {
     Thread* calling_thread;
     uintptr_t saved_sp;
 
-    CPUState state;
+    _Alignas(16) CPUState state;
 };
 
 bool sched_is_blocked(Thread* t);

@@ -7,8 +7,9 @@ typedef uint8_t u8;
 static KHandle mailbox;
 
 int terminal_used;
-char terminal_buffer[10000];
+char terminal_buffer[100000];
 void _putchar(char ch) {
+    if (terminal_buffer < 100000) { return; }
     terminal_buffer[terminal_used++] = ch;
 }
 
@@ -48,12 +49,9 @@ static void draw_char(uint32_t* pixels, int stride, int char_x, int char_y, int 
         uint8_t byte = term_font[16 * (uint8_t) ch + y];
         for (int x = 0; x < 8; x++) {
             bool is_fg = (byte >> x) & 1;
-            if (!is_fg) {
-                continue;
-            }
             int pixel_x = offset_x + x;
             int pixel_y = offset_y + y;
-            pixels[pixel_x + pixel_y*stride] = 0xFFFFFFFF;
+            pixels[pixel_x + pixel_y*stride] = is_fg ? 0xFFFFFFFF : 0xFF000000;
         }
     }
 }
@@ -62,21 +60,28 @@ void draw(int width, int height, int stride, uint32_t* pixels) {
     uint64_t gradient_x = 64; // (width + 255) / 256;
     uint64_t gradient_y = 64; // (height + 255) / 256;
 
-    for (size_t j = 0; j < height; j++) {
+    /*for (size_t j = 0; j < height; j++) {
         uint32_t g = (j % gradient_y) * 4;
         for (size_t i = 0; i < width; i++) {
             uint32_t b = ((i + mult) % gradient_x) * 4;
             pixels[i + (j * stride)] = 0xFF000000 | (g << 16) | (b << 8);
         }
-    }
+    } */
 
     // draw text
     int i = 0;
     int x = 0, y = 0;
+    int col = 0;
     while (i < terminal_used) {
         char ch = terminal_buffer[i++];
         if (ch == '\n') {
-            x = 0, y += 1;
+            x = col*40, y += 1;
+            if (y == 65) {
+                col += 1;
+
+                x += 40;
+                y = 0;
+            }
         } else {
             draw_char(pixels, stride, x, y, ch);
             x += 1;
@@ -97,7 +102,7 @@ static int bochs_vbe_driver(KHandle display_pci, uint64_t freq) {
     int stride = vbe[VBE_VIRT_WIDTH];
     int buffer = 0;
 
-    int i = 0;
+    // int i = 0;
     for (;;) {
         uint64_t start = __rdtsc();
 
@@ -113,7 +118,7 @@ static int bochs_vbe_driver(KHandle display_pci, uint64_t freq) {
             syscall(SYS_sleep, 16666 - elapsed);
         }
 
-        i = syscall(SYS_mailbox_send, mailbox, 0, i, 0, 0);
+        // i = syscall(SYS_mailbox_send, mailbox, 0, i, 0, 0);
     }
 }
 
@@ -135,6 +140,7 @@ static int intel_gpu_driver(KHandle display_pci, uint64_t freq) {
     size_t gtt_size     = ((gmch_ctrl >> 8ull) << 20ull);
 
     // Dump the planes
+    //   CFG      - XXX7C
     //   WM       - XXX40
     //   CTL      - XXX80
     //   STRIDE   - XXX88
@@ -143,16 +149,21 @@ static int intel_gpu_driver(KHandle display_pci, uint64_t freq) {
     //   SURF     - XXX9C
     //   OFFSET   - XXXA4
     //   SURFLIVE - XXXAC
+    static const uint32_t offsets[] = {
+        0x7C, 0x40, 0x80, 0x88, 0x8C, 0x90, 0x9C, 0xA4, 0xAC
+    };
+
     for (int pipe = 0; pipe < 3; pipe++) {
         printf("Pipe %d\n", pipe);
         for (int plane = 0; plane < 3; plane++) {
-            printf("  Plane %d\n", pipe);
+            printf("  Plane %d\n", plane);
 
-            uint32_t addr = 0x70000 + (pipe * 0x01000) + ((plane+1) * 0x00100);
-            uint32_t* plane = (uint32_t*) (mmio_gtt + addr);
+            uint32_t addr = 0x70100 + (pipe * 0x1000) + (plane * 0x100);
+            uint32_t* arr = (uint32_t*) (mmio_gtt + addr);
 
-            for (int i = 0; i < 64; i++) {
-                printf("  [%#x] %#x\n", addr + i*4, plane[i]);
+            for (int i = 0; i < 9; i++) {
+                int offset = offsets[i];
+                printf("  [%#x] %#x\n", addr + offset, arr[offset / 4]);
             }
         }
     }
@@ -176,10 +187,10 @@ int _start(KHandle bootstrap_channel) {
     terminal_used = 0;
 
     // create & install mailbox
-    mailbox = syscall(SYS_mailbox_create, 4);
+    /* mailbox = syscall(SYS_mailbox_create, 4);
     for (int i = 0; i < 4; i++) {
         syscall(SYS_thread_create, request_handler, NULL);
-    }
+    } */
 
     // We have access to the PS/2 interrupts
     // syscall(SYS_thread_create, mailbox, request_handler);
@@ -188,8 +199,10 @@ int _start(KHandle bootstrap_channel) {
     static uint32_t bochs_pcids[] = { 0x12341111 };
     KHandle display_pci = syscall(SYS_pci_claim_device, 1, bochs_pcids);
     if (display_pci != 0) {
-        bochs_vbe_driver(display_pci, bootstrap_channel);
+        // bochs_vbe_driver(display_pci, bootstrap_channel);
     }
+
+    printf("Hello!\n");
 
     uint64_t info[4];
     int fb_bar = syscall(SYS_fb_grab, info);
@@ -199,7 +212,7 @@ int _start(KHandle bootstrap_channel) {
     static uint32_t i915_pcids[] = { 0x80863E92 };
     display_pci = syscall(SYS_pci_claim_device, 1, i915_pcids);
     if (display_pci != 0) {
-        printf("Hello, World! handle=%p\n", display_pci);
+        printf("Found! handle=%p\n", display_pci);
         intel_gpu_driver(display_pci, bootstrap_channel);
     }
 

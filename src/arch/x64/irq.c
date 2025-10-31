@@ -113,8 +113,8 @@ static uint32_t micros_to_apic_time(uint64_t t) {
     };                                                  \
 } while (0)
 
-void x86_irq_startup(int core_id) {
-    if (core_id == 0) {
+void x86_irq_startup(int id) {
+    if (id == 0) {
         FOR_N(i, 0, 256) _idt[i] = (IDTEntry){ 0 };
         SET_INTERRUPT(3,  false);
         SET_INTERRUPT(6,  false);
@@ -122,6 +122,7 @@ void x86_irq_startup(int core_id) {
         SET_INTERRUPT(9,  false);
         SET_INTERRUPT(13, true);
         SET_INTERRUPT(14, true);
+        SET_INTERRUPT(19, false);
         SET_INTERRUPT(32, false);
         SET_INTERRUPT(33, false);
         SET_INTERRUPT(34, false);
@@ -159,7 +160,7 @@ void x86_irq_startup(int core_id) {
         x86_writemsr(IA32_STAR, ((u64)KERNEL_CS << 32ull) | (0x10ull << 48ull));
 
         // we're storing the per_cpu info here, syscall will use this
-        x86_writemsr(IA32_KERNEL_GS_BASE, (uintptr_t) &boot_info->cores[core_id]);
+        x86_writemsr(IA32_KERNEL_GS_BASE, (uintptr_t) &boot_info->cores[id]);
     }
 
     IDT idt;
@@ -193,7 +194,7 @@ void set_interrupt_line(u32 line, void fn(void*), void* ctx) {
     kprintf("idx: 0x%x, added line: %d | %016b\n", redirect_table_idx, line, entry);
 }
 
-void arch_handoff(int core_id) {
+void arch_handoff(int id) {
     // Enable APIC timer
     //   0xF0 - Spurious Interrupt Vector Register
     //   Punting spurious interrupts (see PIC/CPU race condition, this is a fake interrupt)
@@ -205,7 +206,7 @@ void arch_handoff(int core_id) {
     APIC(0x3E0) = 0b1011;
 
     // calibrate APIC timer
-    if (core_id == 0) {
+    if (id == 0) {
         apic_timer_status = APIC_CALIBRATING;
         apic_freq = __rdtsc();
         APIC(0x380) = APIC_CALIBRATION_TICKS;
@@ -220,8 +221,8 @@ void arch_handoff(int core_id) {
             asm volatile ("pause");
         }
 
-        kprintf("CPU-%d is now ready to work!\n", core_id);
-        spall_begin_event("main", core_id);
+        kprintf("CPU-%d is now ready to work!\n", id);
+        spall_begin_event("main", id);
 
         asm volatile ("sti");
         asm volatile ("int 32");
@@ -229,23 +230,24 @@ void arch_handoff(int core_id) {
 }
 
 uintptr_t timer_interrupt(CPUState* state, uintptr_t cr3, PerCPU* cpu, u64 now) {
+    int id = cpu - boot_info->cores;
     if (apic_timer_status == APIC_CALIBRATING) {
         apic_freq = (now - apic_freq) / APIC_CALIBRATION_TICKS;
 
         kprintf("APIC timer freq = %d\n", apic_freq);
 
         spall_header();
-        spall_begin_event("main", cpu->core_id);
+        spall_begin_event("main", id);
         apic_timer_status = APIC_CALIBRATED;
     }
 
     cpu->sched->idleing = false;
-
     u64 now_micros = now / boot_info->tsc_freq;
 
     u64 next_wake;
     spin_lock(&cpu->sched->lock);
     Thread* next = sched_pick_next(cpu, now_micros, &next_wake);
+    PageTable* old_address_space = paddr2kaddr(cr3);
 
     // if we're switching, save old thread state
     if (cpu->current_thread != NULL) {
@@ -263,28 +265,28 @@ uintptr_t timer_interrupt(CPUState* state, uintptr_t cr3, PerCPU* cpu, u64 now) 
         // set new one-shot
         APIC(0x380) = micros_to_apic_time(until_wake);
 
-        #if 1 // DEBUG_SCHED
+        #if DEBUG_SCHED
         if (cpu->current_thread != next) {
-            ON_DEBUG(IRQ)(kprintf("[irq] CPU-%d: switch %p -> %p for %f ms\n", cpu->core_id, cpu->current_thread, next, until_wake / 1000.0f));
+            ON_DEBUG(IRQ)(kprintf("[irq] CPU-%d: switch %p -> %p for %f ms\n", id, cpu->current_thread, next, until_wake / 1000.0));
         } else {
-            ON_DEBUG(IRQ)(kprintf("[irq] CPU-%d: stay on %p for %f ms\n", cpu->core_id, next, until_wake / 1000.0f));
+            ON_DEBUG(IRQ)(kprintf("[irq] CPU-%d: stay on %p for %f ms\n", id, next, until_wake / 1000.0));
         }
         #endif
     } else {
         cpu->sched->idleing = true;
 
-        #if 1 // DEBUG_SCHED
+        #if DEBUG_SCHED
         if (cpu->current_thread != next) {
-            ON_DEBUG(IRQ)(kprintf("[irq] CPU-%d: switch %p -> %p... \"forever\"\n", cpu->core_id, cpu->current_thread, next));
+            ON_DEBUG(IRQ)(kprintf("[irq] CPU-%d: switch %p -> %p... \"forever\"\n", id, cpu->current_thread, next));
         } else {
-            ON_DEBUG(IRQ)(kprintf("[irq] CPU-%d: stay on %p... \"forever\"\n", cpu->core_id, next));
+            ON_DEBUG(IRQ)(kprintf("[irq] CPU-%d: stay on %p... \"forever\"\n", id, next));
         }
         #endif
     }
 
     if (next == NULL) {
-        spall_end_event(cpu->core_id);
-        spall_begin_event("sleep", cpu->core_id);
+        spall_end_event(id);
+        spall_begin_event("sleep", id);
 
         *state = kernel_idle_state;
         cpu->current_thread = NULL;
@@ -314,8 +316,8 @@ uintptr_t timer_interrupt(CPUState* state, uintptr_t cr3, PerCPU* cpu, u64 now) 
         }
         str[i++] = 0;
 
-        spall_end_event(cpu->core_id);
-        spall_begin_event(str, cpu->core_id);
+        spall_end_event(id);
+        spall_begin_event(str, id);
     }
     #endif
 
@@ -327,7 +329,7 @@ static void dump_page_fault(CPUState* state, uintptr_t cr3, PerCPU* cpu, Env* en
     PageTable* old_address_space = paddr2kaddr(cr3);
 
     // just throw error
-    kprintf("CPU-%d: Page Fault: error=%#x, env=%p\n", cpu->core_id, state->error, env);
+    kprintf("CPU-%d: Page Fault: error=%#x, env=%p\n", cpu - boot_info->cores, state->error, env);
     kprintf("  cr3=%p\n",   cr3);
     kprintf("  rsp=%p\n\n", state->rsp);
 
@@ -349,9 +351,10 @@ static void dump_page_fault(CPUState* state, uintptr_t cr3, PerCPU* cpu, Env* en
 }
 
 uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
+    int id = cpu - boot_info->cores;
     if (apic_timer_status == APIC_CALIBRATED) {
-        spall_end_event(cpu->core_id);
-        spall_begin_event(interrupt_names[state->interrupt_num], cpu->core_id);
+        spall_end_event(id);
+        spall_begin_event(interrupt_names[state->interrupt_num], id);
     }
 
     u64 now = __rdtsc();
@@ -359,12 +362,30 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
 
     #if DEBUG_IRQ
     if (state->interrupt_num != 14 && state->interrupt_num != 32) {
-        kprintf("CPU-%d: %s (%d): error=0x%x\n", cpu->core_id, interrupt_names[state->interrupt_num], state->interrupt_num, state->error);
-        kprintf("  rip=%x:%p rsp=%x:%p\n", state->cs, state->rip, state->ss, state->rsp);
+        kprintf("CPU-%d: %s (%d): cr3=%p error=0x%x\n", id, interrupt_names[state->interrupt_num], state->interrupt_num, cr3, state->error);
+        kprintf("  rip=%x:%p rsp=%x:%p flags=%x\n", state->cs, state->rip, state->ss, state->rsp, state->flags);
+        kprintf("  rax=%p rdi=%p rbx=%p\n", state->rax, state->rdi, state->rbx);
+
+        // dissassemble code
+        PageTable* old_address_space = paddr2kaddr(cr3);
+
+        u64 translated;
+        if (memmap_translate(old_address_space, state->rip, &translated)) {
+            kprintf("  code:   %d:%p (translated: %p, %x)\n\n", state->cs, state->rip, translated, *(u8*) paddr2kaddr(translated));
+            // x86_print_disasm((uint8_t*) translated, 16);
+        } else {
+            kprintf("  code:   %d:%p (NOT PRESENT)\n", state->cs, state->rip);
+        }
     }
     #endif
 
-    if (state->interrupt_num == 14) {
+    if (state->interrupt_num == 19) {
+        uint32_t val;
+        asm volatile ("stmxcsr [%q0]" :: "r"(&val));
+        kprintf("CPU-%d: MXCSR was %x\n", id, val);
+
+        x86_halt();
+    } else if (state->interrupt_num == 14) {
         u64 access_addr = x86_get_cr2();
 
         Env* env = NULL;
@@ -375,7 +396,7 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
 
         if (env != NULL) {
             if (!rwlock_try_lock_shared(&env->addr_space.lock)) {
-                spall_end_event(cpu->core_id);
+                spall_end_event(id);
 
                 // if we failed to grab it, we're in the middle of an exclusive
                 // TLB modification, let's yield our time slice for now.
@@ -387,6 +408,13 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
             // update hardware page tables to match
             bool is_write = state->error & 2;
             bool success = vmem_segfault(env, access_addr, is_write);
+            if (!success) {
+                kprintf("CPU-%d: %s (%d): cr3=%p error=0x%x\n", id, interrupt_names[state->interrupt_num], state->interrupt_num, cr3, state->error);
+                kprintf("  rip=%x:%p rsp=%x:%p flags=%x\n", state->cs, state->rip, state->ss, state->rsp, state->flags);
+                dump_page_fault(state, cr3, cpu, env, access_addr);
+                x86_halt();
+            }
+
             rwlock_unlock_shared(&env->addr_space.lock);
         } else {
             #if DEBUG_IRQ
@@ -395,8 +423,6 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
 
             x86_halt();
         }
-
-        return cr3;
     } else if (state->interrupt_num == 0x20) {
         return timer_interrupt(state, cr3, cpu, now);
     } else if (state->interrupt_num >= 0x50) {
@@ -409,11 +435,11 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
         } else {
             x86_halt();
         }
-        return cr3;
     } else {
         x86_halt();
-        return cr3;
     }
+
+    return cr3;
 }
 
 // there's two events:
@@ -489,6 +515,9 @@ CPUState new_thread_state(void* entrypoint, uintptr_t arg, uintptr_t stack, size
         s.cs = USER_CS | 3;
         s.ss = USER_DS | 3;
     }
+
+    // memcpy(&s.fxsave[16+24], &(u32){ 0x1F80 }, 4); // MXCSR
+    // memcpy(&s.fxsave[16+28], &(uint32_t){ 0xFFFF }, 4); // MXCSR_MASK
 
     return s;
 }

@@ -1,7 +1,17 @@
 
+static EFI_SYSTEM_TABLE* dummy_st;
 static inline void writec(char c) {
-    com_writec(c);
-    term_printc(c);
+    // com_writec(c);
+    // term_printc(c);
+
+    if (c == '\n') {
+        dummy_st->ConOut->OutputString(dummy_st->ConOut, (i16*) L"\r\n");
+    } else {
+        i16 buf[2];
+        buf[0] = c;
+        buf[1] = 0;
+        dummy_st->ConOut->OutputString(dummy_st->ConOut, buf);
+    }
 }
 
 static inline void writes(char* str) {

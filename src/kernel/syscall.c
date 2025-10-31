@@ -96,7 +96,7 @@ SYS_FN(thread_create) {
 }
 
 SYS_FN(test) {
-    kprintf("SYS_test(%d)\n", SYS_PARAM0);
+    kprintf("SYS_test(%p)\n", SYS_PARAM0);
     return 0;
 }
 
@@ -172,8 +172,13 @@ SYS_FN(pci_get_bar) {
     uintptr_t addr = (bar->value >> 4) << 4;
 
     u8 type = (bar->value >> 1) & 0x3;
-    kassert(type == 0, "TODO: Only supports BAR 32-bit");
     // b.prefetch = (bar.value >> 3) & 0x1;
+
+    kassert(type == 0 || type == 2, "TODO: Unsupported BAR (%d)", type);
+    if (type == 2) {
+        // 64bit BAR
+        addr |= ((uintptr_t) dev->bar[bar_index].value) << 32ull;
+    }
 
     *((size_t*) SYS_PARAM2) = size;
 
@@ -190,6 +195,8 @@ SYS_FN(fb_grab) {
     info[1] = boot_info->fb.height;
     info[2] = boot_info->fb.stride;
     info[3] = boot_info->fb.stride * 4 * boot_info->fb.height;
+
+    kprintf("%ld %ld %ld %ld %p\n", info[0], info[1], info[2], info[3], kaddr2paddr(boot_info->fb.pixels));
 
     KObject_VMO* vmo_ptr = vmo_create_physical(kaddr2paddr(boot_info->fb.pixels), info[3]);
     return env_open_handle(env, 0, &vmo_ptr->super);

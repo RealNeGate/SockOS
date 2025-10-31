@@ -29,7 +29,7 @@ Env* env_create(void) {
     #error "TODO"
     #endif
 
-    kprintf("[env] HW Tables at %p\n", env->addr_space.hw_tables);
+    kprintf("[env] %p | %p | HW Tables at %p\n", env, &env->addr_space.hw_tables, env->addr_space.hw_tables);
     return env;
 }
 

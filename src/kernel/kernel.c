@@ -1,4 +1,5 @@
 #include <kernel.h>
+#include "term.h"
 
 #define EBR_IMPL
 #include "ebr.h"
@@ -47,13 +48,16 @@ void kmain(BootInfo* restrict info) {
     boot_info->mem_map.regions = paddr2kaddr((uintptr_t) boot_info->mem_map.regions);
     boot_info->fb.pixels = paddr2kaddr((uintptr_t) boot_info->fb.pixels);
 
-    kprintf("Beginning kernel boot...\n");
-
     for (size_t j = 0; j < 50; j++) {
         for (size_t i = 0; i < 50; i++) {
             boot_info->fb.pixels[i + (j * boot_info->fb.stride)] = 0xFF1F7FFF;
         }
     }
+
+    term_set_framebuffer(boot_info->fb);
+    // term_set_wrap(true);
+
+    kprintf("Beginning kernel boot...\n");
 
     arch_init(0);
     ebr_init();
@@ -103,11 +107,15 @@ void kmain(BootInfo* restrict info) {
         }
     }
 
+    #if 0
     Env* env = env_create();
-
     void* desktop_elf_ptr = paddr2kaddr(((uintptr_t) desktop_elf - boot_info->elf_virtual_ptr) + boot_info->elf_physical_ptr);
-    Thread* mine = env_load_elf(env, desktop_elf_ptr, sizeof(desktop_elf));
-    thread_resume(mine);
+    Thread* bootstrap = env_load_elf(env, desktop_elf_ptr, sizeof(desktop_elf));
+    thread_resume(bootstrap);
+    #endif
+
+    // Thread* t = thread_create(NULL, sched_load_balancer, 0, (uintptr_t) kheap_alloc(8192), 8192);
+    // thread_resume(t);
 
     arch_handoff(0);
 }

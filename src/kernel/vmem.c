@@ -302,8 +302,8 @@ bool vmem_segfault(Env* env, uintptr_t access_addr, bool is_write) {
     Thread* thread = cpu_get()->current_thread;
     if (access_addr == thread->last_touch.next_addr) {
         size_t readahead = access_addr - thread->last_touch.base_addr;
-        if (readahead > 128*1024) {
-            readahead = 128*1024;
+        if (readahead > 32*1024) {
+            readahead = 32*1024;
         }
 
         size_t dist_to_end = end_addr - access_addr;
@@ -316,7 +316,7 @@ bool vmem_segfault(Env* env, uintptr_t access_addr, bool is_write) {
             ON_DEBUG(VMEM)(kprintf("[vmem] prefetch miss %p\n", access_addr));
             thread->last_touch.base_addr = thread->last_touch.next_addr = 0;
         } else {
-            ON_DEBUG(VMEM)(kprintf("[vmem] prefetch hit  %p, commit ahead %zu pages (base=%p, dist=%zu)\n", access_addr, thread->last_touch.base_addr, readahead, readahead / PAGE_SIZE));
+            ON_DEBUG(VMEM)(kprintf("[vmem] prefetch hit  %p, commit ahead %zu pages (base=%p, dist=%zu)\n", access_addr, readahead / PAGE_SIZE, thread->last_touch.base_addr, readahead));
             thread->last_touch.next_addr = access_addr + readahead;
             pages_to_commit = readahead / PAGE_SIZE;
         }
@@ -326,6 +326,7 @@ bool vmem_segfault(Env* env, uintptr_t access_addr, bool is_write) {
         thread->last_touch.next_addr = access_addr + PAGE_SIZE;
     }
 
+    // kprintf("%p %zu (%p %p)\n", access_addr, pages_to_commit, start_addr, end_addr);
     FOR_N(i, 0, pages_to_commit) {
         try_commit(env, desc, access_addr + i*PAGE_SIZE, start_addr, end_addr);
     }

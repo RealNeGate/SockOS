@@ -69,6 +69,7 @@ DEFINE_ERR 8
 DEFINE_INT 9
 DEFINE_ERR 13
 DEFINE_ERR 14
+DEFINE_INT 19
 DEFINE_INT 32
 DEFINE_INT 33
 DEFINE_INT 34
@@ -283,9 +284,7 @@ do_context_switch:
 
     ; fxrstor also needs to be aligned to 16bytes
     add rsp, 512 + 16
-    mov rbx,rsp
-    and rbx,~0xF
-    fxrstor [rbx - 512]
+    fxrstor [rsp - 512]
 
     pop r15
     pop r14

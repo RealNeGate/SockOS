@@ -10,7 +10,7 @@ NINJA_SCRIPT: str = "build.ninja"
 # Note(flysand): Apparently it doesn't work if it is specified without
 # .exe on windows.
 LD = 'ld.lld' if platform.system() != 'Windows' else 'ld.lld.exe'
-OPT = ''
+OPT = '' # -O2 -DNDEBUG'
 
 CFLAGS = [
     '-g',
@@ -106,4 +106,7 @@ file.write(f'\n')
 file.close()
 
 os.system('ninja')
+os.system('wsl ./bake.sh')
+# os.system('cp disk.img C:/iventoy/iso/disk.iso')
+
 

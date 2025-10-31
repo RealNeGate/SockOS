@@ -24,6 +24,7 @@ typedef _Atomic(u64) atomic_u64;
 #define atomic_cas_acq_rel(addr, old, new) atomic_compare_exchange_strong_explicit(addr, old, new, memory_order_acq_rel, memory_order_acquire)
 
 PerCPU* cpu_get(void);
+size_t cpu_get_index(void);
 void sleep(u64 timeout);
 
 ////////////////////////////////
@@ -319,6 +320,7 @@ struct PerCPU_Scheduler {
 void sched_init(void);
 void sched_yield(void);
 void sched_wait(u64 timeout);
+int sched_load_balancer(void*);
 
 Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us);
 

@@ -23,8 +23,8 @@ void ebr_free(void* ptr, size_t size);
 #define EBR_DEBOOGING 1
 
 #if EBR_DEBOOGING
-#define EBR__BEGIN(name)      spall_begin_event(name, cpu_get()->core_id)
-#define EBR__END()            spall_end_event(cpu_get()->core_id)
+#define EBR__BEGIN(name)      spall_begin_event(name, cpu_get_index())
+#define EBR__END()            spall_end_event(cpu_get_index())
 #else
 #define EBR__BEGIN(name)
 #define EBR__END()
@@ -61,6 +61,7 @@ static _Atomic(EBR_FreeNode*) ebr_free_list;
 void ebr_deinit(void) {
 }
 
+extern void x86_sti(void);
 static int ebr_thread_fn(void* arg) {
     EBR_FreeNode* last_free_list = NULL;
     for (;;) {
@@ -71,68 +72,73 @@ static int ebr_thread_fn(void* arg) {
         // clear the free list, then we wait for the checkpoint before
         // freeing the memory.
         EBR_FreeNode* free_list = atomic_exchange(&ebr_free_list, NULL);
+        if (free_list != NULL) {
+            #if EBR_DEBOOGING
+            spall_begin_event("Checkpoint", -1);
+            #endif
 
-        #if EBR_DEBOOGING
-        spall_begin_event("Checkpoint", -1);
-        #endif
+            // wait for the critical sections to advance, once
+            // that happens we can choose to free things.
+            for (int i = 0; i < boot_info->core_count; i++) {
+                uint64_t before_t = atomic_load_explicit(&boot_info->cores[i].ebr_checkpoint, memory_order_acquire);
+                if (before_t & EBR_PINNED_BIT) {
+                    uint64_t now_t, tries = 0;
+                    do {
+                        // once we're at this a bunch of times, we start to yield
+                        if (tries > 4) {
+                            // thrd_yield();
+                        }
 
-        // wait for the critical sections to advance, once
-        // that happens we can choose to free things.
-        for (int i = 0; i < boot_info->core_count; i++) {
-            uint64_t before_t = atomic_load_explicit(&boot_info->cores[i].ebr_checkpoint, memory_order_acquire);
-            if (before_t & EBR_PINNED_BIT) {
-                uint64_t now_t, tries = 0;
-                do {
-                    // once we're at this a bunch of times, we start to yield
-                    if (tries > 4) {
-                        // thrd_yield();
-                    }
+                        // idk, maybe this should be a better spinlock
+                        now_t = atomic_load_explicit(&boot_info->cores[i].ebr_time, memory_order_acquire);
+                        tries++;
+                    } while (before_t == now_t);
 
-                    // idk, maybe this should be a better spinlock
-                    now_t = atomic_load_explicit(&boot_info->cores[i].ebr_time, memory_order_acquire);
-                    tries++;
-                } while (before_t == now_t);
-
-                atomic_store_explicit(&boot_info->cores[i].ebr_checkpoint, now_t, memory_order_release);
+                    atomic_store_explicit(&boot_info->cores[i].ebr_checkpoint, now_t, memory_order_release);
+                }
             }
-        }
 
-        #if EBR_DEBOOGING
-        spall_end_event(-1);
-        spall_begin_event("Reclaim memory", -1);
-        #endif
+            #if EBR_DEBOOGING
+            spall_end_event(-1);
+            spall_begin_event("Reclaim memory", -1);
+            #endif
 
-        if (last_free_list) {
-            EBR_FreeNode* list = last_free_list;
-            while (list) {
-                EBR_FreeNode* next = list->next;
-                kheap_free(list, sizeof(EBR_FreeNode));
-                list = next;
+            if (last_free_list) {
+                EBR_FreeNode* list = last_free_list;
+                while (list) {
+                    EBR_FreeNode* next = list->next;
+                    kheap_free(list, sizeof(EBR_FreeNode));
+                    list = next;
+                }
+                last_free_list = NULL;
             }
-            last_free_list = NULL;
-        }
 
-        // empty the free list, it's possible that the mutators are still watching it
-        // so we can't free it until the next iteration.
-        for (; free_list; free_list = free_list->next) {
-            EBR_VIRTUAL_FREE(free_list->ptr, free_list->size);
+            // empty the free list, it's possible that the mutators are still watching it
+            // so we can't free it until the next iteration.
+            for (; free_list; free_list = free_list->next) {
+                EBR_VIRTUAL_FREE(free_list->ptr, free_list->size);
+            }
+            last_free_list = free_list;
+
+            #if EBR_DEBOOGING
+            spall_end_event(-1);
+            #endif
         }
-        last_free_list = free_list;
 
         #if EBR_DEBOOGING
-        spall_end_event(-1);
         spall_end_event(-1);
         #endif
 
         // Sleep for a while
-        sleep(100000);
+        sleep(1000000);
     }
 
     return 0;
 }
 
 void ebr_init(void) {
-    thread_create(NULL, ebr_thread_fn, 0, (uintptr_t) kheap_alloc(KERNEL_STACK_SIZE), KERNEL_STACK_SIZE);
+    Thread* t = thread_create(NULL, ebr_thread_fn, 0, (uintptr_t) kheap_alloc(KERNEL_STACK_SIZE), KERNEL_STACK_SIZE);
+    thread_resume(t);
 }
 
 void ebr_free(void* ptr, size_t size) {

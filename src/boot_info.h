@@ -14,7 +14,7 @@ typedef struct {
 enum {
     PAGE_SIZE = 4096,
 
-    KERNEL_STACK_SIZE   = 4096,
+    KERNEL_STACK_SIZE   = 16384,
     KERNEL_STACK_COOKIE = 0xABCDABCD,
 
     MAX_CORES = 256,
@@ -63,7 +63,7 @@ struct PerCPU {
     void* user_stack_scratch;
     void* irq_stack_top;
 
-    u32 core_id, lapic_id;
+    u32 physical_id, lapic_id;
 
     // Scheduler info
     struct Thread* current_thread;
@@ -119,7 +119,7 @@ typedef struct {
     size_t map_file_size;
     char* map_file;
 
-    _Atomic(u64) average_exec_time;
+    _Alignas(64) _Atomic(u64) average_exec_time;
 } BootInfo;
 
 // loader.s & irq.s needs these to be here

@@ -35,9 +35,7 @@ bits 64
 align 256
 gdt_jump:
     ; get core number (it's in RBX)
-    mov eax, 1
-    cpuid
-    shr ebx, 24
+    mov rbx, [data_start + 48]
 
     ; use GDT
     mov rax, [data_start + 40]
@@ -63,6 +61,7 @@ bootstrap_data_start:
     dq 0 ; [24] sizeof_core
     dq 0 ; [32] bootstrap_transition
     dq 0 ; [40] gdt_table
+    dq 0 ; [48] core_id
 
 bootstrap_gdt64:
     ; zero entry
@@ -83,14 +82,9 @@ premain:
     mov es, ax
     mov ss, ax
 
-    ; get core number
-    mov eax, 1
-    cpuid
-
     ; reserve core
     ;   cpu_index = ebx * sizeof(PerCPU)
-    mov rdi, rbx
-    shr rdi, 24
+    mov rdi, [data_start + 48]
     imul rdi, [data_start + 24]
     ; get core pointer & stack
     add rdi, [data_start + 16]
