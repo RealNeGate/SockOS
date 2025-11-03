@@ -65,7 +65,7 @@ file.write(f'\n')
 if True:
     # build desktop
     file.write(f'build objs/desktop.o: cc userland/desktop.c\n')
-    file.write(f'  flags = -target x86_64-linux-gnu -ffreestanding -nostdlib -fpic {OPT}\n')
+    file.write(f'  flags = -target x86_64-linux-gnu -std=gnu23 -ffreestanding -nostdlib -fpic {OPT}\n')
     file.write(f'\n')
     file.write(f'build userland/desktop.elf: ld objs/desktop.o\n')
     file.write(f'  flags = -T userland/link.ld\n')

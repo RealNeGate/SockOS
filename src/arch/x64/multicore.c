@@ -125,7 +125,7 @@ void x86_boot_cores(void) {
     extern char premain[];
 
     // other cores need to be able to see the bootstrap chunk once they transition to paging
-    memmap_view(boot_info->kernel_pml4, 0x1000, 0x1000, PAGE_ALIGN(bootstrap_end - bootstrap_start), VMEM_PAGE_WRITE);
+    memmap_view(boot_info->kernel_pml4, 0x1000, 0x1000, PAGE_ALIGN(bootstrap_end - bootstrap_start), VMEM_PAGE_WRITE | VMEM_PAGE_KERNEL);
 
     char* dst = paddr2kaddr(0x1000);
     memcpy(dst, bootstrap_start, bootstrap_end - bootstrap_start);

@@ -70,11 +70,12 @@ void rwlock_unlock_exclusive(RWLock* lock);
 // * Software map from page -> physical address.
 // * Hardware page table.
 typedef enum {
-    VMEM_PAGE_WRITE    = 1u << 0u,
-    VMEM_PAGE_EXEC     = 1u << 1u,
-    VMEM_PAGE_USER     = 1u << 2u,
-    VMEM_PAGE_PINNED   = 1u << 4u,
-    VMEM_PAGE_UNCACHED = 1u << 8u,
+    VMEM_PAGE_WRITE     = 1u << 0u,
+    VMEM_PAGE_EXEC      = 1u << 1u,
+    VMEM_PAGE_KERNEL    = 1u << 2u,
+    VMEM_PAGE_PINNED    = 1u << 3u,
+    VMEM_PAGE_UNCACHED  = 1u << 4u,
+    VMEM_PAGE_WRITETHRU = 1u << 5u,
 } VMem_Flags;
 
 // B tree nodes
@@ -154,6 +155,8 @@ struct KObject_VMO {
 
     // simple physical mapping
     uintptr_t paddr;
+
+    VMem_Flags flags;
 };
 
 // Ring buffer of stacks
@@ -210,7 +213,7 @@ enum { PCI_MAX_DEVICES = 20 };
 extern int pci_dev_count;
 extern PCI_Device* pci_devs[PCI_MAX_DEVICES];
 
-KObject_VMO* vmo_create_physical(uintptr_t addr, size_t size);
+KObject_VMO* vmo_create_physical(uintptr_t addr, size_t size, VMem_Flags flags);
 
 KObject_Mailbox* mailbox_create(size_t max_requests);
 

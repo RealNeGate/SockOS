@@ -261,9 +261,13 @@ uintptr_t timer_interrupt(CPUState* state, uintptr_t cr3, PerCPU* cpu, u64 now) 
     uint64_t new_now_time = (__rdtsc() / boot_info->tsc_freq);
     if (next_wake != UINT64_MAX) {
         uint64_t until_wake = next_wake > new_now_time ? next_wake - new_now_time : 1;
+        uint64_t armed_t = micros_to_apic_time(until_wake);
+        if (armed_t == 0) {
+            armed_t = 1;
+        }
 
         // set new one-shot
-        APIC(0x380) = micros_to_apic_time(until_wake);
+        APIC(0x380) = armed_t;
 
         #if DEBUG_SCHED
         if (cpu->current_thread != next) {
@@ -455,9 +459,10 @@ void arch_pte_update(Env* env, uintptr_t access_addr, uintptr_t translated, VMem
 
     // convert software page properties into hardware page flags
     uint64_t page_flags = PAGE_PRESENT;
-    if (flags & VMEM_PAGE_USER)     { page_flags |= PAGE_USER;  }
-    if (flags & VMEM_PAGE_WRITE)    { page_flags |= PAGE_WRITE; }
-    if (flags & VMEM_PAGE_UNCACHED) { page_flags |= PAGE_NOCACHE; }
+    if (!(flags & VMEM_PAGE_KERNEL)) { page_flags |= PAGE_USER;  }
+    if (flags & VMEM_PAGE_WRITE)     { page_flags |= PAGE_WRITE; }
+    if (flags & VMEM_PAGE_UNCACHED)  { page_flags |= PAGE_NOCACHE; }
+    if (flags & VMEM_PAGE_WRITETHRU) { page_flags |= PAGE_WRITETHRU; }
 
     PageTable* curr = env->addr_space.hw_tables;
     for (size_t i = 0; i < 3; i++) {

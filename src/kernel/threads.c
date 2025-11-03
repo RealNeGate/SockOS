@@ -157,7 +157,7 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
     ON_DEBUG(ENV)(kprintf("Loading a program! %p\n", program));
     Elf64_Ehdr* elf_header = (Elf64_Ehdr*) program;
 
-    KObject_VMO* vmo_ptr = vmo_create_physical(kaddr2paddr((void*) program), program_size);
+    KObject_VMO* vmo_ptr = vmo_create_physical(kaddr2paddr((void*) program), program_size, VMEM_PAGE_WRITE | VMEM_PAGE_EXEC);
     KHandle elf_vmo = env_open_handle(env, 0, &vmo_ptr->super);
 
     ////////////////////////////////
@@ -187,17 +187,17 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
         ON_DEBUG(ENV)(kprintf("[elf] segment: %p (%d) => ... (%d)\n", segment->p_vaddr, segment->p_memsz, segment->p_filesz));
 
         if (file_size > 0) {
-            vmem_add_range(env, elf_vmo, vaddr, offset, file_size, VMEM_PAGE_WRITE | VMEM_PAGE_USER);
+            vmem_add_range(env, elf_vmo, vaddr, offset, file_size, VMEM_PAGE_WRITE);
         }
 
         if (mem_size > file_size) {
             // zero pages
-            vmem_add_range(env, 0, vaddr + file_size, 0, mem_size - file_size, VMEM_PAGE_WRITE | VMEM_PAGE_USER);
+            vmem_add_range(env, 0, vaddr + file_size, 0, mem_size - file_size, VMEM_PAGE_WRITE);
         }
     }
 
     // tiny i know
-    uintptr_t stack_ptr = vmem_map(env, 0, 0, USER_STACK_SIZE, VMEM_PAGE_WRITE | VMEM_PAGE_USER, NULL);
+    uintptr_t stack_ptr = vmem_map(env, 0, 0, USER_STACK_SIZE, VMEM_PAGE_WRITE, NULL);
 
     ON_DEBUG(ENV)(kprintf("[elf] entry=%p\n", elf_header->e_entry));
     ON_DEBUG(ENV)(kprintf("[elf] stack=%p\n", stack_ptr));

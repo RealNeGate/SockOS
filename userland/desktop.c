@@ -151,6 +151,15 @@ static uint32_t igpu_mmio_read(uint32_t reg) { return gpu.mmio[reg / 4]; }
 
 static uint32_t buf_config(int start, int size) { return start | ((start + size - 1) << 16u); }
 
+void* memcpy(void* dest, const void* src, size_t n) {
+    u8* d = (u8*)dest;
+    u8* s = (u8*)src;
+    for (size_t i = 0; i < n; i++) {
+        d[i] = s[i];
+    }
+    return (void*)dest;
+}
+
 static void allocate_buffers(void) {
     // Disable planes
     igpu_mmio_write(0x70080, 0); // Cursor
@@ -204,6 +213,7 @@ static void intel_gpu_driver_init(KHandle display_pci, uint64_t freq) {
     size_t size;
     gpu.bar0 = syscall(SYS_pci_get_bar, display_pci, 0, &size);
     gpu.mmio = (volatile uint32_t*) syscall(SYS_mmap, gpu.bar0, 0, size);
+    syscall(SYS_test, gpu.mmio);
     gpu.ggtt = (volatile uint64_t*) ((uint8_t*) gpu.mmio + 0x800000);
 
     // GMADR, 4GiB region for main memory
@@ -216,10 +226,17 @@ static void intel_gpu_driver_init(KHandle display_pci, uint64_t freq) {
     uint64_t gtt_size = (gpu.gmch_ctrl >> 6u) & 3;
     gpu.ggtt_size = 1u << (20u + gtt_size);
 
+    static const uint8_t cursor_raw[56*56*4] = {
+        #embed "cursor.bin"
+    };
+
     uintptr_t cursor_paddr;
     gpu.cursor_data = (uint32_t*) syscall(SYS_mpin, 0, 0, 4*4096, &cursor_paddr);
-    for (size_t i = 0; i < 4096; i++) {
-        gpu.cursor_data[i] = 0xFFFF00FF;
+    for (size_t j = 0; j < 56; j++) {
+        for (size_t i = 0; i < 56; i++) {
+            const uint8_t* pixel = &cursor_raw[(j*56 + i) * 4];
+            gpu.cursor_data[j*64 + i] = (pixel[3] << 24u) | (pixel[0] << 16u) | (pixel[1] << 8u) | (pixel[2] << 0u);
+        }
     }
 
     for (size_t i = 0; i < 4096; i += 64/4) {
@@ -267,12 +284,12 @@ static void intel_gpu_cursor_set(bool on) {
 }
 
 static void intel_gpu_driver_poll(void) {
+    #if 0
     printf("GGTT Size: %zu (%zu)\n", gpu.ggtt_size, gpu.gmch_ctrl);
     printf("Cursor PAddr: %p\n", gpu.cursor_paddr);
     printf("Mult: %d\n", mult);
     printf("VGA: %#x\n", igpu_mmio_read(0x41000));
 
-    #if 0
     printf("    PS_CTRL_1_A %#x\n", igpu_mmio_read(0x68180));
     printf("    PS_CTRL_2_A %#x\n", igpu_mmio_read(0x68280));
     printf("    PS_CTRL_3_A %#x\n", igpu_mmio_read(0x68380));
@@ -319,7 +336,7 @@ static void intel_gpu_driver_poll(void) {
     }
     #endif
 
-    igpu_mmio_write(0x70088, 0x00100000 + ((mult % 10) + 16)); // CUR_POS
+    igpu_mmio_write(0x70088, 0x00100000 + ((mult % 1000))); // CUR_POS
     igpu_mmio_write(0x70084, gpu.cursor_gpu_addr); // CUR_BASE_A
 
     #if 0

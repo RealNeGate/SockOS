@@ -5,7 +5,7 @@ static int runqueue_cmp(Thread* a, Thread* b) {
 }
 
 static int wakequeue_cmp(Thread* a, Thread* b) {
-    return b->wake_time - a->wake_time;
+    return a->wake_time - b->wake_time;
 }
 
 #define PRIO_ELEM     Thread*
@@ -50,8 +50,6 @@ void sched_wait(u64 timeout) {
         uint64_t wake_time = now_time + timeout;
         t->wake_time = wake_time;
     }
-
-    wakequeue_insert(&cpu->sched->waiters, t);
 }
 
 // keeps moving tasks to try to keep the exec times near each other
@@ -121,6 +119,21 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
 
     // kprintf("sched_pick_next(now=%d)\n", now_time);
 
+    // wake up sleepy guys
+    while (sched->waiters.count > 0) {
+        Thread* waiter = wakequeue_peek(&sched->waiters);
+        if (now_time < waiter->wake_time) {
+            break;
+        }
+
+        ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p is awake now (exec time was %d us)\n", core_id, waiter, waiter->exec_time));
+        wakequeue_pop(&sched->waiters);
+        waiter->wake_time = 0;
+        waiter->exec_time += sched->min_exec_time;
+        waiter->status = THREAD_STATE_READY;
+        runqueue_insert(&sched->active, waiter);
+    }
+
     // We run this function when pre-emptions happen so we should check up on the last
     // running task.
     Thread* curr = cpu->current_thread;
@@ -132,13 +145,13 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
         curr->exec_time += delta;
         curr->start_time = now_time;
 
-        ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p got %f ms (exec_time = %f ms)\n", cpu->core_id, curr, delta / 1000.0f, curr->exec_time / 1000.0f));
+        ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p got %lu us (exec_time = %lu us)\n", core_id, curr, delta, curr->exec_time));
 
         u64 exec_time = curr->exec_time - sched->min_exec_time;
         if (!sched_is_blocked(curr)) {
             // if the task hasn't finished it's time slice, we just keep running it
             if (exec_time < curr->max_exec_time) {
-                // ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Keep running Thread-%p for another %f ms\n", cpu->core_id, curr, (curr->max_exec_time - exec_time) / 1000.0f));
+                // ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Keep running Thread-%p for another %f ms\n", core_id, curr, (curr->max_exec_time - exec_time) / 1000.0f));
                 *out_wake_us = now_time + (curr->max_exec_time - exec_time);
                 return curr;
             }
@@ -148,14 +161,17 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
 
             // if the thread has completed it's time slice, we need to re-insert
             // into the queue with the new exec_time.
-            ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p has stopped (max %f ms)\n", cpu->core_id, curr, curr->max_exec_time / 1000.0f));
+            ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p has stopped (max %lu us)\n", core_id, curr, curr->max_exec_time));
             runqueue_insert(&sched->active, curr);
         } else {
             // remove curr
             runqueue_pop(&sched->active);
-
             curr->exec_time -= sched->min_exec_time;
-            ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p is blocked after %f ms\n", core_id, curr, curr->exec_time / 1000.0f));
+            ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p is blocked after %lu us\n", core_id, curr, curr->exec_time));
+
+            if (curr->wake_time != 0) {
+                wakequeue_insert(&cpu->sched->waiters, curr);
+            }
         }
         curr->status = THREAD_STATE_READY;
     }
@@ -172,21 +188,6 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
         blocked = blocked->next_in_blocked;
     }
 
-    // wake up sleepy guys
-    while (sched->waiters.count > 0) {
-        Thread* waiter = wakequeue_peek(&sched->waiters);
-        if (now_time < waiter->wake_time) {
-            break;
-        }
-
-        ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p is awake now (exec time was %d us)\n", core_id, waiter, waiter->exec_time));
-        wakequeue_pop(&sched->waiters);
-        waiter->wake_time = 0;
-        waiter->exec_time += sched->min_exec_time;
-        waiter->status = THREAD_STATE_READY;
-        runqueue_insert(&sched->active, waiter);
-    }
-
     // tq_dump(&sched->waiters, true, 0);
     // tq_dump(&sched->active, false, sched->min_exec_time);
 
@@ -199,7 +200,7 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
         if (sched->waiters.count > 0) {
             Thread* waiter = wakequeue_peek(&sched->waiters);
 
-            ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: sleep for %f ms\n", core_id, (waiter->wake_time - now_time) / 1000.0f));
+            ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: sleep for %lu us\n", core_id, (waiter->wake_time - now_time)));
             *out_wake_us = waiter->wake_time;
             return NULL;
         } else {
@@ -213,7 +214,7 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
         u64 ideal = SCHED_LATENCY / sched->active.count;
 
         sched->ideal_exec_time = ideal < SCHED_MIN_QUANTA ? SCHED_MIN_QUANTA : ideal;
-        ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: ideal slice of %f ms (%d active)\n", core_id, sched->ideal_exec_time / 1000.0f, sched->active.count));
+        ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: ideal slice of %lu us (%d active)\n", core_id, sched->ideal_exec_time, sched->active.count));
     }
 
     // use lowest exec time thread
@@ -255,7 +256,7 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
     }
     #endif
 
-    ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p was alloted %f ms (exec time = %f)\n", core_id, curr, curr->max_exec_time / 1000.0f, exec_time / 1000.0f));
+    ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p was alloted %lu us (exec time = %lu)\n", core_id, curr, curr->max_exec_time, exec_time));
     *out_wake_us = now_time + curr->max_exec_time;
     return curr;
 }

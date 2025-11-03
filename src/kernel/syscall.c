@@ -7,6 +7,8 @@
 #define SYS_FN(name) static uintptr_t syscall_ ## name(CPUState* state, uintptr_t cr3, PerCPU* cpu)
 typedef uintptr_t SyscallFn(CPUState* state, uintptr_t cr3, PerCPU* cpu);
 
+#include "syscall_res.h"
+
 typedef enum {
     #define X(name, ...) SYS_ ## name,
     #include "syscall_table.h"
@@ -37,12 +39,25 @@ size_t syscall_table_count = SYS_MAX;
 #error "TODO: Syscall parameters aren't available for this arch"
 #endif
 
+#define KCHECK(pred, code) if ((pred) == 0) { return code; }
+
+// copies from userland (and only userland), returns false if it can't
+static bool ingest_usermem(void* dst, uintptr_t src, size_t size) {
+    memcpy(dst, (const void*) src, size);
+    return true;
+}
+
+// copies to userland (and only userland), returns false if it can't
+static bool egest_usermem(uintptr_t dst, void* src, size_t size) {
+    memcpy((void*) dst, src, size);
+    return true;
+}
+
 ////////////////////////////////
 // Syscall table
 ////////////////////////////////
 SYS_FN(sleep) {
     ON_DEBUG(SYSCALL)(kprintf("SYS_sleep(t=%d us)\n", SYS_PARAM0));
-
     sched_wait(SYS_PARAM0);
 
     state->interrupt_num = 32;
@@ -54,31 +69,25 @@ SYS_FN(mmap) {
     ON_DEBUG(SYSCALL)(kprintf("SYS_mmap(vmo=%p, offset=%d, size=%d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2));
 
     size_t page_aligned_size = (SYS_PARAM2 + PAGE_SIZE - 1) & -PAGE_SIZE;
-    if (page_aligned_size == 0) {
-        return 0;
-    } else {
-        return vmem_map(cpu->current_thread->parent, SYS_PARAM0, SYS_PARAM1, page_aligned_size, VMEM_PAGE_WRITE | VMEM_PAGE_USER, NULL);
-    }
+    KCHECK(page_aligned_size, 0);
+    return vmem_map(cpu->current_thread->parent, SYS_PARAM0, SYS_PARAM1, page_aligned_size, VMEM_PAGE_WRITE, NULL);
 }
 
 SYS_FN(mpin) {
     ON_DEBUG(SYSCALL)(kprintf("SYS_mpin(vmo=%p, offset=%d, size=%d, out_paddr=%p)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2, SYS_PARAM3));
 
     size_t page_aligned_size = (SYS_PARAM2 + PAGE_SIZE - 1) & -PAGE_SIZE;
-    if (page_aligned_size == 0) {
-        return 0;
-    } else {
-        uintptr_t paddr;
-        uintptr_t mapped = vmem_map(cpu->current_thread->parent, SYS_PARAM0, SYS_PARAM1, page_aligned_size, VMEM_PAGE_WRITE | VMEM_PAGE_USER | VMEM_PAGE_PINNED, &paddr);
+    KCHECK(page_aligned_size, 0);
 
-        *(uintptr_t*) SYS_PARAM3 = paddr;
-        return mapped;
-    }
+    uintptr_t paddr;
+    uintptr_t mapped = vmem_map(cpu->current_thread->parent, SYS_PARAM0, SYS_PARAM1, page_aligned_size, VMEM_PAGE_WRITE | VMEM_PAGE_PINNED, &paddr);
+
+    egest_usermem(SYS_PARAM3, &paddr, sizeof(uintptr_t));
+    return mapped;
 }
 
 SYS_FN(munmap) {
     ON_DEBUG(SYSCALL)(kprintf("SYS_munmap()\n"));
-
     Env* env = cpu->current_thread->parent;
 
     // we can't have multiple writers on the interval tree at once
@@ -92,7 +101,6 @@ SYS_FN(munmap) {
     // TODO(NeGate): actually recycle the memory from those PTEs
 
     rwlock_unlock_exclusive(&env->addr_space.lock);
-
     return 0;
 }
 
@@ -100,16 +108,15 @@ SYS_FN(thread_create) {
     ON_DEBUG(SYSCALL)(kprintf("SYS_thread_create(fn=%d, arg=%p)\n", SYS_PARAM0, SYS_PARAM1));
 
     Env* env = cpu->current_thread->parent;
-    uintptr_t stack_ptr = vmem_map(env, 0, 0, USER_STACK_SIZE, VMEM_PAGE_WRITE | VMEM_PAGE_USER, NULL);
-    Thread* thread = thread_create(env, (ThreadEntryFn*) SYS_PARAM0, SYS_PARAM1, stack_ptr, USER_STACK_SIZE);
+    uintptr_t stack_ptr = vmem_map(env, 0, 0, USER_STACK_SIZE, VMEM_PAGE_WRITE, NULL);
+    KCHECK(stack_ptr, RESULT_NO_MEM);
 
-    if (thread == NULL) {
-        return 0;
-    } else {
-        // make an accessible handle for the thread
-        thread_resume(thread);
-        return env_open_handle(env, 0, &thread->super);
-    }
+    Thread* thread = thread_create(env, (ThreadEntryFn*) SYS_PARAM0, SYS_PARAM1, stack_ptr, USER_STACK_SIZE);
+    KCHECK(thread, RESULT_NO_MEM);
+
+    // make an accessible handle for the thread
+    thread_resume(thread);
+    return env_open_handle(env, 0, &thread->super);
 }
 
 SYS_FN(test) {
@@ -124,7 +131,6 @@ SYS_FN(pci_claim_device) {
     Env* env = cpu->current_thread->parent;
     uint32_t* arr = (uint32_t*) SYS_PARAM1;
 
-    PCI_Device* found = NULL;
     FOR_N(i, 0, SYS_PARAM0) {
         FOR_N(j, 0, pci_dev_count) {
             PCI_Device* dev = pci_devs[j];
@@ -134,18 +140,12 @@ SYS_FN(pci_claim_device) {
             // we can only claim a device if no one else has
             Env* env_null = NULL;
             if (atomic_compare_exchange_strong(&dev->parent, &env_null, env)) {
-                found = dev;
-                goto done;
+                return env_open_handle(env, 0, &dev->super);
             }
         }
     }
 
-    done:
-    if (found != NULL) {
-        return env_open_handle(env, 0, &found->super);
-    } else {
-        return 0;
-    }
+    return 0;
 }
 
 SYS_FN(pci_bar_count) {
@@ -153,14 +153,12 @@ SYS_FN(pci_bar_count) {
 
     Env* env = cpu->current_thread->parent;
     PCI_Device* dev = env_get_handle(env, SYS_PARAM0, NULL);
-    if (dev->super.tag != KOBJECT_DEV_PCI) {
-        return 0;
-    }
+    KCHECK(dev, RESULT_NO_HANDLE);
+    KCHECK(dev->super.tag == KOBJECT_DEV_PCI, RESULT_WRONG_HANDLE);
 
     // mask of which BARs are memory
     u32 mask = 0;
-
-    *((u32*) SYS_PARAM0) = mask;
+    egest_usermem(SYS_PARAM0, &mask, sizeof(u32));
     return dev->bar_count;
 }
 
@@ -169,38 +167,28 @@ SYS_FN(pci_get_bar) {
 
     Env* env = cpu->current_thread->parent;
     PCI_Device* dev = env_get_handle(env, SYS_PARAM0, NULL);
-    if (dev == NULL || dev->super.tag != KOBJECT_DEV_PCI) {
-        return 0;
-    }
+    KCHECK(dev, RESULT_NO_HANDLE);
+    KCHECK(dev->super.tag == KOBJECT_DEV_PCI, RESULT_WRONG_HANDLE);
 
     int bar_index = SYS_PARAM1;
-    if (bar_index >= dev->bar_count) {
-        return 0;
-    }
+    KCHECK(bar_index < dev->bar_count, RESULT_NO_BAR);
+    KCHECK((dev->bar[bar_index].value & 0x1) == 0, RESULT_IO_BAR);
 
     Raw_BAR* bar = &dev->bar[bar_index];
-
-    // I/O ports can't be mapped in
-    if (bar->value & 0x1) {
-        return 0; // (bar.value >> 2) << 2;
-    }
-
     size_t size = ~bar->size + 1;
     uintptr_t addr = (bar->value >> 4) << 4;
-
     u8 type = (bar->value >> 1) & 0x3;
-    // b.prefetch = (bar.value >> 3) & 0x1;
 
     kassert(type == 0 || type == 2, "TODO: Unsupported BAR (%d)", type);
-    if (type == 2) {
-        // 64bit BAR
+    if (type == 2) { // 64bit BAR
+        KCHECK(bar_index+1 < dev->bar_count, RESULT_NO_BAR);
         addr |= ((uintptr_t) dev->bar[bar_index + 1].value) << 32ull;
     }
 
-    *((size_t*) SYS_PARAM2) = size;
-    kprintf("AAAAA %p %zu\n", addr, size);
+    egest_usermem(SYS_PARAM2, &size, sizeof(size));
 
-    KObject_VMO* vmo_ptr = vmo_create_physical(addr, size);
+    bool prefetch = (bar->value >> 3) & 1;
+    KObject_VMO* vmo_ptr = vmo_create_physical(addr, size, prefetch ? VMEM_PAGE_WRITETHRU : VMEM_PAGE_UNCACHED);
     return env_open_handle(env, 0, &vmo_ptr->super);
 }
 
@@ -214,9 +202,7 @@ SYS_FN(fb_grab) {
     info[2] = boot_info->fb.stride;
     info[3] = boot_info->fb.stride * 4 * boot_info->fb.height;
 
-    kprintf("%ld %ld %ld %ld %p\n", info[0], info[1], info[2], info[3], kaddr2paddr(boot_info->fb.pixels));
-
-    KObject_VMO* vmo_ptr = vmo_create_physical(kaddr2paddr(boot_info->fb.pixels), info[3]);
+    KObject_VMO* vmo_ptr = vmo_create_physical(kaddr2paddr(boot_info->fb.pixels), info[3], VMEM_PAGE_WRITETHRU);
     return env_open_handle(env, 0, &vmo_ptr->super);
 }
 
@@ -225,9 +211,8 @@ SYS_FN(pci_read_config_32) {
 
     Env* env = cpu->current_thread->parent;
     PCI_Device* dev = env_get_handle(env, SYS_PARAM0, NULL);
-    if (dev == NULL || dev->super.tag != KOBJECT_DEV_PCI) {
-        return 0;
-    }
+    KCHECK(dev, RESULT_NO_HANDLE);
+    KCHECK(dev->super.tag == KOBJECT_DEV_PCI, RESULT_WRONG_HANDLE);
 
     return pci_read_u32(dev->bus, dev->device, dev->func, SYS_PARAM1);
 }
@@ -237,9 +222,8 @@ SYS_FN(pci_write_config_32) {
 
     Env* env = cpu->current_thread->parent;
     PCI_Device* dev = env_get_handle(env, SYS_PARAM0, NULL);
-    if (dev == NULL || dev->super.tag != KOBJECT_DEV_PCI) {
-        return 0;
-    }
+    KCHECK(dev, RESULT_NO_HANDLE);
+    KCHECK(dev->super.tag == KOBJECT_DEV_PCI, RESULT_WRONG_HANDLE);
 
     pci_write_u32(dev->bus, dev->device, dev->func, SYS_PARAM1, SYS_PARAM2);
     return 0;
@@ -261,13 +245,8 @@ SYS_FN(mailbox_send) {
 
     Env* env = cpu->current_thread->parent;
     KObject_Mailbox* mailbox = env_get_handle(env, SYS_PARAM0, NULL);
-    if (mailbox == NULL || mailbox->super.tag != KOBJECT_MAILBOX) {
-        return -1;
-    }
-
-    if (SYS_PARAM1 > 5) {
-        return -1;
-    }
+    KCHECK(mailbox, RESULT_NO_HANDLE);
+    KCHECK(mailbox->super.tag == KOBJECT_MAILBOX, RESULT_WRONG_HANDLE);
 
     Thread* curr = cpu->current_thread;
     Thread* next = mailbox_send(mailbox);
@@ -315,9 +294,8 @@ SYS_FN(mailbox_wait) {
     Env* env = cpu->current_thread->parent;
     Thread* curr = cpu->current_thread;
     KObject_Mailbox* mailbox = env_get_handle(env, SYS_PARAM0, NULL);
-    if (mailbox == NULL || mailbox->super.tag != KOBJECT_MAILBOX) {
-        return -1;
-    }
+    KCHECK(mailbox, RESULT_NO_HANDLE);
+    KCHECK(mailbox->super.tag == KOBJECT_MAILBOX, RESULT_WRONG_HANDLE);
 
     // Wait on mailbox
     spin_lock(&cpu->sched->lock);
@@ -335,9 +313,8 @@ SYS_FN(mailbox_reply) {
     ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_reply(mailbox=%d, msg=%p, ret0=%d, ret1=%d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2, SYS_PARAM3));
     Env* env = cpu->current_thread->parent;
     KObject_Mailbox* mailbox = env_get_handle(env, SYS_PARAM0, NULL);
-    if (mailbox == NULL || mailbox->super.tag != KOBJECT_MAILBOX) {
-        return -1;
-    }
+    KCHECK(mailbox, RESULT_NO_HANDLE);
+    KCHECK(mailbox->super.tag == KOBJECT_MAILBOX, RESULT_WRONG_HANDLE);
 
     Thread* curr = cpu->current_thread;
     Thread* next = curr->calling_thread;

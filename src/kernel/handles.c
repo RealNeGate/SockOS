@@ -1,13 +1,14 @@
 // The handle table is built out of a concurrent bitmap, we also wanna grab the lowest IDs first.
 #include <kernel.h>
 
-KObject_VMO* vmo_create_physical(uintptr_t addr, size_t size) {
+KObject_VMO* vmo_create_physical(uintptr_t addr, size_t size, VMem_Flags flags) {
     kassert((addr & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", addr);
 
     KObject_VMO* obj = kheap_zalloc(sizeof(KObject_VMO));
     obj->super.tag = KOBJECT_VMO;
     obj->size = (size + PAGE_SIZE - 1) & -PAGE_SIZE;
     obj->paddr = addr;
+    obj->flags = flags;
     return obj;
 }
 
