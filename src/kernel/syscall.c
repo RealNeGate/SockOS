@@ -57,7 +57,22 @@ SYS_FN(mmap) {
     if (page_aligned_size == 0) {
         return 0;
     } else {
-        return vmem_map(cpu->current_thread->parent, SYS_PARAM0, SYS_PARAM1, page_aligned_size, VMEM_PAGE_WRITE | VMEM_PAGE_USER);
+        return vmem_map(cpu->current_thread->parent, SYS_PARAM0, SYS_PARAM1, page_aligned_size, VMEM_PAGE_WRITE | VMEM_PAGE_USER, NULL);
+    }
+}
+
+SYS_FN(mpin) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_mpin(vmo=%p, offset=%d, size=%d, out_paddr=%p)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2, SYS_PARAM3));
+
+    size_t page_aligned_size = (SYS_PARAM2 + PAGE_SIZE - 1) & -PAGE_SIZE;
+    if (page_aligned_size == 0) {
+        return 0;
+    } else {
+        uintptr_t paddr;
+        uintptr_t mapped = vmem_map(cpu->current_thread->parent, SYS_PARAM0, SYS_PARAM1, page_aligned_size, VMEM_PAGE_WRITE | VMEM_PAGE_USER | VMEM_PAGE_PINNED, &paddr);
+
+        *(uintptr_t*) SYS_PARAM3 = paddr;
+        return mapped;
     }
 }
 
@@ -70,9 +85,11 @@ SYS_FN(munmap) {
     // but we don't need a TLB shootdown until page writing.
     rwlock_lock_exclusive(&env->addr_space.lock);
 
-    // shootdown forces all runners to flush, once
-    // we do that we can recycle the pages.
+    // TODO(NeGate): actually remove the PTEs
+
     arch_tlb_shootdown(env);
+
+    // TODO(NeGate): actually recycle the memory from those PTEs
 
     rwlock_unlock_exclusive(&env->addr_space.lock);
 
@@ -83,7 +100,7 @@ SYS_FN(thread_create) {
     ON_DEBUG(SYSCALL)(kprintf("SYS_thread_create(fn=%d, arg=%p)\n", SYS_PARAM0, SYS_PARAM1));
 
     Env* env = cpu->current_thread->parent;
-    uintptr_t stack_ptr = vmem_map(env, 0, 0, USER_STACK_SIZE, VMEM_PAGE_WRITE | VMEM_PAGE_USER);
+    uintptr_t stack_ptr = vmem_map(env, 0, 0, USER_STACK_SIZE, VMEM_PAGE_WRITE | VMEM_PAGE_USER, NULL);
     Thread* thread = thread_create(env, (ThreadEntryFn*) SYS_PARAM0, SYS_PARAM1, stack_ptr, USER_STACK_SIZE);
 
     if (thread == NULL) {
@@ -177,10 +194,11 @@ SYS_FN(pci_get_bar) {
     kassert(type == 0 || type == 2, "TODO: Unsupported BAR (%d)", type);
     if (type == 2) {
         // 64bit BAR
-        addr |= ((uintptr_t) dev->bar[bar_index].value) << 32ull;
+        addr |= ((uintptr_t) dev->bar[bar_index + 1].value) << 32ull;
     }
 
     *((size_t*) SYS_PARAM2) = size;
+    kprintf("AAAAA %p %zu\n", addr, size);
 
     KObject_VMO* vmo_ptr = vmo_create_physical(addr, size);
     return env_open_handle(env, 0, &vmo_ptr->super);

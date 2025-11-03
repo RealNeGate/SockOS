@@ -1,6 +1,14 @@
 #pragma once
 #include <kernel.h>
 
+typedef struct __attribute__((packed)) {
+    u64 address;
+    u16 pci_segment_group;
+    u8  start_bus;
+    u8  end_bus;
+    u32 reserved;
+} PCI_SegmentGroup;
+
 typedef struct {
 	u32 value;
 	u32 size;
@@ -53,6 +61,8 @@ typedef struct {
     bool (*init)(PCI_Device *dev);
     bool (*exit)(PCI_Device *dev);
 } Device_Driver;
+
+extern PCI_SegmentGroup* pci_segment_group;
 
 BAR parse_bar(Raw_BAR bar);
 void pci_print_device(PCI_Device *dev);

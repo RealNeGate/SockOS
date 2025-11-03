@@ -77,6 +77,12 @@ void arch_init(int id) {
         ps2_init();
         sched_init();
 
+        {
+            // Disable VGA, set SR01 bit 5 to 1
+            io_out8(0x3C4, 1);
+            io_out8(0x3C5, io_in8(0x3C5) | 5);
+        }
+
         kernel_idle_state = new_thread_state(kernel_idle, 0, 0, 0, false);
 
         x86_irq_startup(id);

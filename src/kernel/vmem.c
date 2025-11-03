@@ -170,7 +170,7 @@ VMem_PageDesc* vmem_node_insert(Env* env, uintptr_t key) {
     }
 }
 
-uintptr_t vmem_map(Env* env, KHandle vmo, size_t offset, size_t size, VMem_Flags flags) {
+uintptr_t vmem_map(Env* env, KHandle vmo, size_t offset, size_t size, VMem_Flags flags, uintptr_t* out_paddr) {
     kassert((size & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", size);
 
     // walk all regions until we find a gap big enough (SLOW!!!)
@@ -211,6 +211,19 @@ uintptr_t vmem_map(Env* env, KHandle vmo, size_t offset, size_t size, VMem_Flags
     done:
     VMem_PageDesc* desc = vmem_node_insert(env, vaddr);
     *desc = (VMem_PageDesc){ .valid = 1, .flags = flags, .vmo_handle = vmo, .offset = offset, .size = size };
+
+    if (flags & VMEM_PAGE_PINNED) {
+        // commit all the pages now
+        char* kaddr = kheap_alloc(size);
+        memset(kaddr, 0, size);
+
+        FOR_N(i, 0, size / PAGE_SIZE) {
+            vmem_commit_page(env, vaddr + i*PAGE_SIZE, kaddr + i*PAGE_SIZE);
+        }
+
+        *out_paddr = kaddr2paddr(kaddr);
+    }
+
     return vaddr;
 }
 

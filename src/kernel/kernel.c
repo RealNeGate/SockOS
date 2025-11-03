@@ -107,12 +107,12 @@ void kmain(BootInfo* restrict info) {
         }
     }
 
-    #if 0
+    kprintf("Kernel framebuffer at %p\n", kaddr2paddr(boot_info->fb.pixels));
+
     Env* env = env_create();
     void* desktop_elf_ptr = paddr2kaddr(((uintptr_t) desktop_elf - boot_info->elf_virtual_ptr) + boot_info->elf_physical_ptr);
     Thread* bootstrap = env_load_elf(env, desktop_elf_ptr, sizeof(desktop_elf));
     thread_resume(bootstrap);
-    #endif
 
     // Thread* t = thread_create(NULL, sched_load_balancer, 0, (uintptr_t) kheap_alloc(8192), 8192);
     // thread_resume(t);

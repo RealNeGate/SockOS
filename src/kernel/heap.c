@@ -66,13 +66,20 @@ static void* fl_alloc_fit(HeapFreeList* list, size_t size, size_t align) {
     }
 
     for (HeapBlock *block = list->free, *prev = NULL; block; prev = block, block = block->next) {
-        if (size <= block->size) {
+        uintptr_t start = (uintptr_t) block;
+        uintptr_t next_used = start + block->size;
+
+        // round up
+        start = (start + align - 1) & -align;
+
+        uintptr_t end = start + size;
+        if (end <= next_used) {
             // Replace free-list node due to imperfect split
             if (size != block->size) {
-                kassert(block->size - size >= sizeof(HeapBlock), "fragmentation smaller than HeapBlock");
-                HeapBlock* next = (HeapBlock*) ((char*) block + size);
+                kassert(next_used - end >= sizeof(HeapBlock), "fragmentation smaller than HeapBlock");
+                HeapBlock* next = (HeapBlock*) end;
                 next->next = list->local_free;
-                next->size = block->size - size;
+                next->size = next_used - end;
                 list->local_free = next;
 
                 if (prev) {
@@ -321,9 +328,10 @@ void* kheap_alloc(size_t obj_size) {
         ON_DEBUG(KHEAP)(kprintf("[kheap] alloc(%zu) %p\n", obj_size, obj));
         return obj;
     } else {
-        obj_size  = (obj_size + 15) & ~15ull;
-        void* obj = fl_alloc_fit(&heap->var_page, obj_size, 16);
+        obj_size  = (obj_size + 4095) & ~4095ull;
+        void* obj = fl_alloc_fit(&heap->var_page, obj_size, 4096);
         if (obj == NULL) {
+            kassert(obj_size <= SEGMENT_SIZE, "Too much to alloc together!!! %zu", obj_size);
             gimme_segment(&heap->var_page, obj_size, false, &obj);
             kassert(obj, "OOM");
         }

@@ -25,10 +25,6 @@ do {                          \
 #define PAGE_2M(x) (((x) + 0x1FFFFF) / 0x200000)
 #define PAGE_1G(x) (((x) + 0x3FFFFFFF) / 0x40000000)
 
-#define KERNEL_FILENAME L"kernel.so"
-
-#define KERNEL_BUFFER_SIZE (16 * 1024 * 1024)
-
 typedef void (*LoaderFunction)(BootInfo* info, u8* stack, u64 gdt_base);
 
 typedef struct {
@@ -286,6 +282,15 @@ static void* efi_load_file(EFI_SYSTEM_TABLE* st, EFI_FILE* fs_root, i16* path, s
     return buffer;
 }
 
+static _Alignas(4096) const uint8_t kernel_so[] = {
+    #embed "../../bin/kernel.so"
+};
+
+static _Alignas(4096) char map_file[] = {
+    #embed "../../bin/output.map"
+    , 0
+};
+
 EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     EFI_STATUS status = st->ConOut->ClearScreen(st->ConOut);
 
@@ -318,50 +323,12 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 
     ON_DEBUG(EFI)(printf("Framebuffer at %X\n", (u64) fb.pixels));
 
-    char* map_file_data = NULL;
-    size_t map_file_size = 0;
-
-    // Load the kernel from disk
-    char* kernel_buffer;
-    size_t kernel_size;
-    {
-        EFI_GUID loaded_img_proto_guid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
-        EFI_LOADED_IMAGE_PROTOCOL* loaded_img_proto;
-        status = st->BootServices->OpenProtocol(img_handle, &loaded_img_proto_guid,
-            (void**)&loaded_img_proto, img_handle, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL);
-        if (status != 0) {
-            panic("Failed to load img protocol!\nStatus: %X\n", status);
-        }
-
-        EFI_GUID simple_fs_proto_guid = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
-        EFI_HANDLE dev_handle = loaded_img_proto->DeviceHandle;
-        EFI_SIMPLE_FILE_SYSTEM_PROTOCOL* simple_fs_proto;
-        status = st->BootServices->OpenProtocol(dev_handle, &simple_fs_proto_guid,
-            (void**)&simple_fs_proto, img_handle, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL);
-        if (status != 0) {
-            panic("Failed to load fs protocol!\nStatus: %X\n", status);
-        }
-
-        EFI_FILE* fs_root;
-        status = simple_fs_proto->OpenVolume(simple_fs_proto, &fs_root);
-        if (status != 0) {
-            panic("Failed to open fs root!\nStatus: %X\n", status);
-        }
-
-        kernel_buffer = efi_load_file(st, fs_root, (i16*) KERNEL_FILENAME, &kernel_size, false);
-        map_file_data = efi_load_file(st, fs_root, (i16*) L"output.map", &map_file_size, true);
-
-        // Verify ELF magic number
-        if (kernel_size < 4 || memcmp(kernel_buffer, (u8[]) { 0x7F, 'E', 'L', 'F' }, 4) != 0) {
-            panic("Kernel is not a valid ELF file!\n");
-        }
-
-        fs_root->Close(fs_root);
-    }
+    size_t map_file_size = sizeof(map_file);
+    size_t kernel_size   = sizeof(kernel_so);
 
     // Load the kernel ELF
     ELF_Module kernel_module;
-    if(!elf_load(st, kernel_buffer, &kernel_module)) {
+    if (!elf_load(st, kernel_so, &kernel_module)) {
         panic("Failed to load the kernel module");
     }
 
@@ -417,7 +384,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     mem_map_mark(&mem_map, (u64) kstack_base, PAGE_4K(KERNEL_STACK_SIZE), MEM_REGION_KSTACK);
     mem_map_mark(&mem_map, (u64) fb.pixels, fb_size_pages, MEM_REGION_FRAMEBUFFER);
     if (map_file_size > 0) {
-        mem_map_mark(&mem_map, (u64) map_file_data, PAGE_4K(map_file_size), MEM_REGION_KERNEL);
+        mem_map_mark(&mem_map, (u64) map_file, PAGE_4K(map_file_size), MEM_REGION_KERNEL);
     }
     mem_map_merge_contiguous_ranges(&mem_map);
     if(!mem_map_verify(&mem_map)) {
@@ -435,7 +402,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     #endif*/
 
     kernel_boot_info.map_file_size = map_file_size;
-    kernel_boot_info.map_file = map_file_data;
+    kernel_boot_info.map_file = map_file;
     kernel_boot_info.identity_map_ptr = (kernel_module.virt_base + kernel_module.size + 0x40000000 - 1) & -0x40000000;
     // ON_DEBUG(EFI)(printf("Identity map @ %X\n", kernel_boot_info.identity_map_ptr));
 

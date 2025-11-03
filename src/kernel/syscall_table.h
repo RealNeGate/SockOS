@@ -4,6 +4,7 @@ X(thread_create)
 // VMM
 X(mmap)
 X(munmap)
+X(mpin)
 // Special case
 X(fb_grab)
 // PCI

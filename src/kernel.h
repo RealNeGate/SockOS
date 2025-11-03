@@ -70,9 +70,11 @@ void rwlock_unlock_exclusive(RWLock* lock);
 // * Software map from page -> physical address.
 // * Hardware page table.
 typedef enum {
-    VMEM_PAGE_WRITE  = 1u << 0u,
-    VMEM_PAGE_EXEC   = 1u << 1u,
-    VMEM_PAGE_USER   = 1u << 2u,
+    VMEM_PAGE_WRITE    = 1u << 0u,
+    VMEM_PAGE_EXEC     = 1u << 1u,
+    VMEM_PAGE_USER     = 1u << 2u,
+    VMEM_PAGE_PINNED   = 1u << 4u,
+    VMEM_PAGE_UNCACHED = 1u << 8u,
 } VMem_Flags;
 
 // B tree nodes
@@ -110,7 +112,7 @@ typedef struct {
     size_t index;
 } VMem_Cursor;
 
-uintptr_t vmem_map(Env* env, KHandle vmo, size_t offset, size_t size, VMem_Flags flags);
+uintptr_t vmem_map(Env* env, KHandle vmo, size_t offset, size_t size, VMem_Flags flags, uintptr_t* out_paddr);
 void vmem_add_range(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_t vsize, VMem_Flags flags);
 
 // maps a kernel page to a virtual address.

@@ -37,12 +37,12 @@ X(PCI_CLASS_UNASSIGNED,          0xFF,  "Unassigned")
 static const char *pci_class_names[] = {
     #define X(tag, id, name) [id] = name,
     PCI_CLASS
-        #undef X
+    #undef X
 };
 typedef enum {
     #define X(tag, id, name) tag = id,
     PCI_CLASS
-        #undef X
+    #undef X
 } PCI_Class;
 
 #define PCI_SUBCLASS_BR                                                 \
@@ -61,12 +61,12 @@ X(PCI_SUBCLASS_BR_INFINBAND2PCI, 0xA,  "Infiniband-to-PCI Host Bridge")
 static const char *pci_subclass_bridge_names[] = {
     #define X(tag, id, name) [id] = name,
     PCI_SUBCLASS_BR
-        #undef X
+    #undef X
 };
 typedef enum {
     #define X(tag, id, name) tag = id,
     PCI_SUBCLASS_BR
-        #undef X
+    #undef X
 } PCI_Subclass_Bridge;
 
 #define PCI_SUBCLASS_NET                                                       \
@@ -83,12 +83,12 @@ X(PCI_SUBCLASS_NET_FABRIC,      0x8,  "Fabric Controller")
 static const char *pci_subclass_net_names[] = {
     #define X(tag, id, name) [id] = name,
     PCI_SUBCLASS_NET
-        #undef X
+    #undef X
 };
 typedef enum {
     #define X(tag, id, name) tag = id,
     PCI_SUBCLASS_NET
-        #undef X
+    #undef X
 } PCI_Subclass_Network;
 
 #define PCI_SUBCLASS_DISP                        \
@@ -99,12 +99,12 @@ X(PCI_SUBCLASS_DISP_3D,  0x2,  "3D Controller")
 static const char *pci_subclass_display_names[] = {
     #define X(tag, id, name) [id] = name,
     PCI_SUBCLASS_DISP
-        #undef X
+    #undef X
 };
 typedef enum {
     #define X(tag, id, name) tag = id,
     PCI_SUBCLASS_DISP
-        #undef X
+    #undef X
 } PCI_Subclass_Display;
 
 #define PCI_SUBCLASS_STR                        \
@@ -115,24 +115,43 @@ X(PCI_SUBCLASS_STR_FLOPPY,  0x2,  "Floppy Disk Controller")
 static const char *pci_subclass_storage_names[] = {
     #define X(tag, id, name) [id] = name,
     PCI_SUBCLASS_STR
-        #undef X
+    #undef X
 };
 typedef enum {
     #define X(tag, id, name) tag = id,
     PCI_SUBCLASS_STR
-        #undef X
+    #undef X
 } PCI_Subclass_Storage;
 
+PCI_SegmentGroup* pci_segment_group;
+static u8* pcie_base;
+
+u8* pcie_address(u32 bus, u32 device, u32 func, u32 offs) {
+    kassert(bus >= pci_segment_group->start_bus && bus <= pci_segment_group->end_bus, "Bus out of bounds (%d <= %d <= %d)", bus, pci_segment_group->start_bus, pci_segment_group->end_bus);
+    uint32_t offset = (bus*0x100000UL) | (device*0x8000) | (func*0x1000) | offs;
+    return &pcie_base[offset];
+}
+
 u32 pci_read_u32(u32 bus, u32 device, u32 func, u32 offs) {
-    u32 address = PCI_BASE_ADDR | (bus << 16) | (device << 11) | (func << 8) | (offs & 0xFC);
-    io_out32(PCI_ADDR_PORT, address);
-    return io_in32(PCI_VALUE_PORT);
+    if (pcie_base) {
+        u32* addr = (u32*) pcie_address(bus, device, func, offs);
+        return *addr;
+    } else {
+        u32 address = PCI_BASE_ADDR | (bus << 16) | (device << 11) | (func << 8) | (offs & 0xFC);
+        io_out32(PCI_ADDR_PORT, address);
+        return io_in32(PCI_VALUE_PORT);
+    }
 }
 
 void pci_write_u32(u32 bus, u32 device, u32 func, u32 offs, u32 value) {
-    u32 address = PCI_BASE_ADDR | (bus << 16) | (device << 11) | (func << 8) | (offs & 0xFC);
-    io_out32(PCI_ADDR_PORT, address);
-    io_out32(PCI_VALUE_PORT, value);
+    if (pcie_base) {
+        u32* addr = (u32*) pcie_address(bus, device, func, offs);
+        *addr = value;
+    } else {
+        u32 address = PCI_BASE_ADDR | (bus << 16) | (device << 11) | (func << 8) | (offs & 0xFC);
+        io_out32(PCI_ADDR_PORT, address);
+        io_out32(PCI_VALUE_PORT, value);
+    }
 }
 
 char *pin_names[] = { "NONE", "A", "B", "C" "D" };
@@ -393,34 +412,67 @@ void pci_init(void) {
     PCI_Device* dev = kheap_zalloc(sizeof(PCI_Device));
     dev->super.tag = KOBJECT_DEV_PCI;
 
-    // allocate kernel objects for each of the PCI devices
-    for (u32 bus = 0; bus < 256; bus++) {
-        for (u32 device = 0; device < 32; device++) {
-            for (u8 func = 0; func < 8; func++) {
-                if (pci_check_device(dev, bus, device, func)) {
-                    ON_DEBUG(PCI)(pci_print_device(dev));
+    if (pci_segment_group) {
+        // 32 devices, 8 functions means each bus entry is 1MiB
+        size_t bus_count = (pci_segment_group->end_bus - pci_segment_group->start_bus) + 1;
+        size_t map_size = bus_count * 1048576;
+        pcie_base = memmap_view(boot_info->kernel_pml4, pci_segment_group->address, (u64) paddr2kaddr(pci_segment_group->address), map_size, VMEM_PAGE_WRITE);
 
-                    // kernel-sided drivers
-                    for (Device_Driver* driver = _DRIVER_START; driver != _DRIVER_END; driver++) {
-                        if (driver->vendor_id == dev->vendor_id && driver->device_id == dev->device_id) {
-                            ON_DEBUG(PCI)(kprintf("[pci] Driver found for: %s\n", driver->name));
-                            if (!driver->init(dev)) {
-                                ON_DEBUG(PCI)(kprintf("[pci] Failed to load driver!\n"));
-                            }
-                            break;
+        kprintf("PCIe Base mapped to %p\n", pcie_base);
+
+        // allocate kernel objects for each of the PCI devices
+        FOR_N(bus, 0, bus_count) FOR_N(device, 0, 32) FOR_N(func, 0, 8) {
+            if (pci_check_device(dev, bus, device, func)) {
+                ON_DEBUG(PCI)(pci_print_device(dev));
+
+                // kernel-sided drivers
+                for (Device_Driver* driver = _DRIVER_START; driver != _DRIVER_END; driver++) {
+                    if (driver->vendor_id == dev->vendor_id && driver->device_id == dev->device_id) {
+                        ON_DEBUG(PCI)(kprintf("[pci] Driver found for: %s\n", driver->name));
+                        if (!driver->init(dev)) {
+                            ON_DEBUG(PCI)(kprintf("[pci] Failed to load driver!\n"));
                         }
+                        break;
                     }
-
-                    pci_devs[pci_dev_count++] = dev;
-                    if (pci_dev_count >= PCI_MAX_DEVICES) {
-                        ON_DEBUG(PCI)(kprintf("[pci] Hit max devices!\n"));
-                        goto done_scanning;
-                    }
-
-                    // new alloc for the next device we find
-                    dev = kheap_zalloc(sizeof(PCI_Device));
-                    dev->super.tag = KOBJECT_DEV_PCI;
                 }
+
+                pci_devs[pci_dev_count++] = dev;
+                if (pci_dev_count >= PCI_MAX_DEVICES) {
+                    ON_DEBUG(PCI)(kprintf("[pci] Hit max devices!\n"));
+                    goto done_scanning;
+                }
+
+                // new alloc for the next device we find
+                dev = kheap_zalloc(sizeof(PCI_Device));
+                dev->super.tag = KOBJECT_DEV_PCI;
+            }
+        }
+    } else {
+        // allocate kernel objects for each of the PCI devices
+        FOR_N(bus, 0, 256) FOR_N(device, 0, 32) FOR_N(func, 0, 8) {
+            if (pci_check_device(dev, bus, device, func)) {
+                ON_DEBUG(PCI)(pci_print_device(dev));
+
+                // kernel-sided drivers
+                for (Device_Driver* driver = _DRIVER_START; driver != _DRIVER_END; driver++) {
+                    if (driver->vendor_id == dev->vendor_id && driver->device_id == dev->device_id) {
+                        ON_DEBUG(PCI)(kprintf("[pci] Driver found for: %s\n", driver->name));
+                        if (!driver->init(dev)) {
+                            ON_DEBUG(PCI)(kprintf("[pci] Failed to load driver!\n"));
+                        }
+                        break;
+                    }
+                }
+
+                pci_devs[pci_dev_count++] = dev;
+                if (pci_dev_count >= PCI_MAX_DEVICES) {
+                    ON_DEBUG(PCI)(kprintf("[pci] Hit max devices!\n"));
+                    goto done_scanning;
+                }
+
+                // new alloc for the next device we find
+                dev = kheap_zalloc(sizeof(PCI_Device));
+                dev->super.tag = KOBJECT_DEV_PCI;
             }
         }
     }

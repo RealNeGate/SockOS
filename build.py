@@ -10,7 +10,7 @@ NINJA_SCRIPT: str = "build.ninja"
 # Note(flysand): Apparently it doesn't work if it is specified without
 # .exe on windows.
 LD = 'ld.lld' if platform.system() != 'Windows' else 'ld.lld.exe'
-OPT = '' # -O2 -DNDEBUG'
+OPT = '-O2 -DNDEBUG'
 
 CFLAGS = [
     '-g',
@@ -88,8 +88,14 @@ for path in Path("src/kernel/").rglob("*.c"):
     file.write(f'\n')
     objs.append("objs/" + path.name + ".o")
 
+kernel_asm = " ".join(asm_outputs["kernel"])
+objs_str = " ".join(objs)
+file.write(f'build bin/kernel.so | bin/output.map: ld {objs_str} {kernel_asm} | link.ld\n')
+file.write(f'  flags = -T link.ld -nostdlib -Map=bin/output.map -pie\n')
+file.write(f'\n')
+
 # build EFI app
-file.write(f'build objs/efi.o: cc src/boot/efi_main.c\n')
+file.write(f'build objs/efi.o: cc src/boot/efi_main.c | bin/kernel.so bin/output.map\n')
 file.write(f'  flags = -target x86_64-pc-win32-coff -fuse-ld=lld-link -I src -fno-PIC -fshort-wchar {cflags} {OPT}\n')
 file.write(f'\n')
 
@@ -97,16 +103,10 @@ file.write(f'build bin/efi/boot/bootx64.efi: link objs/efi.o\n')
 file.write(f'  flags = -subsystem:efi_application -nodefaultlib -dll -entry:efi_main\n')
 file.write(f'\n')
 
-kernel_asm = " ".join(asm_outputs["kernel"])
-objs_str = " ".join(objs)
-file.write(f'build bin/kernel.so | bin/output.map: ld {objs_str} {kernel_asm} | link.ld\n')
-file.write(f'  flags = -T link.ld -nostdlib -Map=bin/output.map -pie\n')
-file.write(f'\n')
-
 file.close()
 
 os.system('ninja')
-os.system('wsl ./bake.sh')
-# os.system('cp disk.img C:/iventoy/iso/disk.iso')
+# os.system('wsl ./bake.sh')
+os.system('cp bin/efi/boot/bootx64.efi C:/Users/yasse/OneDrive/Escritorio/PXE')
 
 

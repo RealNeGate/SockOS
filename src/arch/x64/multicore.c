@@ -8,13 +8,6 @@ void smp_main(PerCPU* cpu) {
     core_awake = 1;
 
     int id = cpu - boot_info->cores;
-    int offset = id * 50;
-    for (size_t j = 0; j < 50; j++) {
-        for (size_t i = 0; i < 50; i++) {
-            boot_info->fb.pixels[offset + i + (j * boot_info->fb.stride)] = 0xFFFF00FF;
-        }
-    }
-
     arch_init(id);
     arch_handoff(id);
 }

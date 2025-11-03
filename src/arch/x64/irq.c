@@ -454,9 +454,10 @@ void arch_pte_update(Env* env, uintptr_t access_addr, uintptr_t translated, VMem
     static const uint64_t shifts[3] = { 39, 30, 21 };
 
     // convert software page properties into hardware page flags
-    uint64_t page_flags = 0;
-    if (flags & VMEM_PAGE_USER)  { page_flags |= PAGE_USER;  }
-    if (flags & VMEM_PAGE_WRITE) { page_flags |= PAGE_WRITE; }
+    uint64_t page_flags = PAGE_PRESENT;
+    if (flags & VMEM_PAGE_USER)     { page_flags |= PAGE_USER;  }
+    if (flags & VMEM_PAGE_WRITE)    { page_flags |= PAGE_WRITE; }
+    if (flags & VMEM_PAGE_UNCACHED) { page_flags |= PAGE_NOCACHE; }
 
     PageTable* curr = env->addr_space.hw_tables;
     for (size_t i = 0; i < 3; i++) {
@@ -476,7 +477,7 @@ void arch_pte_update(Env* env, uintptr_t access_addr, uintptr_t translated, VMem
                 new_pt = kheap_alloc(PAGE_SIZE);
                 memset(new_pt, 0, sizeof(PageTable));
 
-                new_entry = kaddr2paddr(new_pt) | page_flags | PAGE_PRESENT;
+                new_entry = kaddr2paddr(new_pt) | page_flags;
             }
             // no progress necessary, it's already behaving
             if (entry == new_entry) { break; }
@@ -494,7 +495,7 @@ void arch_pte_update(Env* env, uintptr_t access_addr, uintptr_t translated, VMem
     size_t pte_index = (access_addr >> 12) & 0x1FF; // 4KiB
 
     u64 old_pte = curr->entries[pte_index];
-    u64 new_pte = (translated & 0xFFFFFFFFF000) | page_flags | PAGE_PRESENT;
+    u64 new_pte = (translated & 0xFFFFFFFFF000) | page_flags;
     if (old_pte != new_pte) {
         atomic_compare_exchange_strong(&curr->entries[pte_index], &old_pte, new_pte);
         ON_DEBUG(VMEM)(kprintf("[vmem] updated PTE [%p] %p -> %p!\n", access_addr, old_pte, new_pte));
