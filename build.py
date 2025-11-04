@@ -65,10 +65,10 @@ file.write(f'\n')
 if True:
     # build desktop
     file.write(f'build objs/desktop.o: cc userland/desktop.c\n')
-    file.write(f'  flags = -target x86_64-linux-gnu -std=gnu23 -ffreestanding -nostdlib -fpic {OPT}\n')
+    file.write(f'  flags = -target x86_64-linux-gnu -std=gnu23 -ffreestanding -nostdlib -fpic -I userland/include {OPT}\n')
     file.write(f'\n')
     file.write(f'build userland/desktop.elf: ld objs/desktop.o\n')
-    file.write(f'  flags = -T userland/link.ld\n')
+    file.write(f'  flags = -T userland/init/link.ld\n')
     file.write(f'\n')
 
 # Compile arch-specific objects
@@ -90,8 +90,8 @@ for path in Path("src/kernel/").rglob("*.c"):
 
 kernel_asm = " ".join(asm_outputs["kernel"])
 objs_str = " ".join(objs)
-file.write(f'build bin/kernel.so | bin/output.map: ld {objs_str} {kernel_asm} | link.ld\n')
-file.write(f'  flags = -T link.ld -nostdlib -Map=bin/output.map -pie\n')
+file.write(f'build bin/kernel.so | bin/output.map: ld {objs_str} {kernel_asm} | src/kernel/link.ld\n')
+file.write(f'  flags = -T src/kernel/link.ld -nostdlib -Map=bin/output.map -pie\n')
 file.write(f'\n')
 
 # build EFI app

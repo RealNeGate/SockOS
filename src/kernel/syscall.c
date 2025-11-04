@@ -105,13 +105,15 @@ SYS_FN(munmap) {
 }
 
 SYS_FN(thread_create) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_thread_create(fn=%d, arg=%p)\n", SYS_PARAM0, SYS_PARAM1));
+    ON_DEBUG(SYSCALL)(kprintf("SYS_thread_create(fn=%d, arg=%p, stack_size=%d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2));
 
     Env* env = cpu->current_thread->parent;
-    uintptr_t stack_ptr = vmem_map(env, 0, 0, USER_STACK_SIZE, VMEM_PAGE_WRITE, NULL);
+    size_t stack_size = SYS_PARAM2;
+
+    uintptr_t stack_ptr = vmem_map(env, 0, 0, stack_size, VMEM_PAGE_WRITE, NULL);
     KCHECK(stack_ptr, RESULT_NO_MEM);
 
-    Thread* thread = thread_create(env, (ThreadEntryFn*) SYS_PARAM0, SYS_PARAM1, stack_ptr, USER_STACK_SIZE);
+    Thread* thread = thread_create(env, (ThreadEntryFn*) SYS_PARAM0, SYS_PARAM1, stack_ptr, stack_size);
     KCHECK(thread, RESULT_NO_MEM);
 
     // make an accessible handle for the thread
@@ -124,25 +126,22 @@ SYS_FN(test) {
     return 0;
 }
 
+SYS_FN(pci_device_count) {
+    kprintf("SYS_pci_device_count()\n");
+    return pci_dev_count;
+}
+
 SYS_FN(pci_claim_device) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_pci_claim_device(count=%d, query=%p)\n", SYS_PARAM0, SYS_PARAM1));
+    ON_DEBUG(SYSCALL)(kprintf("SYS_pci_claim_device(index=%d, out_key=%p)\n", SYS_PARAM0, SYS_PARAM1));
+    KCHECK(SYS_PARAM0 < pci_dev_count, 0);
 
-    // TODO(NeGate): validate the array memory
     Env* env = cpu->current_thread->parent;
-    uint32_t* arr = (uint32_t*) SYS_PARAM1;
 
-    FOR_N(i, 0, SYS_PARAM0) {
-        FOR_N(j, 0, pci_dev_count) {
-            PCI_Device* dev = pci_devs[j];
-            u32 key = (dev->vendor_id << 16ull) | dev->device_id;
-            // is within the filter list
-            if (key != arr[i]) { continue; }
-            // we can only claim a device if no one else has
-            Env* env_null = NULL;
-            if (atomic_compare_exchange_strong(&dev->parent, &env_null, env)) {
-                return env_open_handle(env, 0, &dev->super);
-            }
-        }
+    Env* env_null = NULL;
+    PCI_Device* dev = pci_devs[SYS_PARAM0];
+    if (atomic_compare_exchange_strong(&dev->parent, &env_null, env)) {
+        u32 key = (dev->vendor_id << 16ull) | dev->device_id;
+        return env_open_handle(env, 0, &dev->super);
     }
 
     return 0;
@@ -347,6 +346,12 @@ SYS_FN(mailbox_reply) {
     kassert(next->parent, "mailboxes can't live in kernel-threads");
     uintptr_t new_cr3 = kaddr2paddr(next->parent->addr_space.hw_tables);
     do_context_switch(&next->state, new_cr3);
+}
+
+// Replace this with a routine that stays in userland
+SYS_FN(tsc_freq) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_tsc_freq()\n"));
+    return boot_info->tsc_freq;
 }
 
 #undef SYS_PARAM0

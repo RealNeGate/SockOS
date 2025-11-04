@@ -399,27 +399,26 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
         }
 
         if (env != NULL) {
-            if (!rwlock_try_lock_shared(&env->addr_space.lock)) {
+            if (rwlock_try_lock_shared(&env->addr_space.lock)) {
+                // update hardware page tables to match
+                bool is_write = state->error & 2;
+                bool success = vmem_segfault(env, access_addr, is_write);
+                if (!success) {
+                    kprintf("CPU-%d: %s (%d): cr3=%p error=0x%x\n", id, interrupt_names[state->interrupt_num], state->interrupt_num, cr3, state->error);
+                    kprintf("  rip=%x:%p rsp=%x:%p flags=%x\n", state->cs, state->rip, state->ss, state->rsp, state->flags);
+                    dump_page_fault(state, cr3, cpu, env, access_addr);
+                    x86_halt();
+                }
+
+                rwlock_unlock_shared(&env->addr_space.lock);
+            } else {
                 spall_end_event(id);
 
                 // if we failed to grab it, we're in the middle of an exclusive
                 // TLB modification, let's yield our time slice for now.
                 sched_wait(0);
-
-                return timer_interrupt(state, cr3, cpu, now);
+                cr3 = timer_interrupt(state, cr3, cpu, now);
             }
-
-            // update hardware page tables to match
-            bool is_write = state->error & 2;
-            bool success = vmem_segfault(env, access_addr, is_write);
-            if (!success) {
-                kprintf("CPU-%d: %s (%d): cr3=%p error=0x%x\n", id, interrupt_names[state->interrupt_num], state->interrupt_num, cr3, state->error);
-                kprintf("  rip=%x:%p rsp=%x:%p flags=%x\n", state->cs, state->rip, state->ss, state->rsp, state->flags);
-                dump_page_fault(state, cr3, cpu, env, access_addr);
-                x86_halt();
-            }
-
-            rwlock_unlock_shared(&env->addr_space.lock);
         } else {
             #if DEBUG_IRQ
             dump_page_fault(state, cr3, cpu, env, access_addr);
@@ -428,7 +427,7 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
             x86_halt();
         }
     } else if (state->interrupt_num == 0x20) {
-        return timer_interrupt(state, cr3, cpu, now);
+        cr3 = timer_interrupt(state, cr3, cpu, now);
     } else if (state->interrupt_num >= 0x50) {
         // interrupt lines
         InterruptLineCallback* c = &line_callbacks[state->interrupt_num - 0x50];
@@ -442,7 +441,6 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
     } else {
         x86_halt();
     }
-
     return cr3;
 }
 

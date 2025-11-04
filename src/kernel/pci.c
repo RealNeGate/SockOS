@@ -400,9 +400,6 @@ static bool pci_check_device(PCI_Device *dev, u32 bus, u32 device, u8 func) {
     return true;
 }
 
-extern Device_Driver _DRIVER_START[];
-extern Device_Driver _DRIVER_END[];
-
 int pci_dev_count;
 PCI_Device* pci_devs[PCI_MAX_DEVICES];
 
@@ -425,17 +422,6 @@ void pci_init(void) {
             if (pci_check_device(dev, bus, device, func)) {
                 ON_DEBUG(PCI)(pci_print_device(dev));
 
-                // kernel-sided drivers
-                for (Device_Driver* driver = _DRIVER_START; driver != _DRIVER_END; driver++) {
-                    if (driver->vendor_id == dev->vendor_id && driver->device_id == dev->device_id) {
-                        ON_DEBUG(PCI)(kprintf("[pci] Driver found for: %s\n", driver->name));
-                        if (!driver->init(dev)) {
-                            ON_DEBUG(PCI)(kprintf("[pci] Failed to load driver!\n"));
-                        }
-                        break;
-                    }
-                }
-
                 pci_devs[pci_dev_count++] = dev;
                 if (pci_dev_count >= PCI_MAX_DEVICES) {
                     ON_DEBUG(PCI)(kprintf("[pci] Hit max devices!\n"));
@@ -452,17 +438,6 @@ void pci_init(void) {
         FOR_N(bus, 0, 256) FOR_N(device, 0, 32) FOR_N(func, 0, 8) {
             if (pci_check_device(dev, bus, device, func)) {
                 ON_DEBUG(PCI)(pci_print_device(dev));
-
-                // kernel-sided drivers
-                for (Device_Driver* driver = _DRIVER_START; driver != _DRIVER_END; driver++) {
-                    if (driver->vendor_id == dev->vendor_id && driver->device_id == dev->device_id) {
-                        ON_DEBUG(PCI)(kprintf("[pci] Driver found for: %s\n", driver->name));
-                        if (!driver->init(dev)) {
-                            ON_DEBUG(PCI)(kprintf("[pci] Failed to load driver!\n"));
-                        }
-                        break;
-                    }
-                }
 
                 pci_devs[pci_dev_count++] = dev;
                 if (pci_dev_count >= PCI_MAX_DEVICES) {

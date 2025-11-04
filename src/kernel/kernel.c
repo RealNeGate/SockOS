@@ -1,5 +1,6 @@
 #include <kernel.h>
 #include "term.h"
+#include <elf.h>
 
 #define EBR_IMPL
 #include "ebr.h"
@@ -36,6 +37,70 @@ uint32_t mur3_32(const void *key, int len, uint32_t h) {
     return h ^ (h >> 16);
 }
 
+
+////////////////////////////////
+// Mini-ELF loader
+////////////////////////////////
+// this is the trusted ELF loader for priveleged programs, normal apps will probably
+// be loaded via a shared object.
+Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
+    ON_DEBUG(ENV)(kprintf("Loading a program! %p\n", program));
+    Elf64_Ehdr* elf_header = (Elf64_Ehdr*) program;
+
+    KObject_VMO* vmo_ptr = vmo_create_physical(kaddr2paddr((void*) program), program_size, VMEM_PAGE_WRITE | VMEM_PAGE_EXEC);
+    KHandle elf_vmo = env_open_handle(env, 0, &vmo_ptr->super);
+
+    ////////////////////////////////
+    // map segments
+    ////////////////////////////////
+    size_t segment_size = elf_header->e_phentsize;
+    size_t segment_header_bounds = elf_header->e_phoff + elf_header->e_phnum*segment_size;
+    kassert(segment_header_bounds < program_size, "segments do not fit into file");
+
+    const u8* segments = program + elf_header->e_phoff;
+    FOR_N(i, 0, elf_header->e_phnum) {
+        Elf64_Phdr* segment = (Elf64_Phdr*) (segments + i*segment_size);
+        if (segment->p_type != PT_LOAD) {
+            continue;
+        }
+
+        // check segment permissions
+        kassert(segment->p_filesz <= segment->p_memsz, "no enough space in memory for file data");
+        kassert((segment->p_align & (segment->p_align - 1)) == 0, "alignment is not a power-of-two");
+
+        // file offset % page_size == virtual addr % page_size, it allows us to file map
+        // awkward offsets because the virtual address is just as awkward :p
+        uintptr_t vaddr = segment->p_vaddr & -PAGE_SIZE;
+        size_t offset   = segment->p_offset & -PAGE_SIZE;
+
+        size_t file_size = (segment->p_filesz + PAGE_SIZE - 1) & -PAGE_SIZE;
+        size_t mem_size  = (segment->p_memsz  + PAGE_SIZE - 1) & -PAGE_SIZE;
+
+        ON_DEBUG(ENV)(kprintf("[elf] segment: %p (%d) => ... (%d)\n", segment->p_vaddr, segment->p_memsz, segment->p_filesz));
+
+        if (file_size > 0) {
+            vmem_add_range(env, elf_vmo, vaddr, offset, file_size, VMEM_PAGE_WRITE);
+        }
+
+        if (mem_size > file_size) {
+            // zero pages
+            vmem_add_range(env, 0, vaddr + file_size, 0, mem_size - file_size, VMEM_PAGE_WRITE);
+        }
+    }
+
+    // tiny i know
+    size_t stack_size = 2*1024*1024;
+    uintptr_t stack_ptr = vmem_map(env, 0, 0, stack_size, VMEM_PAGE_WRITE, NULL);
+
+    ON_DEBUG(ENV)(kprintf("[elf] entry=%p\n", elf_header->e_entry));
+    ON_DEBUG(ENV)(kprintf("[elf] stack=%p\n", stack_ptr));
+
+    KObject_VMO* initrd_vmo = vmo_create_physical(kaddr2paddr(boot_info->initrd), boot_info->initrd_size, VMEM_PAGE_WRITE);
+    KHandle initrd_handle = env_open_handle(env, 0, &initrd_vmo->super);
+
+    return thread_create(env, (ThreadEntryFn*) elf_header->e_entry, initrd_handle, stack_ptr, stack_size);
+}
+
 void _putchar(char ch);
 void kmain(BootInfo* restrict info) {
     boot_info = info;
@@ -43,7 +108,7 @@ void kmain(BootInfo* restrict info) {
     boot_info->cores[0].irq_stack_top = paddr2kaddr((uintptr_t) boot_info->cores[0].irq_stack_top);
 
     // convert pointers into kernel addresses
-    boot_info->map_file = paddr2kaddr((uintptr_t) boot_info->map_file);
+    boot_info->initrd = paddr2kaddr((uintptr_t) boot_info->initrd);
     boot_info->kernel_pml4 = paddr2kaddr((uintptr_t) boot_info->kernel_pml4);
     boot_info->mem_map.regions = paddr2kaddr((uintptr_t) boot_info->mem_map.regions);
     boot_info->fb.pixels = paddr2kaddr((uintptr_t) boot_info->fb.pixels);
@@ -62,10 +127,7 @@ void kmain(BootInfo* restrict info) {
     arch_init(0);
     ebr_init();
 
-    static _Alignas(4096) const uint8_t desktop_elf[] = {
-        #embed "../../userland/desktop.elf"
-    };
-
+    #if 0
     if (0) {
         char* stream = boot_info->map_file;
         char* end = stream + boot_info->map_file_size;
@@ -106,12 +168,15 @@ void kmain(BootInfo* restrict info) {
             }
         }
     }
+    #endif
 
-    kprintf("Kernel framebuffer at %p\n", kaddr2paddr(boot_info->fb.pixels));
+    static _Alignas(4096) const uint8_t init_elf[] = {
+        #embed "../../objs/init.elf"
+    };
 
     Env* env = env_create();
-    void* desktop_elf_ptr = paddr2kaddr(((uintptr_t) desktop_elf - boot_info->elf_virtual_ptr) + boot_info->elf_physical_ptr);
-    Thread* bootstrap = env_load_elf(env, desktop_elf_ptr, sizeof(desktop_elf));
+    void* init_elf_ptr = paddr2kaddr(((uintptr_t) init_elf - boot_info->elf_virtual_ptr) + boot_info->elf_physical_ptr);
+    Thread* bootstrap = env_load_elf(env, init_elf_ptr, sizeof(init_elf));
     thread_resume(bootstrap);
 
     // Thread* t = thread_create(NULL, sched_load_balancer, 0, (uintptr_t) kheap_alloc(8192), 8192);

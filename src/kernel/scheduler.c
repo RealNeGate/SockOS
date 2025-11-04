@@ -188,9 +188,6 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
         blocked = blocked->next_in_blocked;
     }
 
-    // tq_dump(&sched->waiters, true, 0);
-    // tq_dump(&sched->active, false, sched->min_exec_time);
-
     // recompute scheduling period
     if (sched->active.count == 0) {
         sched->ideal_exec_time = 0;

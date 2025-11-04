@@ -5,9 +5,8 @@ X(thread_create)
 X(mmap)
 X(munmap)
 X(mpin)
-// Special case
-X(fb_grab)
 // PCI
+X(pci_device_count)
 X(pci_claim_device)
 X(pci_bar_count)
 X(pci_get_bar)
@@ -18,4 +17,9 @@ X(mailbox_create)
 X(mailbox_send)
 X(mailbox_wait)
 X(mailbox_reply)
+// Special case
+X(fb_grab)
+// X(ps2_interrupt)
+// x86 stuff
+X(tsc_freq)
 #undef X

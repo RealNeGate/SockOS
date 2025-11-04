@@ -1,10 +1,10 @@
-#include "beans.h"
-#include <stdbool.h>
+#include <beans.h>
 #include <emmintrin.h>
 
 typedef uint8_t u8;
 #include "../src/boot/term_font.c"
 
+static uint64_t tsc_freq;
 static KHandle mailbox;
 static bool cursor_state;
 
@@ -205,7 +205,7 @@ static void allocate_buffers(void) {
     igpu_mmio_write(0x70084, gpu.cursor_gpu_addr); // CUR_BASE_A
 }
 
-static void intel_gpu_driver_init(KHandle display_pci, uint64_t freq) {
+static void intel_gpu_driver_init(KHandle display_pci) {
     // BDSM_0_2_0_PCI - Mirror of Base Data of Stolen Memory
     gpu.base_dsm = syscall(SYS_pci_read_config_32, display_pci, 0x5C) & 0xFFFFFu;
 
@@ -227,7 +227,7 @@ static void intel_gpu_driver_init(KHandle display_pci, uint64_t freq) {
     gpu.ggtt_size = 1u << (20u + gtt_size);
 
     static const uint8_t cursor_raw[56*56*4] = {
-        #embed "cursor.bin"
+        #embed "desktop/cursor.bin"
     };
 
     uintptr_t cursor_paddr;
@@ -351,17 +351,15 @@ static void intel_gpu_driver_poll(void) {
     #endif
 }
 
-int _start(KHandle bootstrap_channel) {
+int _start(KHandle bootstrap_vmo) {
+    tsc_freq = syscall(SYS_tsc_freq);
     terminal_used = 0;
 
     // create & install mailbox
-    /* mailbox = syscall(SYS_mailbox_create, 4);
+    mailbox = syscall(SYS_mailbox_create, 4);
     for (int i = 0; i < 4; i++) {
         syscall(SYS_thread_create, request_handler, NULL);
-    } */
-
-    // We have access to the PS/2 interrupts
-    // syscall(SYS_thread_create, mailbox, request_handler);
+    }
 
     // BOCHS VBE display
     static uint32_t bochs_pcids[] = { 0x12341111 };
@@ -390,7 +388,7 @@ int _start(KHandle bootstrap_channel) {
     }
 
     printf("Found! handle=%p\n", display_pci);
-    intel_gpu_driver_init(display_pci, bootstrap_channel);
+    intel_gpu_driver_init(display_pci);
     for (;;) {
         uint64_t start = __rdtsc();
 
@@ -400,7 +398,7 @@ int _start(KHandle bootstrap_channel) {
         draw(info[0], info[1], info[2], fb);
         mult += 1;
 
-        uint64_t elapsed = (__rdtsc() - start) / bootstrap_channel;
+        uint64_t elapsed = (__rdtsc() - start) / tsc_freq;
         if (elapsed < 16666) {
             syscall(SYS_sleep, 16666 - elapsed);
         }

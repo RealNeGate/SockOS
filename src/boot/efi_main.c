@@ -28,22 +28,6 @@ do {                          \
 typedef void (*LoaderFunction)(BootInfo* info, u8* stack, u64 gdt_base);
 
 typedef struct {
-    u64 size;
-    u64 file_size;
-    u64 physical_size;
-    EFI_TIME create_time;
-    EFI_TIME last_access_time;
-    EFI_TIME modifiction_time;
-    u64 attribute;
-    // The efi_file_info structure is supposed to be a variable size structure,
-    // but it's really a pain to always dynamically allocate enough space for
-    // the structure, so I explicitly allocated some space in the structure, so
-    // we will be able to cover at least some simple cases without dynamic
-    // memory allocation.
-    u16 file_name[256];
-} EFI_FILE_INFO;
-
-typedef struct {
     size_t capacity;
     size_t used;
 
@@ -249,46 +233,12 @@ static bool mem_map_verify(MemMap* mem_map) {
     return true;
 }
 
-static void* efi_load_file(EFI_SYSTEM_TABLE* st, EFI_FILE* fs_root, i16* path, size_t* out_size, bool is_cstr) {
-    ON_DEBUG(EFI)(printf("Loading '%S'...\n", path));
-
-    EFI_FILE* file;
-    EFI_STATUS status = fs_root->Open(fs_root, &file, path, EFI_FILE_MODE_READ, EFI_FILE_READ_ONLY | EFI_FILE_SYSTEM);
-    if (status != 0) {
-        panic("Failed to open file!\nStatus: %X\n", status);
-    }
-
-    EFI_GUID info_guid = EFI_FILE_INFO_GUID;
-    EFI_FILE_INFO file_info;
-    size_t file_info_size = sizeof(EFI_FILE_INFO);
-    status = file->GetInfo(file, &info_guid, &file_info_size, &file_info);
-    if (status != 0) {
-        panic("Bad file? Failed to get size\nStatus: %X\n", status);
-    }
-
-    *out_size = file_info.file_size + is_cstr;
-    char* buffer = efi_alloc(st, file_info.file_size + is_cstr);
-
-    status = file->Read(file, &file_info.file_size, buffer);
-    if (status != 0) {
-        panic("Bad file? Failed to read\nStatus: %X\n", status);
-    }
-
-    if (is_cstr) {
-        buffer[file_info.file_size] = 0;
-    }
-
-    file->Close(file);
-    return buffer;
-}
-
 static _Alignas(4096) const uint8_t kernel_so[] = {
-    #embed "../../bin/kernel.so"
+    #embed "../../objs/kernel.so"
 };
 
-static _Alignas(4096) char map_file[] = {
-    #embed "../../bin/output.map"
-    , 0
+static _Alignas(4096) uint8_t initrd[] = {
+    #embed "../../objs/initrd"
 };
 
 EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
@@ -323,16 +273,13 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 
     ON_DEBUG(EFI)(printf("Framebuffer at %X\n", (u64) fb.pixels));
 
-    size_t map_file_size = sizeof(map_file);
-    size_t kernel_size   = sizeof(kernel_so);
-
     // Load the kernel ELF
     ELF_Module kernel_module;
     if (!elf_load(st, kernel_so, &kernel_module)) {
         panic("Failed to load the kernel module");
     }
 
-    ON_DEBUG(EFI)(printf("Loaded the kernel at: %X .. %X\n", kernel_module.phys_base, kernel_module.phys_base + kernel_size - 1));
+    ON_DEBUG(EFI)(printf("Loaded the kernel at: %X .. %X\n", kernel_module.phys_base, kernel_module.phys_base + sizeof(kernel_so) - 1));
     ON_DEBUG(EFI)(printf("Kernel entry: %X\n", kernel_module.entry_addr));
 
     // Create the stack for the kernel
@@ -383,8 +330,8 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     mem_map_mark(&mem_map, kernel_module.phys_base, PAGE_4K(kernel_module.size), MEM_REGION_KERNEL);
     mem_map_mark(&mem_map, (u64) kstack_base, PAGE_4K(KERNEL_STACK_SIZE), MEM_REGION_KSTACK);
     mem_map_mark(&mem_map, (u64) fb.pixels, fb_size_pages, MEM_REGION_FRAMEBUFFER);
-    if (map_file_size > 0) {
-        mem_map_mark(&mem_map, (u64) map_file, PAGE_4K(map_file_size), MEM_REGION_KERNEL);
+    if (sizeof(initrd) > 0) {
+        mem_map_mark(&mem_map, (u64) initrd, PAGE_4K(sizeof(initrd)), MEM_REGION_KERNEL);
     }
     mem_map_merge_contiguous_ranges(&mem_map);
     if(!mem_map_verify(&mem_map)) {
@@ -401,10 +348,12 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     }
     #endif*/
 
-    kernel_boot_info.map_file_size = map_file_size;
-    kernel_boot_info.map_file = map_file;
+    kernel_boot_info.initrd_size = sizeof(initrd);
+    kernel_boot_info.initrd = initrd;
     kernel_boot_info.identity_map_ptr = (kernel_module.virt_base + kernel_module.size + 0x40000000 - 1) & -0x40000000;
+
     // ON_DEBUG(EFI)(printf("Identity map @ %X\n", kernel_boot_info.identity_map_ptr));
+    // ON_DEBUG(EFI)(printf("  Making trampoline mapping %X\n", kernel_module.phys_base + kernel_module.entry_addr));
 
     status = st->BootServices->ExitBootServices(img_handle, map_key);
     if (status != 0) {
@@ -429,7 +378,6 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 
     // Map the loader's trampoline page in, when loader.s installs the new address space we need the
     // code there to stick around long enough to jump away.
-    // ON_DEBUG(EFI)(printf("  Making trampoline mapping %X\n", kernel_module.phys_base + kernel_module.entry_addr));
     map_pages_id(&ctx, kernel_module.phys_base + kernel_module.entry_addr, 1);
     map_pages(&ctx, kernel_boot_info.identity_map_ptr + (uintptr_t) &kernel_boot_info, (uintptr_t) &kernel_boot_info, (sizeof(BootInfo) + 4095) / 4096, false);
 
