@@ -11,7 +11,8 @@ static PerCPU_Scheduler* get_sched(void) {
 // and we have executables.
 Env* env_create(void) {
     Env* env = kheap_zalloc(sizeof(Env));
-    env->addr_space.commit_table = nbhm_alloc(60);
+    env->super.tag = KOBJECT_ENV;
+    env->addr_space.working_set = nbhm_alloc(100);
 
     env->handles = kheap_zalloc(sizeof(KHandleTable) + sizeof(KHandleEntry));
     env->handles->capacity = 1;

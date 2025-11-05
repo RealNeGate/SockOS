@@ -1,10 +1,16 @@
 X(sleep)
 X(test)
+// Env/Threads
+X(env_create)
 X(thread_create)
+// Tracing/Debug
+X(debug_log)
 // VMM
 X(mmap)
 X(munmap)
 X(mpin)
+X(vmo_create)
+X(vmo_get_size)
 // PCI
 X(pci_device_count)
 X(pci_claim_device)

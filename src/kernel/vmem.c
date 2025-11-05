@@ -1,6 +1,10 @@
 #include <kernel.h>
 #include "threads.h"
 
+enum {
+    VMEM_WORKING_SET_OFFSET = 1,
+};
+
 uint32_t vmem_addrhm_hash(const void* k) {
     uint32_t* addr = (uint32_t*) &k;
 
@@ -236,7 +240,7 @@ bool vmem_protect(Env* env, uintptr_t addr, size_t size, VMem_Flags flags) {
 }
 
 void vmem_commit_page(Env* env, uintptr_t vaddr, void* kaddr) {
-    vmem_addrhm_put(&env->addr_space.commit_table, (void*) vaddr, (void*) kaddr2paddr(kaddr));
+    vmem_addrhm_put(&env->addr_space.working_set, (void*) (vaddr + VMEM_WORKING_SET_OFFSET), (void*) kaddr2paddr(kaddr));
 }
 
 void vmem_add_range(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_t vsize, VMem_Flags flags) {
@@ -257,33 +261,45 @@ void vmem_add_range(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_
     }
 }
 
+uintptr_t vmem_translate(VMem_WorkingSet* ws, uintptr_t vaddr) {
+    return (uintptr_t) vmem_addrhm_get(ws, (char*) (vaddr + VMEM_WORKING_SET_OFFSET));
+}
+
 static void try_commit(Env* env, VMem_PageDesc* desc, uintptr_t access_addr, uintptr_t start_addr, uintptr_t end_addr) {
-    // attempt to commit page
-    uintptr_t actual_page = (uintptr_t) vmem_addrhm_get(&env->addr_space.commit_table, (void*) access_addr);
-    if (actual_page == 0) {
-        uintptr_t new_page = 0;
-        if (desc->vmo_handle != 0) {
-            // we're mapped to a VMO, just view the address
-            // TODO(NeGate): implement pager behavior.
-            KObject_VMO* vmo_ptr = env_get_handle(env, desc->vmo_handle, NULL);
+    // Find the page's working set
+    VMem_WorkingSet* ws = &env->addr_space.working_set;
+    uintptr_t in_space_addr = access_addr;
+    if (desc->vmo_handle != 0) {
+        // Translate address into VMO space
+        size_t offset = (access_addr & -PAGE_SIZE) - start_addr;
+        in_space_addr = desc->offset + offset;
 
-            size_t offset = (access_addr & -PAGE_SIZE) - start_addr;
-            new_page = vmo_ptr->paddr + desc->offset + offset;
+        KObject_VMO* vmo_ptr = env_get_handle(env, desc->vmo_handle, NULL);
+        ON_DEBUG(VMEM)(kprintf("[vmem] first touch on VMO %p (%p => VMO:%p)\n", vmo_ptr, access_addr, in_space_addr));
 
-            ON_DEBUG(VMEM)(kprintf("[vmem] first touch on VMO (%p), paddr=%p\n", access_addr, new_page));
-        } else {
-            void* page = kheap_alloc(PAGE_SIZE);
-            memset(page, 0, PAGE_SIZE);
-            new_page = kaddr2paddr(page);
+        if (vmo_ptr->paddr) {
+            // physical addresses don't get cached in the working set, we're
+            // better off just not putting entries into a hash map.
+            uintptr_t new_page = vmo_ptr->paddr + in_space_addr;
+            arch_pte_update(env, access_addr & -PAGE_SIZE, new_page, desc->flags);
+            return;
         }
 
-        actual_page = (uintptr_t) vmem_addrhm_put_if_null(&env->addr_space.commit_table, (void*) access_addr, (void*) new_page);
-        if (actual_page == new_page) {
-            if (desc->vmo_handle == 0) {
-                ON_DEBUG(VMEM)(kprintf("[vmem] first touch on private page (%p), paddr=%p\n", access_addr, new_page));
-            }
+        // TODO(NeGate): implement pager behavior
+        ws = &vmo_ptr->pages;
+    } else {
+        ON_DEBUG(VMEM)(kprintf("[vmem] first touch on private page (%p)\n", access_addr));
+    }
 
-        } else if (desc->vmo_handle == 0) {
+    // attempt to commit page in working set
+    uintptr_t actual_page = (uintptr_t) vmem_addrhm_get(ws, (void*) (in_space_addr + VMEM_WORKING_SET_OFFSET));
+    if (actual_page == 0) {
+        void* page = kheap_alloc(PAGE_SIZE);
+        memset(page, 0, PAGE_SIZE);
+        uintptr_t new_page = kaddr2paddr(page);
+
+        actual_page = (uintptr_t) vmem_addrhm_put_if_null(ws, (void*) (in_space_addr + VMEM_WORKING_SET_OFFSET), (void*) new_page);
+        if (actual_page != new_page) {
             kheap_free(paddr2kaddr(new_page), PAGE_SIZE);
         }
     }

@@ -60,7 +60,7 @@ void ps2_interrupt(void* ctx) {
         _putchar(key_map[key]);
     }
 
-    // kprintf("HEHEHE! %d\n", key);
+    kprintf("HEHEHE! %d\n", key);
 }
 
 void ps2_init(void) {

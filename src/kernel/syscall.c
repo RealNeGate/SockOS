@@ -65,6 +65,60 @@ SYS_FN(sleep) {
     do_context_switch(state, new_cr3);
 }
 
+SYS_FN(debug_log) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_debug_log(vmo=%p, length=%d)\n", SYS_PARAM0, SYS_PARAM1));
+
+    Env* env = cpu->current_thread->parent;
+    KObject_VMO* vmo = env_get_handle(env, SYS_PARAM0, NULL);
+    KCHECK(vmo, RESULT_NO_HANDLE);
+    KCHECK(vmo->super.tag == KOBJECT_VMO, RESULT_WRONG_HANDLE);
+
+    size_t len = SYS_PARAM1;
+    if (len > vmo->size) {
+        len = vmo->size;
+    }
+
+    for (size_t i = 0; i < len; i += PAGE_SIZE) {
+        size_t limit = i + PAGE_SIZE;
+        if (limit > len) { limit = len; }
+
+        uintptr_t actual_page = vmem_translate(&vmo->pages, i);
+        kassert(actual_page, "TODO: uncommited page (%p => %p)", i, actual_page);
+
+        char* page = paddr2kaddr(actual_page);
+        FOR_N(j, i, limit) {
+            _putchar(page[j]);
+        }
+    }
+
+    return 0;
+}
+
+SYS_FN(env_create) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_env_create()\n"));
+    Env* parent = cpu->current_thread->parent;
+    Env* env    = env_create();
+    return env_open_handle(parent, 0, &env->super);
+}
+
+SYS_FN(vmo_create) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_vmo_create(size=%d)\n", SYS_PARAM0));
+    Env* env = cpu->current_thread->parent;
+    KObject_VMO* vmo_ptr = vmo_create_physical(0, SYS_PARAM0, VMEM_PAGE_WRITE);
+    return env_open_handle(env, 0, &vmo_ptr->super);
+}
+
+SYS_FN(vmo_get_size) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_vmo_get_size(vmo=%p)\n", SYS_PARAM0));
+
+    Env* env = cpu->current_thread->parent;
+    KObject_VMO* vmo = env_get_handle(env, SYS_PARAM0, NULL);
+    KCHECK(vmo, RESULT_NO_HANDLE);
+    KCHECK(vmo->super.tag == KOBJECT_VMO, RESULT_WRONG_HANDLE);
+
+    return vmo->size;
+}
+
 SYS_FN(mmap) {
     ON_DEBUG(SYSCALL)(kprintf("SYS_mmap(vmo=%p, offset=%d, size=%d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2));
 
@@ -105,15 +159,26 @@ SYS_FN(munmap) {
 }
 
 SYS_FN(thread_create) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_thread_create(fn=%d, arg=%p, stack_size=%d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2));
+    ON_DEBUG(SYSCALL)(kprintf("SYS_thread_create(env=%p, fn=%d, arg=%p, stack_size=%d, flags=%d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2, SYS_PARAM3, SYS_PARAM4));
 
     Env* env = cpu->current_thread->parent;
-    size_t stack_size = SYS_PARAM2;
+
+    ThreadEntryFn* fn = (ThreadEntryFn*) SYS_PARAM1;
+    uintptr_t arg = SYS_PARAM2;
+    size_t stack_size = SYS_PARAM3;
+
+    if (SYS_PARAM4 & 1) {
+        KObject* obj = env_get_handle(env, SYS_PARAM0, NULL);
+        KCHECK(obj, RESULT_NO_HANDLE);
+
+        // import argument as handle
+        arg = env_open_handle(env, 0, obj);
+    }
 
     uintptr_t stack_ptr = vmem_map(env, 0, 0, stack_size, VMEM_PAGE_WRITE, NULL);
     KCHECK(stack_ptr, RESULT_NO_MEM);
 
-    Thread* thread = thread_create(env, (ThreadEntryFn*) SYS_PARAM0, SYS_PARAM1, stack_ptr, stack_size);
+    Thread* thread = thread_create(env, fn, arg, stack_ptr, stack_size);
     KCHECK(thread, RESULT_NO_MEM);
 
     // make an accessible handle for the thread
@@ -127,7 +192,7 @@ SYS_FN(test) {
 }
 
 SYS_FN(pci_device_count) {
-    kprintf("SYS_pci_device_count()\n");
+    ON_DEBUG(SYSCALL)(kprintf("SYS_pci_device_count()\n"));
     return pci_dev_count;
 }
 
@@ -141,6 +206,8 @@ SYS_FN(pci_claim_device) {
     PCI_Device* dev = pci_devs[SYS_PARAM0];
     if (atomic_compare_exchange_strong(&dev->parent, &env_null, env)) {
         u32 key = (dev->vendor_id << 16ull) | dev->device_id;
+
+        egest_usermem(SYS_PARAM1, &key, sizeof(u32));
         return env_open_handle(env, 0, &dev->super);
     }
 

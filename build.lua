@@ -176,6 +176,6 @@ ninja = io.open("build.ninja", "wb")
 ninja:write(table.concat(lines, "\n"))
 ninja:close()
 local _0, _1, res = os.execute("ninja")
-if res ~= 0 then os.exit(res) end
+if res and res ~= 0 then os.exit(res) end
 
 os.execute("cp bin/efi/boot/bootx64.efi C:/Users/yasse/OneDrive/Escritorio/PXE")

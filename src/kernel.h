@@ -112,11 +112,16 @@ typedef struct {
     size_t index;
 } VMem_Cursor;
 
+// virtual addresses -> committed pages
+typedef NBHM VMem_WorkingSet;
+
 uintptr_t vmem_map(Env* env, KHandle vmo, size_t offset, size_t size, VMem_Flags flags, uintptr_t* out_paddr);
 void vmem_add_range(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_t vsize, VMem_Flags flags);
 
 // maps a kernel page to a virtual address.
 void vmem_commit_page(Env* env, uintptr_t vaddr, void* kaddr);
+
+uintptr_t vmem_translate(VMem_WorkingSet* ws, uintptr_t vaddr);
 
 bool vmem_protect(Env* env, uintptr_t addr, size_t size, VMem_Flags flags);
 bool vmem_segfault(Env* env, uintptr_t access_addr, bool is_write);
@@ -148,14 +153,12 @@ struct KObject {
 // chunk of virtual memory which can be shared across environments
 struct KObject_VMO {
     KObject super; // tag = KOBJECT_VMO
-
-    // page-aligned
-    size_t size;
-
-    // simple physical mapping
-    uintptr_t paddr;
-
     VMem_Flags flags;
+    size_t size; // page-aligned
+
+    // simple physical mapping, if paddr=0 then we use the working set
+    uintptr_t paddr;
+    VMem_WorkingSet pages;
 };
 
 // Ring buffer of stacks
@@ -226,6 +229,8 @@ void mailbox_recv(KObject_Mailbox* mailbox, Thread* thread);
 // Environment (memory + resources accessible bound to some set of threads)
 ////////////////////////////////
 struct Env {
+    KObject super; // tag = KOBJECT_ENV
+
     Lock lock;
 
     Thread* first_in_env;
@@ -249,8 +254,8 @@ struct Env {
         // B+ tree for intervals
         VMem_Node* root;
 
-        // virtual addresses -> committed pages
-        NBHM commit_table;
+        // commit table
+        VMem_WorkingSet working_set;
 
         // hardware page table
         PageTable* hw_tables;

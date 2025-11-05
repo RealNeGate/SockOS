@@ -75,6 +75,11 @@ int main(int argc, char** argv) {
         printf("Added '%s' (%zu bytes)\n", argv[i], len);
     }
 
+    // NULL file
+    FileEntry header = { .data_len = 0 };
+    fwrite(&header, sizeof(FileEntry), 1, out_fp);
+    file_len += sizeof(FileEntry);
+
     static const char zero_page[4096];
     fwrite(zero_page, 4096 - (file_len & 4095), 1, out_fp);
     fclose(out_fp);

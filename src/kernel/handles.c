@@ -9,6 +9,13 @@ KObject_VMO* vmo_create_physical(uintptr_t addr, size_t size, VMem_Flags flags) 
     obj->size = (size + PAGE_SIZE - 1) & -PAGE_SIZE;
     obj->paddr = addr;
     obj->flags = flags;
+    if (addr == 0) {
+        size_t init_pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+        if (init_pages < 4)   { init_pages = 4;   }
+        if (init_pages > 100) { init_pages = 100; }
+
+        obj->pages = nbhm_alloc(init_pages);
+    }
     return obj;
 }
 
