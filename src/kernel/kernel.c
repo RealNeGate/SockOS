@@ -70,9 +70,8 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
 
         // file offset % page_size == virtual addr % page_size, it allows us to file map
         // awkward offsets because the virtual address is just as awkward :p
-        uintptr_t vaddr = segment->p_vaddr & -PAGE_SIZE;
-        size_t offset   = segment->p_offset & -PAGE_SIZE;
-
+        uintptr_t vaddr  = segment->p_vaddr & -PAGE_SIZE;
+        size_t offset    = segment->p_offset & -PAGE_SIZE;
         size_t file_size = (segment->p_filesz + PAGE_SIZE - 1) & -PAGE_SIZE;
         size_t mem_size  = (segment->p_memsz  + PAGE_SIZE - 1) & -PAGE_SIZE;
 

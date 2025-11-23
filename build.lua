@@ -74,7 +74,7 @@ function filename(file)
     return file:match("^.+/(.+)%..+")
 end
 
-local cflags     = " -std=gnu23 -g -Wall -I src -masm=intel -nostdlib -mno-red-zone -fno-stack-protector -fno-finite-loops -Wno-unused"
+local cflags     = " -std=gnu23 -g -Wall -I include -masm=intel -nostdlib -mno-red-zone -fno-stack-protector -fno-finite-loops -Wno-unused"
 local elf_cflags = "-target x86_64-linux-gnu -ffreestanding "..cflags
 local efi_cflags = "-target x86_64-pc-win32-coff -fno-PIC -fshort-wchar "..cflags
 
@@ -115,7 +115,7 @@ do
 
     table.insert(lines, "# INIT PROGRAM")
     build("objs/init.elf", "cc", "userland/init/main.c", {
-        flags = elf_cflags.." -fuse-ld=lld -T userland/init/link.ld -fpic -I userland/include"
+        flags = elf_cflags.." -fuse-ld=lld -T userland/init/link.ld -fpic"
     })
 
     table.insert(lines, "# INITRD")
@@ -127,7 +127,7 @@ end
 -- Kernel
 do
     table.insert(lines, "# KERNEL")
-    table.insert(lines, "flags = -c -fPIC -fno-omit-frame-pointer "..elf_cflags)
+    table.insert(lines, "flags = -c -fPIC -fno-omit-frame-pointer -I src -DKERNEL_LAND "..elf_cflags)
 
     local objs = {}
     local asm_files = list_files("src/arch/x64/", "*.s")

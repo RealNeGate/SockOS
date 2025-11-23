@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdalign.h>
-#include <boot_info.h>
+#include "../boot_info.h"
 
 #include "crt.c"
 #include "com.c"

@@ -1,20 +1,12 @@
 #include <kernel.h>
 #include "pci.h"
+#include <beans.h>
 
 ////////////////////////////////
 // Syscall table
 ////////////////////////////////
 #define SYS_FN(name) static uintptr_t syscall_ ## name(CPUState* state, uintptr_t cr3, PerCPU* cpu)
 typedef uintptr_t SyscallFn(CPUState* state, uintptr_t cr3, PerCPU* cpu);
-
-#include "syscall_res.h"
-
-typedef enum {
-    #define X(name, ...) SYS_ ## name,
-    #include "syscall_table.h"
-
-    SYS_MAX,
-} SyscallNum;
 
 // forward decls
 #define X(name, ...) static uintptr_t syscall_ ## name (CPUState*, uintptr_t, PerCPU*);
@@ -120,11 +112,18 @@ SYS_FN(vmo_get_size) {
 }
 
 SYS_FN(mmap) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_mmap(vmo=%p, offset=%d, size=%d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2));
+    ON_DEBUG(SYSCALL)(kprintf("SYS_mmap(vmo=%p, addr=%p, size=%d, prot=%x, flags=%x, offset=%d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2, SYS_PARAM3, SYS_PARAM4, SYS_PARAM5));
+
+    size_t   size = SYS_PARAM2;
+    uint32_t prot = SYS_PARAM3;
+    size_t offset = SYS_PARAM5;
+
+    uint32_t flags = 0;
+    if (prot & PROT_WRITE) { flags |= VMEM_PAGE_WRITE; }
 
     size_t page_aligned_size = (SYS_PARAM2 + PAGE_SIZE - 1) & -PAGE_SIZE;
     KCHECK(page_aligned_size, 0);
-    return vmem_map(cpu->current_thread->parent, SYS_PARAM0, SYS_PARAM1, page_aligned_size, VMEM_PAGE_WRITE, NULL);
+    return vmem_map(cpu->current_thread->parent, offset, size, page_aligned_size, prot, NULL);
 }
 
 SYS_FN(mpin) {

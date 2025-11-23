@@ -8,7 +8,7 @@
 # Ethernet Controllers
 #####################################
 # 82540EM Gigabit Ethernet Controller
-# 8086:100E /e1000.so
+8086:100E /e1000.so
 # RTL8111/8168/8411 PCI Express Gigabit Ethernet Controller
 # 10EC:8168 /rtl8xxx.so
 

@@ -1,8 +1,8 @@
 // Arch-independent kernel stuff
 #pragma once
 #include <common.h>
-#include <boot_info.h>
-#include <kernel/printf.h>
+#include "boot_info.h"
+#include "kernel/printf.h"
 
 enum {
     CHUNK_SIZE = 2*1024*1024,
@@ -17,10 +17,24 @@ typedef struct KObject KObject;
 
 typedef unsigned int KHandle;
 
-typedef _Atomic(u32) atomic_u32;
-typedef _Atomic(u64) atomic_u64;
+// Kernel Array Bounds Check
+#define kabc(i, arr) kassert(i < ELEM_COUNT(arr), "Out of bounds access of %s[%d]", #arr, i)
+#define kassert(cond, ...) ((cond) ? 0 : (kprintf("%s:%d: assertion failed!\n  %s\n  ", __FILE__, __LINE__, #cond), kprintf(__VA_ARGS__), kprintf("\n\n"), arch_backtrace(), __builtin_trap()))
+#define panic(...) (kprintf("%s:%d: panic!\n", __FILE__, __LINE__), kprintf(__VA_ARGS__), __builtin_trap())
 
-#define atomic_cas_acq_rel(addr, old, new) atomic_compare_exchange_strong_explicit(addr, old, new, memory_order_acq_rel, memory_order_acquire)
+////////////////////////////////
+// Spin-lock
+////////////////////////////////
+typedef _Atomic(uint32_t) Lock;
+void spin_lock(Lock* lock);
+void spin_unlock(Lock* lock);
+
+// bootleg stdio.h
+void kprintf(const char *fmt, ...);
+void print_ring_init(void);
+
+void arch_backtrace(void);
+uint64_t get_time_ticks(void);
 
 PerCPU* cpu_get(void);
 size_t cpu_get_index(void);
@@ -37,7 +51,7 @@ void  kheap_free(void* obj, size_t size);
 void  kheap_dump(void);
 
 #define NBHM_ASSERT(x) kassert(x, ":(")
-#include <nbhm.h>
+#include "nbhm.h"
 
 ////////////////////////////////
 // Profiling

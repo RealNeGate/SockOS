@@ -1,4 +1,6 @@
 #include <beans.h>
+#include <common.h>
+#include <elf.h>
 #include "../src/kernel/printf.c"
 
 typedef struct {
@@ -19,10 +21,15 @@ static KHandle log_stream;
 static char* log_buffer;
 static int log_used;
 
+void fault_handler(void) {
+    syscall(SYS_debug_log, log_stream, log_used);
+    log_used = 0;
+}
+
 void _putchar(char ch) {
     if (log_stream == 0) {
         log_stream = syscall(SYS_vmo_create, 4*1024);
-        log_buffer = mmap(log_stream, 0, 4*1024);
+        log_buffer = mmap(log_stream, 0, 4*1024, PROT_READ | PROT_WRITE, 0, 0);
     } else if (log_used == 4096) {
         syscall(SYS_debug_log, log_stream, log_used);
         log_used = 0;
@@ -143,30 +150,68 @@ static FileEntry* find_file(FileEntry* initrd, size_t path_len, const char* path
     return NULL;
 }
 
-static void exec(FileEntry* file) {
+static bool exec(FileEntry* file) {
+    if (file->data_len < sizeof(Elf64_Ehdr)) {
+        return false;
+    }
+
     // TODO(NeGate): maybe VMOs should be able to be split into subviews...
     KHandle file_vmo = syscall(SYS_vmo_create, file->data_len);
-    char* dst = mmap(log_stream, 0, file->data_len);
+    char* dst = mmap(file_vmo, 0, file->data_len, PROT_READ | PROT_WRITE, 0, 0);
     for (size_t i = 0; i < file->data_len; i++) {
         dst[i] = file->data[i];
     }
 
+    Elf64_Ehdr* elf_header = (Elf64_Ehdr*) dst;
+    size_t segment_size = elf_header->e_phentsize;
+    size_t segment_header_bounds = elf_header->e_phoff + elf_header->e_phnum*segment_size;
+    if (segment_header_bounds >= file->data_len) {
+        printf("[init] error: segments do not fit into file\n");
+        return false;
+    }
+
+    printf("A!\n");
+    fault_handler();
+
+    uintptr_t lo = 0, hi = 0;
+    size_t page_size = 4096;
+    const char* segments = dst + elf_header->e_phoff;
+    for (size_t i = 0; i < elf_header->e_phnum; i++) {
+        Elf64_Phdr* segment = (Elf64_Phdr*) (segments + i*segment_size);
+        if (segment->p_type != PT_LOAD) {
+            continue;
+        }
+
+        size_t mem_size    = (segment->p_memsz + page_size - 1) & -page_size;
+        uintptr_t vaddr    = segment->p_vaddr & -page_size;
+        uintptr_t vaddr_hi = vaddr + mem_size;
+
+        if (lo > vaddr)    { lo = vaddr; }
+        if (hi < vaddr_hi) { hi = vaddr_hi; }
+    }
+
+    printf("Range: %p - %p\n", lo, hi);
+
+    /*uintptr_t vaddr  = segment->p_vaddr & -PAGE_SIZE;
+    segment->p_vaddr & -PAGE_SIZE;
+
     // Create process
     KHandle child_env = syscall(SYS_env_create);
 
-    // Load dynamic loader ELF
+    char* dst = mmap(file_vmo, 0, file->data_len, PROT_READ | PROT_WRITE, MEM_PLACEHOLDER, 0);
 
     // Spin up the main thread
-    KHandle thread = syscall(SYS_thread_create, child_env, NULL, file_vmo, 2*1024*1024, 1);
+    KHandle thread = syscall(SYS_thread_create, child_env, NULL, file_vmo, 2*1024*1024, 1);*/
+    return true;
 }
 
 int _start(KHandle bootstrap_vmo) {
     size_t initrd_size = vmo_get_size(bootstrap_vmo);
-    FileEntry* initrd = mmap(bootstrap_vmo, 0, initrd_size);
+    FileEntry* initrd  = mmap(bootstrap_vmo, 0, initrd_size, PROT_READ | PROT_WRITE, 0, 0);
 
     // Scan the drivers.txt, construct hashmap for driver mappings
     printf("InitRD:\n", initrd->path);
-    for (FileEntry* file = initrd; initrd->path[0];) {
+    for (FileEntry* file = initrd; file->path[0];) {
         printf("[init] found file '%s' (%zu bytes)\n", file->path, file->data_len);
         if (strcmp(file->path, "/drivers.txt") == 0) {
             parse_driver_list(file->data);

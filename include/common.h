@@ -57,28 +57,14 @@ typedef int8_t              i8;
 #define USE_INTRIN 1
 #endif
 
+typedef _Atomic(u32) atomic_u32;
+typedef _Atomic(u64) atomic_u64;
+
 // bootleg string.h
 void* memset(void* buffer, int c, size_t n);
 void* memcpy(void* dest, const void* src, size_t n);
 int memcmp(const void* a, const void* b, size_t n);
 bool memeq(const void* a, const void* b, size_t n);
 
-////////////////////////////////
-// Spin-lock
-////////////////////////////////
-typedef _Atomic(uint32_t) Lock;
-void spin_lock(Lock* lock);
-void spin_unlock(Lock* lock);
+#define atomic_cas_acq_rel(addr, old, new) atomic_compare_exchange_strong_explicit(addr, old, new, memory_order_acq_rel, memory_order_acquire)
 
-// bootleg stdio.h
-void kprintf(const char *fmt, ...);
-void print_ring_init(void);
-
-void arch_backtrace(void);
-uint64_t get_time_ticks(void);
-
-// Kernel Array Bounds Check
-#define kabc(i, arr) kassert(i < ELEM_COUNT(arr), "Out of bounds access of %s[%d]", #arr, i)
-
-#define kassert(cond, ...) ((cond) ? 0 : (kprintf("%s:%d: assertion failed!\n  %s\n  ", __FILE__, __LINE__, #cond), kprintf(__VA_ARGS__), kprintf("\n\n"), arch_backtrace(), __builtin_trap()))
-#define panic(...) (kprintf("%s:%d: panic!\n", __FILE__, __LINE__), kprintf(__VA_ARGS__), __builtin_trap())
