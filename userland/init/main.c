@@ -21,6 +21,14 @@ static KHandle log_stream;
 static char* log_buffer;
 static int log_used;
 
+void* memset(void* buffer, int c, size_t n) {
+    u8* buf = (u8*)buffer;
+    for (size_t i = 0; i < n; i++) {
+        buf[i] = c;
+    }
+    return buffer;
+}
+
 void fault_handler(void) {
     syscall(SYS_debug_log, log_stream, log_used);
     log_used = 0;
@@ -232,8 +240,8 @@ int _start(KHandle bootstrap_vmo) {
         if (driver != NULL) {
             printf("PCI Device matched with driver! %04x:%04x\n", key >> 16u, key & 0xFFFF);
 
-            FileEntry* file = find_file(initrd, driver->path_len, driver->path);
-            exec(file);
+            // FileEntry* file = find_file(initrd, driver->path_len, driver->path);
+            // exec(file);
         }
     }
 

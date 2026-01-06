@@ -123,7 +123,15 @@ SYS_FN(mmap) {
 
     size_t page_aligned_size = (SYS_PARAM2 + PAGE_SIZE - 1) & -PAGE_SIZE;
     KCHECK(page_aligned_size, 0);
-    return vmem_map(cpu->current_thread->parent, offset, size, page_aligned_size, prot, NULL);
+
+    Env* env = cpu->current_thread->parent;
+    if (SYS_PARAM0) {
+        KObject_VMO* vmo = env_get_handle(env, SYS_PARAM0, NULL);
+        KCHECK(vmo, RESULT_NO_HANDLE);
+        KCHECK(vmo->super.tag == KOBJECT_VMO, RESULT_WRONG_HANDLE);
+    }
+
+    return vmem_map(env, SYS_PARAM0, offset, page_aligned_size, prot, NULL);
 }
 
 SYS_FN(mpin) {
@@ -132,8 +140,15 @@ SYS_FN(mpin) {
     size_t page_aligned_size = (SYS_PARAM2 + PAGE_SIZE - 1) & -PAGE_SIZE;
     KCHECK(page_aligned_size, 0);
 
+    Env* env = cpu->current_thread->parent;
+    if (SYS_PARAM0) {
+        KObject_VMO* vmo = env_get_handle(env, SYS_PARAM0, NULL);
+        KCHECK(vmo, RESULT_NO_HANDLE);
+        KCHECK(vmo->super.tag == KOBJECT_VMO, RESULT_WRONG_HANDLE);
+    }
+
     uintptr_t paddr;
-    uintptr_t mapped = vmem_map(cpu->current_thread->parent, SYS_PARAM0, SYS_PARAM1, page_aligned_size, VMEM_PAGE_WRITE | VMEM_PAGE_PINNED, &paddr);
+    uintptr_t mapped = vmem_map(env, SYS_PARAM0, SYS_PARAM1, page_aligned_size, VMEM_PAGE_WRITE | VMEM_PAGE_PINNED, &paddr);
 
     egest_usermem(SYS_PARAM3, &paddr, sizeof(uintptr_t));
     return mapped;

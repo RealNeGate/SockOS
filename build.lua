@@ -178,4 +178,4 @@ ninja:close()
 local _0, _1, res = os.execute("ninja")
 if res and res ~= 0 then os.exit(res) end
 
-os.execute("cp bin/efi/boot/bootx64.efi C:/Users/yasse/OneDrive/Escritorio/PXE")
+-- os.execute("cp bin/efi/boot/bootx64.efi C:/Users/yasse/OneDrive/Escritorio/PXE")
