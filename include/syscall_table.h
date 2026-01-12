@@ -9,6 +9,7 @@ X(debug_log)
 X(mmap)
 X(munmap)
 X(mpin)
+X(mdump)
 X(vmo_create)
 X(vmo_get_size)
 // PCI

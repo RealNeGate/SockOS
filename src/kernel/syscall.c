@@ -112,26 +112,60 @@ SYS_FN(vmo_get_size) {
 }
 
 SYS_FN(mmap) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_mmap(vmo=%p, addr=%p, size=%d, prot=%x, flags=%x, offset=%d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2, SYS_PARAM3, SYS_PARAM4, SYS_PARAM5));
+    ON_DEBUG(SYSCALL)(kprintf("SYS_mmap(env=%p, vmo=%p, addr=%p, size=%d, prot=%x, offset=%d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2, SYS_PARAM3, SYS_PARAM4, SYS_PARAM5));
 
-    size_t   size = SYS_PARAM2;
-    uint32_t prot = SYS_PARAM3;
+    size_t   size = SYS_PARAM3;
+    uint32_t prot = SYS_PARAM4;
     size_t offset = SYS_PARAM5;
 
     uint32_t flags = 0;
     if (prot & PROT_WRITE) { flags |= VMEM_PAGE_WRITE; }
 
-    size_t page_aligned_size = (SYS_PARAM2 + PAGE_SIZE - 1) & -PAGE_SIZE;
+    size_t page_aligned_size = (size + PAGE_SIZE - 1) & -PAGE_SIZE;
     KCHECK(page_aligned_size, 0);
 
     Env* env = cpu->current_thread->parent;
     if (SYS_PARAM0) {
-        KObject_VMO* vmo = env_get_handle(env, SYS_PARAM0, NULL);
-        KCHECK(vmo, RESULT_NO_HANDLE);
-        KCHECK(vmo->super.tag == KOBJECT_VMO, RESULT_WRONG_HANDLE);
+        env = env_get_handle(env, SYS_PARAM0, NULL);
+        KCHECK(env, RESULT_NO_HANDLE);
+        KCHECK(env->super.tag == KOBJECT_ENV, RESULT_WRONG_HANDLE);
     }
 
-    return vmem_map(env, SYS_PARAM0, offset, page_aligned_size, prot, NULL);
+    KHandle vmo_handle = SYS_PARAM1;
+    if (SYS_PARAM1) {
+        KObject_VMO* vmo = env_get_handle(cpu->current_thread->parent, SYS_PARAM1, NULL);
+        KCHECK(vmo, RESULT_NO_HANDLE);
+        KCHECK(vmo->super.tag == KOBJECT_VMO, RESULT_WRONG_HANDLE);
+
+        if (env != cpu->current_thread->parent) {
+            vmo_handle = env_open_handle(env, 0, &vmo->super);
+        }
+    }
+
+    return vmem_map(env, vmo_handle, SYS_PARAM2, offset, page_aligned_size, flags, NULL);
+}
+
+SYS_FN(mdump) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_mdump(env=%p)\n", SYS_PARAM0));
+
+    Env* env = cpu->current_thread->parent;
+    if (SYS_PARAM0) {
+        env = env_get_handle(env, SYS_PARAM0, NULL);
+        KCHECK(env, RESULT_NO_HANDLE);
+        KCHECK(env->super.tag == KOBJECT_ENV, RESULT_WRONG_HANDLE);
+    }
+
+    kprintf("MEM DUMP %p\n", env);
+    VMem_Cursor cursor = { env->addr_space.root, 0 };
+    for (; cursor.node; cursor = vmem_cursor_next(cursor)) {
+        VMem_PageDesc* desc = &cursor.node->vals[cursor.index];
+        uintptr_t start_addr = cursor.node->keys[cursor.index];
+        uintptr_t end_addr   = start_addr + desc->size;
+
+        kprintf("[%p - %p] %d\n", start_addr, end_addr, desc->valid);
+    }
+    kprintf("\n");
+    return 0;
 }
 
 SYS_FN(mpin) {
@@ -148,7 +182,7 @@ SYS_FN(mpin) {
     }
 
     uintptr_t paddr;
-    uintptr_t mapped = vmem_map(env, SYS_PARAM0, SYS_PARAM1, page_aligned_size, VMEM_PAGE_WRITE | VMEM_PAGE_PINNED, &paddr);
+    uintptr_t mapped = vmem_map(env, SYS_PARAM0, 0, SYS_PARAM1, page_aligned_size, VMEM_PAGE_WRITE | VMEM_PAGE_PINNED, &paddr);
 
     egest_usermem(SYS_PARAM3, &paddr, sizeof(uintptr_t));
     return mapped;
@@ -173,23 +207,28 @@ SYS_FN(munmap) {
 }
 
 SYS_FN(thread_create) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_thread_create(env=%p, fn=%d, arg=%p, stack_size=%d, flags=%d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2, SYS_PARAM3, SYS_PARAM4));
+    ON_DEBUG(SYSCALL)(kprintf("SYS_thread_create(env=%p, fn=%p, arg=%p, stack_size=%d, flags=%d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2, SYS_PARAM3, SYS_PARAM4));
 
     Env* env = cpu->current_thread->parent;
+    if (SYS_PARAM0) {
+        env = env_get_handle(env, SYS_PARAM0, NULL);
+        KCHECK(env, RESULT_NO_HANDLE);
+        KCHECK(env->super.tag == KOBJECT_ENV, RESULT_WRONG_HANDLE);
+    }
 
     ThreadEntryFn* fn = (ThreadEntryFn*) SYS_PARAM1;
     uintptr_t arg = SYS_PARAM2;
     size_t stack_size = SYS_PARAM3;
 
     if (SYS_PARAM4 & 1) {
-        KObject* obj = env_get_handle(env, SYS_PARAM0, NULL);
+        KObject* obj = env_get_handle(env, arg, NULL);
         KCHECK(obj, RESULT_NO_HANDLE);
 
         // import argument as handle
         arg = env_open_handle(env, 0, obj);
     }
 
-    uintptr_t stack_ptr = vmem_map(env, 0, 0, stack_size, VMEM_PAGE_WRITE, NULL);
+    uintptr_t stack_ptr = vmem_map(env, 0, 0, 0, stack_size, VMEM_PAGE_WRITE, NULL);
     KCHECK(stack_ptr, RESULT_NO_MEM);
 
     Thread* thread = thread_create(env, fn, arg, stack_ptr, stack_size);

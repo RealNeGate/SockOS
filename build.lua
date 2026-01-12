@@ -111,11 +111,17 @@ rules({
 do
     local init_rd_list = {
         "userland/drivers.txt",
+        "objs/desktop.so",
     }
 
     table.insert(lines, "# INIT PROGRAM")
     build("objs/init.elf", "cc", "userland/init/main.c", {
         flags = elf_cflags.." -fuse-ld=lld -T userland/init/link.ld -fpic"
+    })
+
+    table.insert(lines, "# DESKTOP")
+    build("objs/desktop.so", "cc", "userland/desktop/main.c", {
+        flags = elf_cflags.." -fuse-ld=lld -fpic"
     })
 
     table.insert(lines, "# INITRD")

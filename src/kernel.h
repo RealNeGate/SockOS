@@ -129,7 +129,7 @@ typedef struct {
 // virtual addresses -> committed pages
 typedef NBHM VMem_WorkingSet;
 
-uintptr_t vmem_map(Env* env, KHandle vmo, size_t offset, size_t size, VMem_Flags flags, uintptr_t* out_paddr);
+uintptr_t vmem_map(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_t size, VMem_Flags flags, uintptr_t* out_paddr);
 void vmem_add_range(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_t vsize, VMem_Flags flags);
 
 // maps a kernel page to a virtual address.
@@ -139,6 +139,8 @@ uintptr_t vmem_translate(VMem_WorkingSet* ws, uintptr_t vaddr);
 
 bool vmem_protect(Env* env, uintptr_t addr, size_t size, VMem_Flags flags);
 bool vmem_segfault(Env* env, uintptr_t access_addr, bool is_write);
+
+VMem_Cursor vmem_cursor_next(VMem_Cursor cur);
 
 ////////////////////////////////
 // Kernel objects

@@ -3,7 +3,6 @@
 //
 // bake_initrd [out_path] [in_path...]
 //
-//
 #define _CRT_SECURE_NO_WARNINGS
 #include <stdint.h>
 #include <stdlib.h>
@@ -55,7 +54,7 @@ int main(int argc, char** argv) {
         }
 
         size_t len = file_stats.st_size;
-        size_t cap = (len + 16) & ~16ull; // round_up(len + 1, 16)
+        size_t cap = (len + 16) & -16ull; // round_up(len + 1, 16)
         char* data = malloc(cap);
 
         fseek(file, 0, SEEK_SET);
@@ -72,7 +71,7 @@ int main(int argc, char** argv) {
         free(data);
 
         file_len += sizeof(FileEntry) + cap;
-        printf("Added '%s' (%zu bytes)\n", argv[i], len);
+        printf("Added '%s' (%zu bytes)\n", name, len);
     }
 
     // NULL file

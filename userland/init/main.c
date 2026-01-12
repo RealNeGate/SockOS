@@ -37,7 +37,7 @@ void fault_handler(void) {
 void _putchar(char ch) {
     if (log_stream == 0) {
         log_stream = syscall(SYS_vmo_create, 4*1024);
-        log_buffer = mmap(log_stream, 0, 4*1024, PROT_READ | PROT_WRITE, 0, 0);
+        log_buffer = mmap(0, log_stream, 0, 4*1024, PROT_READ | PROT_WRITE, 0);
     } else if (log_used == 4096) {
         syscall(SYS_debug_log, log_stream, log_used);
         log_used = 0;
@@ -165,7 +165,7 @@ static bool exec(FileEntry* file) {
 
     // TODO(NeGate): maybe VMOs should be able to be split into subviews...
     KHandle file_vmo = syscall(SYS_vmo_create, file->data_len);
-    char* dst = mmap(file_vmo, 0, file->data_len, PROT_READ | PROT_WRITE, 0, 0);
+    char* dst = mmap(0, file_vmo, 0, file->data_len, PROT_READ | PROT_WRITE, 0);
     for (size_t i = 0; i < file->data_len; i++) {
         dst[i] = file->data[i];
     }
@@ -177,9 +177,6 @@ static bool exec(FileEntry* file) {
         printf("[init] error: segments do not fit into file\n");
         return false;
     }
-
-    printf("A!\n");
-    fault_handler();
 
     uintptr_t lo = 0, hi = 0;
     size_t page_size = 4096;
@@ -198,24 +195,33 @@ static bool exec(FileEntry* file) {
         if (hi < vaddr_hi) { hi = vaddr_hi; }
     }
 
-    printf("Range: %p - %p\n", lo, hi);
-
-    /*uintptr_t vaddr  = segment->p_vaddr & -PAGE_SIZE;
-    segment->p_vaddr & -PAGE_SIZE;
-
-    // Create process
+    // Create environment
     KHandle child_env = syscall(SYS_env_create);
 
-    char* dst = mmap(file_vmo, 0, file->data_len, PROT_READ | PROT_WRITE, MEM_PLACEHOLDER, 0);
+    // Place ELF into env
+    char* elf_vmap = mmap(child_env, file_vmo, 0, hi - lo, PROT_READ | PROT_WRITE | MEM_PLACEHOLDER, 0);
+    for (size_t i = 0; i < elf_header->e_phnum; i++) {
+        Elf64_Phdr* segment = (Elf64_Phdr*) (segments + i*segment_size);
+        if (segment->p_type != PT_LOAD) {
+            continue;
+        }
+
+        uintptr_t vaddr = (segment->p_vaddr & -page_size) - lo;
+        mmap(child_env, file_vmo, (uintptr_t) elf_vmap + vaddr, segment->p_memsz, PROT_READ | PROT_WRITE, segment->p_offset & -page_size);
+    }
 
     // Spin up the main thread
-    KHandle thread = syscall(SYS_thread_create, child_env, NULL, file_vmo, 2*1024*1024, 1);*/
+    KHandle thread = syscall(SYS_thread_create, child_env, elf_vmap + (elf_header->e_entry - lo), 0, 2*1024*1024, 0);
+
+    syscall(SYS_mdump, child_env);
+    // printf("[init] Loaded %p - %p!!! %p\n", elf_vmap, elf_vmap + (hi - lo) - 1, thread);
+
     return true;
 }
 
 int _start(KHandle bootstrap_vmo) {
     size_t initrd_size = vmo_get_size(bootstrap_vmo);
-    FileEntry* initrd  = mmap(bootstrap_vmo, 0, initrd_size, PROT_READ | PROT_WRITE, 0, 0);
+    FileEntry* initrd  = mmap(0, bootstrap_vmo, 0, initrd_size, PROT_READ | PROT_WRITE, 0);
 
     // Scan the drivers.txt, construct hashmap for driver mappings
     printf("InitRD:\n", initrd->path);
@@ -223,11 +229,11 @@ int _start(KHandle bootstrap_vmo) {
         printf("[init] found file '%s' (%zu bytes)\n", file->path, file->data_len);
         if (strcmp(file->path, "/drivers.txt") == 0) {
             parse_driver_list(file->data);
-
-            // Advance files
-            size_t padded_len = (file->data_len + 16) & -16ull;
-            file = (FileEntry*) (((char*) file) + sizeof(FileEntry) + padded_len);
         }
+
+        // Advance files
+        size_t padded_len = (file->data_len + 16) & -16ull;
+        file = (FileEntry*) (((char*) file) + sizeof(FileEntry) + padded_len);
     }
 
     // Find the first set of connected PCI devices
@@ -243,6 +249,12 @@ int _start(KHandle bootstrap_vmo) {
             // FileEntry* file = find_file(initrd, driver->path_len, driver->path);
             // exec(file);
         }
+    }
+
+    FileEntry* desktop = find_file(initrd, sizeof("/desktop.so")-1, "/desktop.so");
+    if (desktop != NULL) {
+        printf("Found desktop! %zu bytes\n", desktop->data_len);
+        exec(desktop);
     }
 
     syscall(SYS_debug_log, log_stream, log_used);

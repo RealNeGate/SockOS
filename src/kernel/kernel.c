@@ -89,7 +89,7 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
 
     // tiny i know
     size_t stack_size = 2*1024*1024;
-    uintptr_t stack_ptr = vmem_map(env, 0, 0, stack_size, VMEM_PAGE_WRITE, NULL);
+    uintptr_t stack_ptr = vmem_map(env, 0, 0, 0, stack_size, VMEM_PAGE_WRITE, NULL);
 
     ON_DEBUG(ENV)(kprintf("[elf] entry=%p\n", elf_header->e_entry));
     ON_DEBUG(ENV)(kprintf("[elf] stack=%p\n", stack_ptr));
