@@ -36,8 +36,8 @@ void* memmap_view(PageTable* address_space, uintptr_t phys_addr, uintptr_t virt_
     void* result = (void*) virt_addr;
 
     uint64_t page_flags = 0;
-    if (flags & VMEM_PAGE_USER)  { page_flags |= PAGE_USER;  }
-    if (flags & VMEM_PAGE_WRITE) { page_flags |= PAGE_WRITE; }
+    if (!(flags & VMEM_PAGE_KERNEL)) { page_flags |= PAGE_USER;  }
+    if (flags & VMEM_PAGE_WRITE)     { page_flags |= PAGE_WRITE; }
 
     // Generate the page table mapping
     bool is_current = kaddr2paddr(address_space) == x86_get_cr3();

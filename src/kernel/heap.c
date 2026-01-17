@@ -37,8 +37,8 @@ struct HeapSegment {
 };
 
 struct Heap {
-    // max alloc size of 4096 => 16, 32, 64, 128, 256, 512, 1024, 2048, 4096
-    HeapFreeList page_classes[9];
+    // max alloc size of 4096 => 64, 128, 256, 512, 1024, 2048, 4096
+    HeapFreeList page_classes[7];
     // variable size, not really interested in fragmentation
     HeapFreeList var_page;
     // small size pages use this to grab segments
@@ -46,7 +46,11 @@ struct Heap {
 };
 
 static int heap_size_class(size_t obj_size) {
-    return 64 - __builtin_clzll((obj_size - 1) / 16);
+    if (obj_size < 64) {
+        return 0;
+    }
+
+    return 64 - __builtin_clzll((obj_size - 1) / 64);
 }
 
 // check if there's any block in here which can hold the alloc
@@ -66,13 +70,20 @@ static void* fl_alloc_fit(HeapFreeList* list, size_t size, size_t align) {
     }
 
     for (HeapBlock *block = list->free, *prev = NULL; block; prev = block, block = block->next) {
-        if (size <= block->size) {
+        uintptr_t start = (uintptr_t) block;
+        uintptr_t next_used = start + block->size;
+
+        // round up
+        start = (start + align - 1) & -align;
+
+        uintptr_t end = start + size;
+        if (end <= next_used) {
             // Replace free-list node due to imperfect split
             if (size != block->size) {
-                kassert(block->size - size >= sizeof(HeapBlock), "fragmentation smaller than HeapBlock");
-                HeapBlock* next = (HeapBlock*) ((char*) block + size);
+                kassert(next_used - end >= sizeof(HeapBlock), "fragmentation smaller than HeapBlock");
+                HeapBlock* next = (HeapBlock*) end;
                 next->next = list->local_free;
-                next->size = block->size - size;
+                next->size = next_used - end;
                 list->local_free = next;
 
                 if (prev) {
@@ -288,9 +299,10 @@ void* kheap_alloc(size_t obj_size) {
     int core_id = cpu_get_index();
     Heap* heap = &local_heaps[core_id];
 
+    size_t old_size = obj_size;
     if (obj_size <= 4096) {
         int size_class  = heap_size_class(obj_size);
-        size_t new_size = 16ull << size_class;
+        size_t new_size = 64ull << size_class;
         kassert(new_size >= obj_size, "woah");
         obj_size = new_size;
 
@@ -318,12 +330,13 @@ void* kheap_alloc(size_t obj_size) {
             }
         }
 
-        ON_DEBUG(KHEAP)(kprintf("[kheap] alloc(%zu) %p\n", obj_size, obj));
+        ON_DEBUG(KHEAP)(kprintf("[kheap] alloc(%zu => %zu) %p\n", old_size, obj_size, obj));
         return obj;
     } else {
-        obj_size  = (obj_size + 15) & ~15ull;
-        void* obj = fl_alloc_fit(&heap->var_page, obj_size, 16);
+        obj_size  = (obj_size + 4095) & ~4095ull;
+        void* obj = fl_alloc_fit(&heap->var_page, obj_size, 4096);
         if (obj == NULL) {
+            kassert(obj_size <= SEGMENT_SIZE, "Too much to alloc together!!! %zu", obj_size);
             gimme_segment(&heap->var_page, obj_size, false, &obj);
             kassert(obj, "OOM");
         }
@@ -338,7 +351,7 @@ void kheap_free(void* obj, size_t obj_size) {
     kassert(index < heap_segment_count, "we're trying to free an invalid object, %p (index=%d, limit=%d)", obj, index, heap_segment_count);
 
     int size_class = heap_size_class(obj_size);
-    obj_size = 16ull << size_class;
+    obj_size = 64ull << size_class;
 
     HeapSegment* segment = &heap_segments[index];
     HeapFreeList* list = segment->owner;

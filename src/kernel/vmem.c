@@ -1,6 +1,10 @@
 #include <kernel.h>
 #include "threads.h"
 
+enum {
+    VMEM_WORKING_SET_OFFSET = 1,
+};
+
 uint32_t vmem_addrhm_hash(const void* k) {
     uint32_t* addr = (uint32_t*) &k;
 
@@ -27,14 +31,25 @@ bool vmem_addrhm_cmp(const void* a, const void* b) {
 #include <nbhm.h>
 
 static size_t vmem_node_bin_search(VMem_Node* node, uint32_t key, int start_i) {
-    size_t left = start_i, right = node->key_count - 1;
-    while (left != right) {
-        size_t i = (left + right + 1) / 2;
-        if (node->keys[i] > key) { right = i - 1; }
-        else { left = i; }
+    size_t left = start_i, right = node->key_count;
+    while (left < right) {
+        size_t i = (left + right) / 2;
+        if (node->keys[i] > key) { right = i; }
+        else { left = i + 1; }
     }
+    return right - 1;
+}
 
-    return left;
+VMem_Cursor vmem_cursor_next(VMem_Cursor cur) {
+    if (++cur.index == cur.node->key_count) {
+        cur.node = cur.node->next;
+        cur.index = 0;
+    }
+    return cur;
+}
+
+bool vmem_cursor_eq(VMem_Cursor* a, VMem_Cursor* b) {
+    return a->node == b->node && a->index == b->index;
 }
 
 VMem_Cursor vmem_node_lookup(Env* env, uintptr_t key) {
@@ -45,11 +60,21 @@ VMem_Cursor vmem_node_lookup(Env* env, uintptr_t key) {
 
     // layers of binary search
     for (;;) {
-        uint32_t left = vmem_node_bin_search(node, key, 0);
+        uint32_t left = 0, right = node->key_count;
+        while (left < right) {
+            uint32_t i = (left + right) / 2;
+            if (node->keys[i] > key) { right = i; }
+            else { left = i + 1; }
+        }
+
         if (node->is_leaf) {
-            return (VMem_Cursor){ node, left };
+            if (right == 0 && node->keys[0] > key) {
+                return (VMem_Cursor){ 0 };
+            }
+
+            return (VMem_Cursor){ node, right - 1 };
         } else {
-            node = node->kids[left];
+            node = node->kids[right - 1];
         }
     }
 }
@@ -97,6 +122,20 @@ void vmem_node_split_child(VMem_Node* x, VMem_Node* y, int idx) {
     x->key_count += 1;
 }
 
+void vmem_node_remove(Env* env, uintptr_t key) {
+    VMem_Cursor cursor = vmem_node_lookup(env, key);
+    if (cursor.node == NULL) { return; }
+
+    // shift down
+    VMem_Node* node = cursor.node;
+    node->key_count -= 1;
+
+    FOR_N(i, cursor.index, node->key_count) {
+        node->keys[i] = node->keys[i + 1];
+        node->vals[i] = node->vals[i + 1];
+    }
+}
+
 // insert range into B-tree
 VMem_PageDesc* vmem_node_insert(Env* env, uintptr_t key) {
     if (env->addr_space.root == NULL) {
@@ -135,8 +174,8 @@ VMem_PageDesc* vmem_node_insert(Env* env, uintptr_t key) {
             env->addr_space.root = new_node;
         }
 
+        int left = vmem_node_bin_search(node, key, 0);
         while (!node->is_leaf) {
-            int left = vmem_node_bin_search(node, key, 0);
             VMem_Node* kid = node->kids[left];
 
             if (kid->key_count == VMEM_NODE_MAX_KEYS) {
@@ -152,6 +191,12 @@ VMem_PageDesc* vmem_node_insert(Env* env, uintptr_t key) {
             }
 
             node = kid;
+            left = vmem_node_bin_search(node, key, 0);
+        }
+
+        if (left >= 0 && node->keys[left] == key) {
+            node->keys[left] = key;
+            return &node->vals[left];
         }
 
         // shift up
@@ -170,52 +215,134 @@ VMem_PageDesc* vmem_node_insert(Env* env, uintptr_t key) {
     }
 }
 
-uintptr_t vmem_map(Env* env, KHandle vmo, size_t offset, size_t size, VMem_Flags flags) {
-    kassert((size & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", size);
-
-    // walk all regions until we find a gap big enough (SLOW!!!)
-    uintptr_t vaddr = 0xA0000000;
-    VMem_Cursor cursor = vmem_node_lookup(env, vaddr);
-
-    // we only want addresses past vaddr so skip one if we're behind it
-    if (cursor.node && cursor.node->keys[cursor.index] < vaddr) {
-        cursor.index++;
-        if (cursor.index >= cursor.node->key_count) {
-            cursor.index = 0;
-            cursor.node = cursor.node->next;
-        }
+void vmem_split(Env* env, VMem_Cursor cursor, uintptr_t vaddr, bool direction) {
+    if (cursor.node == NULL) {
+        return;
     }
 
-    int i = cursor.index;
-    while (cursor.node) {
-        kassert(cursor.node->is_leaf, "fuck");
+    VMem_PageDesc* desc  = &cursor.node->vals[cursor.index];
+    uintptr_t start_addr = cursor.node->keys[cursor.index];
+    uintptr_t end_addr   = start_addr + desc->size;
+    if (end_addr > vaddr) {
+        uintptr_t clip = vaddr - start_addr;
+        VMem_PageDesc cpy = *desc;
 
-        int key_count = cursor.node->key_count;
-        for (; i < key_count; i++) {
-            uintptr_t free_space = cursor.node->keys[i] - vaddr;
-            if (free_space > size) {
-                ON_DEBUG(VMEM)(kprintf("[vmem] found %d bytes between %p and %p\n", free_space, vaddr, cursor.node->keys[i]));
-                goto done;
-            }
+        if (clip != 0 && clip != desc->size) {
+            desc->size = clip;
 
-            // last known address which is free
-            vaddr = cursor.node->keys[i] + cursor.node->vals[i].size;
+            // Split into High-half
+            VMem_PageDesc* hi = vmem_node_insert(env, vaddr);
+            *hi = cpy;
+            hi->offset += clip;
+            hi->size   -= clip;
         }
-
-        cursor.node = cursor.node->next;
-        i = 0;
     }
-
-    ON_DEBUG(VMEM)(kprintf("[vmem] found no allocations past %p\n", vaddr));
-
-    done:
-    VMem_PageDesc* desc = vmem_node_insert(env, vaddr);
-    *desc = (VMem_PageDesc){ .valid = 1, .flags = flags, .vmo_handle = vmo, .offset = offset, .size = size };
-    return vaddr;
 }
 
 void vmem_unmap(Env* env, uintptr_t vaddr, size_t size) {
+    VMem_Cursor bot_cursor = vmem_node_lookup(env, vaddr);
+    if (bot_cursor.node != NULL) {
+        VMem_Cursor top_cursor = vmem_node_lookup(env, vaddr + size);
+        vmem_split(env, bot_cursor, vaddr, false);
+        vmem_split(env, top_cursor, vaddr + size, true);
 
+        // Remove middle range
+        /* bot_cursor = vmem_node_lookup(env, vaddr);
+        top_cursor = vmem_node_lookup(env, vaddr + size);
+
+        // TODO(NeGate): we should do proper range removals, like they
+        // shouldn't be in the tree when we're done.
+        VMem_Cursor it = vmem_cursor_next(bot_cursor);
+        for (; vmem_cursor_eq(&it, &top_cursor); it = vmem_cursor_next(it)) {
+            VMem_PageDesc* desc = &it.node->vals[it.index];
+            desc->valid = 0;
+
+            uintptr_t start_addr = it.node->keys[it.index];
+            uintptr_t end_addr   = start_addr + desc->size;
+            kprintf("[vmem] Unmap [%p - %p]\n", start_addr, end_addr - 1);
+        } */
+    }
+}
+
+void vmem_dump(Env* env) {
+    kprintf("MEM DUMP %p\n", env);
+    VMem_Cursor cursor = { env->addr_space.root, 0 };
+    for (; cursor.node; cursor = vmem_cursor_next(cursor)) {
+        VMem_PageDesc* desc = &cursor.node->vals[cursor.index];
+        uintptr_t start_addr = cursor.node->keys[cursor.index];
+        uintptr_t end_addr   = start_addr + desc->size;
+
+        if (!desc->valid) {
+            kprintf("[%p - %p] FREE\n", start_addr, end_addr);
+        } else if (desc->vmo_handle) {
+            kprintf("[%p - %p] VIEW: %p+%zu)\n", start_addr, end_addr, desc->vmo_handle, desc->valid);
+        } else {
+            kprintf("[%p - %p]\n", start_addr, end_addr);
+        }
+    }
+    kprintf("\n");
+}
+
+uintptr_t vmem_map(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_t size, VMem_Flags flags, uintptr_t* out_paddr) {
+    kassert((size & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", size);
+
+    // walk all regions until we find a gap big enough (SLOW!!!)
+    if (vaddr == 0) {
+        vaddr = 0xA0000000;
+        VMem_Cursor cursor = vmem_node_lookup(env, vaddr);
+
+        // we only want addresses past vaddr so skip one if we're behind it
+        if (cursor.node && cursor.node->keys[cursor.index] < vaddr) {
+            cursor.index++;
+            if (cursor.index >= cursor.node->key_count) {
+                cursor.index = 0;
+                cursor.node = cursor.node->next;
+            }
+        }
+
+        int i = cursor.index;
+        while (cursor.node) {
+            kassert(cursor.node->is_leaf, "fuck");
+
+            int key_count = cursor.node->key_count;
+            for (; i < key_count; i++) {
+                uintptr_t free_space = cursor.node->keys[i] - vaddr;
+                if (free_space > size) {
+                    ON_DEBUG(VMEM)(kprintf("[vmem] found %d bytes between %p and %p\n", free_space, vaddr, cursor.node->keys[i]));
+                    goto done;
+                }
+
+                // last known address which is free
+                vaddr = cursor.node->keys[i] + cursor.node->vals[i].size;
+            }
+
+            cursor.node = cursor.node->next;
+            i = 0;
+        }
+    } else {
+        // Clear out the pages in this range
+        vmem_unmap(env, vaddr, size);
+    }
+
+    done:
+    ON_DEBUG(VMEM)(kprintf("[vmem] mmap(%#zx) = %p\n", size, vaddr));
+
+    VMem_PageDesc* desc = vmem_node_insert(env, vaddr);
+    *desc = (VMem_PageDesc){ .valid = 1, .flags = flags, .vmo_handle = vmo, .offset = offset, .size = size };
+
+    if (flags & VMEM_PAGE_PINNED) {
+        // commit all the pages now
+        char* kaddr = kheap_alloc(size);
+        memset(kaddr, 0, size);
+
+        FOR_N(i, 0, size / PAGE_SIZE) {
+            vmem_commit_page(env, vaddr + i*PAGE_SIZE, kaddr + i*PAGE_SIZE);
+        }
+
+        *out_paddr = kaddr2paddr(kaddr);
+    }
+
+    return vaddr;
 }
 
 bool vmem_protect(Env* env, uintptr_t addr, size_t size, VMem_Flags flags) {
@@ -223,19 +350,17 @@ bool vmem_protect(Env* env, uintptr_t addr, size_t size, VMem_Flags flags) {
 }
 
 void vmem_commit_page(Env* env, uintptr_t vaddr, void* kaddr) {
-    vmem_addrhm_put(&env->addr_space.commit_table, (void*) vaddr, (void*) kaddr2paddr(kaddr));
+    vmem_addrhm_put(&env->addr_space.working_set, (void*) (vaddr + VMEM_WORKING_SET_OFFSET), (void*) kaddr2paddr(kaddr));
 }
 
 void vmem_add_range(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_t vsize, VMem_Flags flags) {
     kassert((vaddr & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", vaddr);
     kassert((vsize & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", vsize);
 
+    vmem_unmap(env, vaddr, vsize);
+
     VMem_PageDesc* desc = vmem_node_insert(env, vaddr);
-    desc->valid      = 1;
-    desc->flags      = flags;
-    desc->vmo_handle = 0;
-    desc->offset     = offset;
-    desc->size       = vsize;
+    *desc = (VMem_PageDesc){ .valid = 1, .flags = flags, .offset = offset, .size = vsize };
 
     if (vmo != 0) {
         KObject_VMO* vmo_ptr = env_get_handle(env, vmo, NULL);
@@ -244,33 +369,50 @@ void vmem_add_range(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_
     }
 }
 
+uintptr_t vmem_translate(VMem_WorkingSet* ws, uintptr_t vaddr) {
+    return (uintptr_t) vmem_addrhm_get(ws, (char*) (vaddr + VMEM_WORKING_SET_OFFSET));
+}
+
 static void try_commit(Env* env, VMem_PageDesc* desc, uintptr_t access_addr, uintptr_t start_addr, uintptr_t end_addr) {
-    // attempt to commit page
-    uintptr_t actual_page = (uintptr_t) vmem_addrhm_get(&env->addr_space.commit_table, (void*) access_addr);
-    if (actual_page == 0) {
-        uintptr_t new_page = 0;
-        if (desc->vmo_handle != 0) {
-            // we're mapped to a VMO, just view the address
-            // TODO(NeGate): implement pager behavior.
-            KObject_VMO* vmo_ptr = env_get_handle(env, desc->vmo_handle, NULL);
+    // Find the page's working set
+    VMem_WorkingSet* ws = &env->addr_space.working_set;
+    uintptr_t in_space_addr = access_addr;
+    if (desc->vmo_handle != 0) {
+        // Translate address into VMO space
+        size_t offset = (access_addr & -PAGE_SIZE) - start_addr;
+        in_space_addr = desc->offset + offset;
 
-            size_t offset = (access_addr & -PAGE_SIZE) - start_addr;
-            new_page = vmo_ptr->paddr + desc->offset + offset;
-
-            ON_DEBUG(VMEM)(kprintf("[vmem] first touch on VMO (%p), paddr=%p\n", access_addr, new_page));
-        } else {
-            void* page = kheap_alloc(PAGE_SIZE);
-            memset(page, 0, PAGE_SIZE);
-            new_page = kaddr2paddr(page);
+        KObject_VMO* vmo_ptr = env_get_handle(env, desc->vmo_handle, NULL);
+        if (vmo_ptr == NULL) {
+            kprintf("[vmem] touched page with invalid VMO %p (%p => VMO:%p)\n", desc->vmo_handle, access_addr, in_space_addr);
+            return;
         }
 
-        actual_page = (uintptr_t) vmem_addrhm_put_if_null(&env->addr_space.commit_table, (void*) access_addr, (void*) new_page);
-        if (actual_page == new_page) {
-            if (desc->vmo_handle == 0) {
-                ON_DEBUG(VMEM)(kprintf("[vmem] first touch on private page (%p), paddr=%p\n", access_addr, new_page));
-            }
+        ON_DEBUG(VMEM)(kprintf("[vmem] first touch on VMO %p (%p => VMO:%p)\n", vmo_ptr, access_addr, in_space_addr));
 
-        } else if (desc->vmo_handle == 0) {
+        if (vmo_ptr->paddr) {
+            // physical addresses don't get cached in the working set, we're
+            // better off just not putting entries into a hash map.
+            uintptr_t new_page = vmo_ptr->paddr + in_space_addr;
+            arch_pte_update(env, access_addr & -PAGE_SIZE, new_page, desc->flags);
+            return;
+        }
+
+        // TODO(NeGate): implement pager behavior
+        ws = &vmo_ptr->pages;
+    } else {
+        ON_DEBUG(VMEM)(kprintf("[vmem] first touch on private page (%p)\n", access_addr));
+    }
+
+    // attempt to commit page in working set
+    uintptr_t actual_page = (uintptr_t) vmem_addrhm_get(ws, (void*) (in_space_addr + VMEM_WORKING_SET_OFFSET));
+    if (actual_page == 0) {
+        void* page = kheap_alloc(PAGE_SIZE);
+        memset(page, 0, PAGE_SIZE);
+        uintptr_t new_page = kaddr2paddr(page);
+
+        actual_page = (uintptr_t) vmem_addrhm_put_if_null(ws, (void*) (in_space_addr + VMEM_WORKING_SET_OFFSET), (void*) new_page);
+        if (actual_page != new_page) {
             kheap_free(paddr2kaddr(new_page), PAGE_SIZE);
         }
     }

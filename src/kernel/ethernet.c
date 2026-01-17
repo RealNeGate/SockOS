@@ -1,4 +1,4 @@
-#include <kernel.h>
+#include "../kernel.h"
 #include "pci.h"
 
 #define E1000_REG_RCTRL   0x100

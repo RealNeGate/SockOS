@@ -191,7 +191,7 @@ void set_interrupt_line(u32 line, void fn(void*), void* ctx) {
     ioapic_write(boot_info->ioapic_base, redirect_table_idx + 1, boot_info->cores[0].lapic_id << 24);
     ioapic_write(boot_info->ioapic_base, redirect_table_idx,     entry);
 
-    kprintf("idx: 0x%x, added line: %d | %016b\n", redirect_table_idx, line, entry);
+    ON_DEBUG(IRQ)(kprintf("[irq] idx: 0x%x, added line: %d | %016b\n", redirect_table_idx, line, entry));
 }
 
 void arch_handoff(int id) {
@@ -261,9 +261,13 @@ uintptr_t timer_interrupt(CPUState* state, uintptr_t cr3, PerCPU* cpu, u64 now) 
     uint64_t new_now_time = (__rdtsc() / boot_info->tsc_freq);
     if (next_wake != UINT64_MAX) {
         uint64_t until_wake = next_wake > new_now_time ? next_wake - new_now_time : 1;
+        uint64_t armed_t = micros_to_apic_time(until_wake);
+        if (armed_t == 0) {
+            armed_t = 1;
+        }
 
         // set new one-shot
-        APIC(0x380) = micros_to_apic_time(until_wake);
+        APIC(0x380) = armed_t;
 
         #if DEBUG_SCHED
         if (cpu->current_thread != next) {
@@ -395,27 +399,26 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
         }
 
         if (env != NULL) {
-            if (!rwlock_try_lock_shared(&env->addr_space.lock)) {
+            if (rwlock_try_lock_shared(&env->addr_space.lock)) {
+                // update hardware page tables to match
+                bool is_write = state->error & 2;
+                bool success = vmem_segfault(env, access_addr, is_write);
+                if (!success) {
+                    kprintf("CPU-%d: %s (%d): cr3=%p error=0x%x\n", id, interrupt_names[state->interrupt_num], state->interrupt_num, cr3, state->error);
+                    kprintf("  rip=%x:%p rsp=%x:%p flags=%x\n", state->cs, state->rip, state->ss, state->rsp, state->flags);
+                    dump_page_fault(state, cr3, cpu, env, access_addr);
+                    x86_halt();
+                }
+
+                rwlock_unlock_shared(&env->addr_space.lock);
+            } else {
                 spall_end_event(id);
 
                 // if we failed to grab it, we're in the middle of an exclusive
                 // TLB modification, let's yield our time slice for now.
                 sched_wait(0);
-
-                return timer_interrupt(state, cr3, cpu, now);
+                cr3 = timer_interrupt(state, cr3, cpu, now);
             }
-
-            // update hardware page tables to match
-            bool is_write = state->error & 2;
-            bool success = vmem_segfault(env, access_addr, is_write);
-            if (!success) {
-                kprintf("CPU-%d: %s (%d): cr3=%p error=0x%x\n", id, interrupt_names[state->interrupt_num], state->interrupt_num, cr3, state->error);
-                kprintf("  rip=%x:%p rsp=%x:%p flags=%x\n", state->cs, state->rip, state->ss, state->rsp, state->flags);
-                dump_page_fault(state, cr3, cpu, env, access_addr);
-                x86_halt();
-            }
-
-            rwlock_unlock_shared(&env->addr_space.lock);
         } else {
             #if DEBUG_IRQ
             dump_page_fault(state, cr3, cpu, env, access_addr);
@@ -424,7 +427,7 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
             x86_halt();
         }
     } else if (state->interrupt_num == 0x20) {
-        return timer_interrupt(state, cr3, cpu, now);
+        cr3 = timer_interrupt(state, cr3, cpu, now);
     } else if (state->interrupt_num >= 0x50) {
         // interrupt lines
         InterruptLineCallback* c = &line_callbacks[state->interrupt_num - 0x50];
@@ -438,7 +441,6 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
     } else {
         x86_halt();
     }
-
     return cr3;
 }
 
@@ -454,9 +456,11 @@ void arch_pte_update(Env* env, uintptr_t access_addr, uintptr_t translated, VMem
     static const uint64_t shifts[3] = { 39, 30, 21 };
 
     // convert software page properties into hardware page flags
-    uint64_t page_flags = 0;
-    if (flags & VMEM_PAGE_USER)  { page_flags |= PAGE_USER;  }
-    if (flags & VMEM_PAGE_WRITE) { page_flags |= PAGE_WRITE; }
+    uint64_t page_flags = PAGE_PRESENT;
+    if (!(flags & VMEM_PAGE_KERNEL)) { page_flags |= PAGE_USER;  }
+    if (flags & VMEM_PAGE_WRITE)     { page_flags |= PAGE_WRITE; }
+    if (flags & VMEM_PAGE_UNCACHED)  { page_flags |= PAGE_NOCACHE; }
+    if (flags & VMEM_PAGE_WRITETHRU) { page_flags |= PAGE_WRITETHRU; }
 
     PageTable* curr = env->addr_space.hw_tables;
     for (size_t i = 0; i < 3; i++) {
@@ -476,7 +480,7 @@ void arch_pte_update(Env* env, uintptr_t access_addr, uintptr_t translated, VMem
                 new_pt = kheap_alloc(PAGE_SIZE);
                 memset(new_pt, 0, sizeof(PageTable));
 
-                new_entry = kaddr2paddr(new_pt) | page_flags | PAGE_PRESENT;
+                new_entry = kaddr2paddr(new_pt) | page_flags;
             }
             // no progress necessary, it's already behaving
             if (entry == new_entry) { break; }
@@ -494,7 +498,7 @@ void arch_pte_update(Env* env, uintptr_t access_addr, uintptr_t translated, VMem
     size_t pte_index = (access_addr >> 12) & 0x1FF; // 4KiB
 
     u64 old_pte = curr->entries[pte_index];
-    u64 new_pte = (translated & 0xFFFFFFFFF000) | page_flags | PAGE_PRESENT;
+    u64 new_pte = (translated & 0xFFFFFFFFF000) | page_flags;
     if (old_pte != new_pte) {
         atomic_compare_exchange_strong(&curr->entries[pte_index], &old_pte, new_pte);
         ON_DEBUG(VMEM)(kprintf("[vmem] updated PTE [%p] %p -> %p!\n", access_addr, old_pte, new_pte));

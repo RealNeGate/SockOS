@@ -1,5 +1,4 @@
 #include <kernel.h>
-#include <elf.h>
 
 #ifdef __x86_64__
 #include "../arch/x64/x64.h"

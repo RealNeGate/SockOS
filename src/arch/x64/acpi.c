@@ -1,4 +1,5 @@
 #include "x64.h"
+#include "../../kernel/pci.h"
 
 typedef struct __attribute__((packed)) {
     char signature[8];
@@ -27,6 +28,12 @@ typedef struct __attribute__((packed)) {
     u32  creator_id;
     u32  creator_revision;
 } ACPI_SDT_Header;
+
+typedef struct __attribute__((packed)) {
+    ACPI_SDT_Header  header;
+    u64              reserved;
+    PCI_SegmentGroup entries[];
+} ACPI_MCFG_Header;
 
 typedef struct __attribute__((packed)) {
     ACPI_SDT_Header header;
@@ -120,7 +127,7 @@ static uintptr_t id_map(uintptr_t addr) {
     size_t offset = addr & (PAGE_SIZE - 1);
 
     addr &= -PAGE_SIZE;
-    addr = (uintptr_t) memmap_view(boot_info->kernel_pml4, addr, (u64) paddr2kaddr(addr), PAGE_SIZE*2, VMEM_PAGE_WRITE);
+    addr = (uintptr_t) memmap_view(boot_info->kernel_pml4, addr, (u64) paddr2kaddr(addr), PAGE_SIZE*2, VMEM_PAGE_WRITE | VMEM_PAGE_KERNEL);
 
     return addr + offset;
 }
@@ -151,6 +158,7 @@ void x86_parse_acpi(void) {
 
     u8 apic_magic[] = {'A', 'P', 'I', 'C' };
     u8 hpet_magic[] = {'H', 'P', 'E', 'T' };
+    u8 mcfg_magic[] = {'M', 'C', 'F', 'G' };
     u64 remaining_length = xhead->header.length - sizeof(xhead->header);
     int entries = remaining_length / 8;
     for (int i = 0; i < entries; i++) {
@@ -188,7 +196,7 @@ void x86_parse_acpi(void) {
             volatile u64 *hpet_reg = paddr2kaddr(hhead->addr_struct.address);
 
             // Map into relevant "identity" site
-            memmap_view(boot_info->kernel_pml4, hhead->addr_struct.address, (uintptr_t) hpet_reg, PAGE_SIZE, VMEM_PAGE_WRITE);
+            memmap_view(boot_info->kernel_pml4, hhead->addr_struct.address, (uintptr_t) hpet_reg, PAGE_SIZE, VMEM_PAGE_WRITE | VMEM_PAGE_KERNEL);
 
             u64 gen_cap_reg = hpet_reg[0];
             ACPI_HPET_GenCap gen_cap = *((ACPI_HPET_GenCap *)&gen_cap_reg);
@@ -216,6 +224,16 @@ void x86_parse_acpi(void) {
 
             u64 ticks_per_time = end - start;
             tsc_freq = (ticks_per_time / us_delay);
+        } else if (memeq(head->signature, mcfg_magic, sizeof(mcfg_magic))) {
+            /*ACPI_MCFG_Header *mhead = (ACPI_MCFG_Header*) head;
+            size_t n = (mhead->header.length - 44) / 16;
+
+            if (n > 0) {
+                pci_segment_group = &mhead->entries[0];
+                FOR_N(i, 0, n) {
+                    kprintf("[%zu] %p %d %d %d\n", i, mhead->entries[i].address, mhead->entries[i].pci_segment_group, mhead->entries[i].start_bus, mhead->entries[i].end_bus);
+                }
+            }*/
         }
     }
 
@@ -227,8 +245,8 @@ void x86_parse_acpi(void) {
     boot_info->tsc_freq = tsc_freq;
 
     kassert(boot_info->lapic_base, "We don't have APIC?");
-    kprintf("Found the APIC:     %p (vaddr=%p)\n", boot_info->lapic_base, paddr2kaddr(boot_info->lapic_base));
-    kprintf("Found the I/O APIC: %p (vaddr=%p)\n", boot_info->ioapic_base, paddr2kaddr(boot_info->ioapic_base));
+    // kprintf("Found the APIC:     %p (vaddr=%p)\n", boot_info->lapic_base, paddr2kaddr(boot_info->lapic_base));
+    // kprintf("Found the I/O APIC: %p (vaddr=%p)\n", boot_info->ioapic_base, paddr2kaddr(boot_info->ioapic_base));
 
     // Map into the higher half
     boot_info->lapic_base  = id_map(boot_info->lapic_base);

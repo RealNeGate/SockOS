@@ -8,13 +8,6 @@ void smp_main(PerCPU* cpu) {
     core_awake = 1;
 
     int id = cpu - boot_info->cores;
-    int offset = id * 50;
-    for (size_t j = 0; j < 50; j++) {
-        for (size_t i = 0; i < 50; i++) {
-            boot_info->fb.pixels[offset + i + (j * boot_info->fb.stride)] = 0xFFFF00FF;
-        }
-    }
-
     arch_init(id);
     arch_handoff(id);
 }
@@ -132,7 +125,7 @@ void x86_boot_cores(void) {
     extern char premain[];
 
     // other cores need to be able to see the bootstrap chunk once they transition to paging
-    memmap_view(boot_info->kernel_pml4, 0x1000, 0x1000, PAGE_ALIGN(bootstrap_end - bootstrap_start), VMEM_PAGE_WRITE);
+    memmap_view(boot_info->kernel_pml4, 0x1000, 0x1000, PAGE_ALIGN(bootstrap_end - bootstrap_start), VMEM_PAGE_WRITE | VMEM_PAGE_KERNEL);
 
     char* dst = paddr2kaddr(0x1000);
     memcpy(dst, bootstrap_start, bootstrap_end - bootstrap_start);

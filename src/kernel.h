@@ -1,12 +1,11 @@
 // Arch-independent kernel stuff
 #pragma once
 #include <common.h>
-#include <boot_info.h>
-#include <kernel/printf.h>
+#include "boot_info.h"
+#include "kernel/printf.h"
 
 enum {
     CHUNK_SIZE = 2*1024*1024,
-    USER_STACK_SIZE = 2*1024*1024,
 };
 
 typedef struct Env Env;
@@ -18,10 +17,24 @@ typedef struct KObject KObject;
 
 typedef unsigned int KHandle;
 
-typedef _Atomic(u32) atomic_u32;
-typedef _Atomic(u64) atomic_u64;
+// Kernel Array Bounds Check
+#define kabc(i, arr) kassert(i < ELEM_COUNT(arr), "Out of bounds access of %s[%d]", #arr, i)
+#define kassert(cond, ...) ((cond) ? 0 : (kprintf("%s:%d: assertion failed!\n  %s\n  ", __FILE__, __LINE__, #cond), kprintf(__VA_ARGS__), kprintf("\n\n"), arch_backtrace(), __builtin_trap()))
+#define panic(...) (kprintf("%s:%d: panic!\n", __FILE__, __LINE__), kprintf(__VA_ARGS__), __builtin_trap())
 
-#define atomic_cas_acq_rel(addr, old, new) atomic_compare_exchange_strong_explicit(addr, old, new, memory_order_acq_rel, memory_order_acquire)
+////////////////////////////////
+// Spin-lock
+////////////////////////////////
+typedef _Atomic(uint32_t) Lock;
+void spin_lock(Lock* lock);
+void spin_unlock(Lock* lock);
+
+// bootleg stdio.h
+void kprintf(const char *fmt, ...);
+void print_ring_init(void);
+
+void arch_backtrace(void);
+uint64_t get_time_ticks(void);
 
 PerCPU* cpu_get(void);
 size_t cpu_get_index(void);
@@ -38,7 +51,7 @@ void  kheap_free(void* obj, size_t size);
 void  kheap_dump(void);
 
 #define NBHM_ASSERT(x) kassert(x, ":(")
-#include <nbhm.h>
+#include "nbhm.h"
 
 ////////////////////////////////
 // Profiling
@@ -70,9 +83,12 @@ void rwlock_unlock_exclusive(RWLock* lock);
 // * Software map from page -> physical address.
 // * Hardware page table.
 typedef enum {
-    VMEM_PAGE_WRITE  = 1u << 0u,
-    VMEM_PAGE_EXEC   = 1u << 1u,
-    VMEM_PAGE_USER   = 1u << 2u,
+    VMEM_PAGE_WRITE     = 1u << 0u,
+    VMEM_PAGE_EXEC      = 1u << 1u,
+    VMEM_PAGE_KERNEL    = 1u << 2u,
+    VMEM_PAGE_PINNED    = 1u << 3u,
+    VMEM_PAGE_UNCACHED  = 1u << 4u,
+    VMEM_PAGE_WRITETHRU = 1u << 5u,
 } VMem_Flags;
 
 // B tree nodes
@@ -110,14 +126,21 @@ typedef struct {
     size_t index;
 } VMem_Cursor;
 
-uintptr_t vmem_map(Env* env, KHandle vmo, size_t offset, size_t size, VMem_Flags flags);
+// virtual addresses -> committed pages
+typedef NBHM VMem_WorkingSet;
+
+uintptr_t vmem_map(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_t size, VMem_Flags flags, uintptr_t* out_paddr);
 void vmem_add_range(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_t vsize, VMem_Flags flags);
 
 // maps a kernel page to a virtual address.
 void vmem_commit_page(Env* env, uintptr_t vaddr, void* kaddr);
 
+uintptr_t vmem_translate(VMem_WorkingSet* ws, uintptr_t vaddr);
+
 bool vmem_protect(Env* env, uintptr_t addr, size_t size, VMem_Flags flags);
 bool vmem_segfault(Env* env, uintptr_t access_addr, bool is_write);
+
+VMem_Cursor vmem_cursor_next(VMem_Cursor cur);
 
 ////////////////////////////////
 // Kernel objects
@@ -146,12 +169,12 @@ struct KObject {
 // chunk of virtual memory which can be shared across environments
 struct KObject_VMO {
     KObject super; // tag = KOBJECT_VMO
+    VMem_Flags flags;
+    size_t size; // page-aligned
 
-    // page-aligned
-    size_t size;
-
-    // simple physical mapping
+    // simple physical mapping, if paddr=0 then we use the working set
     uintptr_t paddr;
+    VMem_WorkingSet pages;
 };
 
 // Ring buffer of stacks
@@ -166,18 +189,25 @@ typedef struct {
     atomic_u64 ids_n_items[];
 } KObject_Mailbox;
 
-enum {
-    // each read/write will force a flush
-    KBOJECT_PIPE_FLUSH_ALL,
-};
+typedef struct {
+    // Bottom 16b is flags, Top 16b are command
+    _Atomic(uint32_t) header;
+    _Atomic(KObject_VMO*) vmo;
+    // Slice of the VMO
+    _Atomic(uint64_t) offset, size;
+} PipeEntry;
 
 typedef struct {
     KObject super; // tag = KOBJECT_PIPE
-    uint32_t flags;
+    u32 cap;
 
-    // handler mailbox
-    KObject_Mailbox* mailbox;
-    size_t size, capacity;
+    _Alignas(64) u32 head;
+    _Alignas(64) u32 tail;
+
+    bool p_state;
+    bool c_state;
+
+    PipeEntry entries[];
 } KObject_Pipe;
 
 // 10 cache lines worth of handles
@@ -208,20 +238,24 @@ enum { PCI_MAX_DEVICES = 20 };
 extern int pci_dev_count;
 extern PCI_Device* pci_devs[PCI_MAX_DEVICES];
 
-KObject_VMO* vmo_create_physical(uintptr_t addr, size_t size);
+KObject_VMO* vmo_create_physical(uintptr_t addr, size_t size, VMem_Flags flags);
 
 KObject_Mailbox* mailbox_create(size_t max_requests);
-
 // return the thread we'll be using the respond
 Thread* mailbox_send(KObject_Mailbox* mailbox);
-
 // hand the thread back, we're now waiting for new messages
 void mailbox_recv(KObject_Mailbox* mailbox, Thread* thread);
+
+KObject_Pipe* pipe_create(size_t max_requests);
+KObject_VMO* pipe_recv(KObject_Pipe* restrict pipe, uint64_t* offset, uint64_t* size);
+void pipe_send(KObject_Pipe* restrict pipe, KObject_VMO* vmo, uint64_t offset, uint64_t size);
 
 ////////////////////////////////
 // Environment (memory + resources accessible bound to some set of threads)
 ////////////////////////////////
 struct Env {
+    KObject super; // tag = KOBJECT_ENV
+
     Lock lock;
 
     Thread* first_in_env;
@@ -245,8 +279,8 @@ struct Env {
         // B+ tree for intervals
         VMem_Node* root;
 
-        // virtual addresses -> committed pages
-        NBHM commit_table;
+        // commit table
+        VMem_WorkingSet working_set;
 
         // hardware page table
         PageTable* hw_tables;

@@ -1,5 +1,5 @@
 #pragma once
-#include "../../kernel.h"
+#include <kernel.h>
 
 enum {
     KERNEL_CS  = 0x08,

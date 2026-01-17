@@ -6,10 +6,10 @@ typedef struct {
     size_t size;
 } ELF_Module;
 
-static bool elf_load(EFI_SYSTEM_TABLE* st, void* elf_base, ELF_Module *module) {
-    u8* elf = elf_base;
-    Elf64_Ehdr* elf_header = (Elf64_Ehdr*)elf;
-    u8* segments = elf + elf_header->e_phoff;
+static bool elf_load(EFI_SYSTEM_TABLE* st, const void* elf_base, ELF_Module *module) {
+    const u8* elf = elf_base;
+    const Elf64_Ehdr* elf_header = (Elf64_Ehdr*)elf;
+    const u8* segments = elf + elf_header->e_phoff;
     size_t segment_size = elf_header->e_phentsize;
     size_t segment_count = elf_header->e_phnum;
     // Determine the image size
@@ -53,7 +53,7 @@ static bool elf_load(EFI_SYSTEM_TABLE* st, void* elf_base, ELF_Module *module) {
         }
         printf("  Segment offset: %X\n", segment->p_vaddr);
         u8* dst_data = phys_base + segment->p_vaddr;
-        u8* src_data = elf + segment->p_offset;
+        const u8* src_data = elf + segment->p_offset;
         if (segment->p_filesz > 0) {
             memcpy(dst_data, src_data, segment->p_filesz);
         }
@@ -77,7 +77,7 @@ static bool elf_load(EFI_SYSTEM_TABLE* st, void* elf_base, ELF_Module *module) {
         #endif
     }
     // Find the RELA section and resolve the relocations
-    u8* sections = elf + elf_header->e_shoff;
+    const u8* sections = elf + elf_header->e_shoff;
     size_t section_count = elf_header->e_shnum;
     // printf("Resolving relocations\n");
     for (size_t i = 0; i < section_count; i++) {
