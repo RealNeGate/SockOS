@@ -31,6 +31,58 @@ KObject_Mailbox* mailbox_create(size_t max_requests) {
     return obj;
 }
 
+KObject_Pipe* pipe_create(size_t max_requests) {
+    KObject_Pipe* obj = kheap_zalloc(sizeof(KObject_Pipe) + max_requests*sizeof(PipeEntry));
+    *obj = (KObject_Pipe){
+        .super = {
+            .tag = KOBJECT_PIPE,
+        },
+        .cap = max_requests,
+    };
+    return obj;
+}
+
+KObject_VMO* pipe_recv(KObject_Pipe* restrict pipe, uint64_t* offset, uint64_t* size) {
+    int i = pipe->head;
+    // wait until entry is available to consumer
+    while ((pipe->entries[i].header & 1) != pipe->c_state) {
+        // TODO(NeGate): Block
+    }
+
+    // Advance head
+    if (++pipe->head == pipe->cap) {
+        pipe->head = 0;
+        pipe->c_state = !pipe->c_state;
+    }
+
+    PipeEntry e = pipe->entries[i];
+    pipe->entries[i].header ^= 1;
+
+    // Flip bit to mark as unused
+    *offset = e.offset;
+    *size   = e.size;
+    return e.vmo;
+}
+
+void pipe_send(KObject_Pipe* restrict pipe, KObject_VMO* vmo, uint64_t offset, uint64_t size) {
+    int i = pipe->tail;
+    // wait until entry is available to producer
+    while ((pipe->entries[i].header & 1) == pipe->p_state) {
+        // TODO(NeGate): Block
+    }
+
+    // Advance tail
+    if (++pipe->tail == pipe->cap) {
+        pipe->tail = 0;
+        pipe->p_state = !pipe->p_state;
+    }
+
+    pipe->entries[i].offset = 0;
+    pipe->entries[i].size   = size;
+    pipe->entries[i].vmo    = vmo;
+    pipe->entries[i].header = pipe->p_state;
+}
+
 Thread* mailbox_send(KObject_Mailbox* restrict mailbox) {
     // pop a stack from the mailbox, transfer control
     u64 exp  = mailbox->cap_log2;

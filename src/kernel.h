@@ -189,18 +189,25 @@ typedef struct {
     atomic_u64 ids_n_items[];
 } KObject_Mailbox;
 
-enum {
-    // each read/write will force a flush
-    KBOJECT_PIPE_FLUSH_ALL,
-};
+typedef struct {
+    // Bottom 16b is flags, Top 16b are command
+    _Atomic(uint32_t) header;
+    _Atomic(KObject_VMO*) vmo;
+    // Slice of the VMO
+    _Atomic(uint64_t) offset, size;
+} PipeEntry;
 
 typedef struct {
     KObject super; // tag = KOBJECT_PIPE
-    uint32_t flags;
+    u32 cap;
 
-    // handler mailbox
-    KObject_Mailbox* mailbox;
-    size_t size, capacity;
+    _Alignas(64) u32 head;
+    _Alignas(64) u32 tail;
+
+    bool p_state;
+    bool c_state;
+
+    PipeEntry entries[];
 } KObject_Pipe;
 
 // 10 cache lines worth of handles
@@ -234,12 +241,14 @@ extern PCI_Device* pci_devs[PCI_MAX_DEVICES];
 KObject_VMO* vmo_create_physical(uintptr_t addr, size_t size, VMem_Flags flags);
 
 KObject_Mailbox* mailbox_create(size_t max_requests);
-
 // return the thread we'll be using the respond
 Thread* mailbox_send(KObject_Mailbox* mailbox);
-
 // hand the thread back, we're now waiting for new messages
 void mailbox_recv(KObject_Mailbox* mailbox, Thread* thread);
+
+KObject_Pipe* pipe_create(size_t max_requests);
+KObject_VMO* pipe_recv(KObject_Pipe* restrict pipe, uint64_t* offset, uint64_t* size);
+void pipe_send(KObject_Pipe* restrict pipe, KObject_VMO* vmo, uint64_t offset, uint64_t size);
 
 ////////////////////////////////
 // Environment (memory + resources accessible bound to some set of threads)

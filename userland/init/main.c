@@ -29,14 +29,25 @@ void* memset(void* buffer, int c, size_t n) {
     return buffer;
 }
 
+void* memcpy(void* dest, const void* src, size_t n) {
+    u8* d = (u8*)dest;
+    u8* s = (u8*)src;
+    for (size_t i = 0; i < n; i++) {
+        d[i] = s[i];
+    }
+    return dest;
+}
+
 void fault_handler(void) {
-    syscall(SYS_debug_log, log_stream, log_used);
-    log_used = 0;
+    if (log_stream && log_used) {
+        syscall(SYS_debug_log, log_stream, log_used);
+        log_used = 0;
+    }
 }
 
 void _putchar(char ch) {
     if (log_stream == 0) {
-        log_stream = syscall(SYS_vmo_create, 4*1024);
+        log_stream = syscall(SYS_vmo_create, 0, 4*1024);
         log_buffer = mmap(0, log_stream, 0, 4*1024, PROT_READ | PROT_WRITE, 0);
     } else if (log_used == 4096) {
         syscall(SYS_debug_log, log_stream, log_used);
@@ -139,16 +150,17 @@ static int strcmp(const char* a, const char* b) {
     return *a - *b;
 }
 
-static int strncmp(const char* a, const char* b, size_t n) {
-    while (*a && *b && *a == *b && n--) {
+static bool string_match(const char* a, const char* b, size_t n) {
+    while (*a && *b && n--) {
+        if (*a != *b) { return false; }
         a++, b++;
     }
-    return *a - *b;
+    return true;
 }
 
 static FileEntry* find_file(FileEntry* initrd, size_t path_len, const char* path) {
     while (initrd->path[0]) {
-        if (strncmp(initrd->path, path, path_len) == 0) {
+        if (string_match(initrd->path, path, path_len)) {
             return initrd;
         }
 
@@ -158,19 +170,12 @@ static FileEntry* find_file(FileEntry* initrd, size_t path_len, const char* path
     return NULL;
 }
 
-static bool exec(FileEntry* file) {
+static bool exec(FileEntry* file, KHandle arg) {
     if (file->data_len < sizeof(Elf64_Ehdr)) {
         return false;
     }
 
-    // TODO(NeGate): maybe VMOs should be able to be split into subviews...
-    KHandle file_vmo = syscall(SYS_vmo_create, file->data_len);
-    char* dst = mmap(0, file_vmo, 0, file->data_len, PROT_READ | PROT_WRITE, 0);
-    for (size_t i = 0; i < file->data_len; i++) {
-        dst[i] = file->data[i];
-    }
-
-    Elf64_Ehdr* elf_header = (Elf64_Ehdr*) dst;
+    Elf64_Ehdr* elf_header = (Elf64_Ehdr*) file->data;
     size_t segment_size = elf_header->e_phentsize;
     size_t segment_header_bounds = elf_header->e_phoff + elf_header->e_phnum*segment_size;
     if (segment_header_bounds >= file->data_len) {
@@ -180,7 +185,7 @@ static bool exec(FileEntry* file) {
 
     uintptr_t lo = 0, hi = 0;
     size_t page_size = 4096;
-    const char* segments = dst + elf_header->e_phoff;
+    const char* segments = file->data + elf_header->e_phoff;
     for (size_t i = 0; i < elf_header->e_phnum; i++) {
         Elf64_Phdr* segment = (Elf64_Phdr*) (segments + i*segment_size);
         if (segment->p_type != PT_LOAD) {
@@ -199,23 +204,33 @@ static bool exec(FileEntry* file) {
     KHandle child_env = syscall(SYS_env_create);
 
     // Place ELF into env
-    char* elf_vmap = mmap(child_env, file_vmo, 0, hi - lo, PROT_READ | PROT_WRITE | MEM_PLACEHOLDER, 0);
+    char* elf_vmap = mmap(child_env, 0, 0, hi - lo, PROT_READ | PROT_WRITE | MEM_PLACEHOLDER, 0);
     for (size_t i = 0; i < elf_header->e_phnum; i++) {
         Elf64_Phdr* segment = (Elf64_Phdr*) (segments + i*segment_size);
         if (segment->p_type != PT_LOAD) {
             continue;
         }
 
-        uintptr_t vaddr = (segment->p_vaddr & -page_size) - lo;
-        mmap(child_env, file_vmo, (uintptr_t) elf_vmap + vaddr, segment->p_memsz, PROT_READ | PROT_WRITE, segment->p_offset & -page_size);
+        uintptr_t vaddr  = (segment->p_vaddr & -page_size) - lo;
+        uintptr_t offset = segment->p_vaddr & (page_size - 1);
+        uintptr_t memsz  = segment->p_memsz + offset;
+        memsz = (memsz + page_size - 1) & -page_size;
+
+        // TODO(NeGate): we should coalesce the section VMOs
+        KHandle section_vmo = syscall(SYS_vmo_create, 0, memsz);
+        char* dst = mmap(0, section_vmo, 0, segment->p_memsz, PROT_READ | PROT_WRITE, 0);
+        if (segment->p_filesz > 0) {
+            memcpy(dst + offset, &file->data[segment->p_offset], segment->p_filesz);
+        }
+
+        // Map into child environment
+        mmap(child_env, section_vmo, (uintptr_t) elf_vmap + vaddr, memsz, PROT_READ | PROT_WRITE, 0);
+        // printf("AAA %p %p %p\n", vaddr, vaddr + memsz - 1, dst + offset);
     }
 
     // Spin up the main thread
-    KHandle thread = syscall(SYS_thread_create, child_env, elf_vmap + (elf_header->e_entry - lo), 0, 2*1024*1024, 0);
-
-    syscall(SYS_mdump, child_env);
+    KHandle thread = syscall(SYS_thread_create, child_env, elf_vmap + (elf_header->e_entry - lo), arg, 2*1024*1024, 1);
     // printf("[init] Loaded %p - %p!!! %p\n", elf_vmap, elf_vmap + (hi - lo) - 1, thread);
-
     return true;
 }
 
@@ -244,24 +259,23 @@ int _start(KHandle bootstrap_vmo) {
 
         DriverEntry* driver = get_driver(key);
         if (driver != NULL) {
-            printf("PCI Device matched with driver! %04x:%04x\n", key >> 16u, key & 0xFFFF);
-
-            // FileEntry* file = find_file(initrd, driver->path_len, driver->path);
-            // exec(file);
+            FileEntry* file = find_file(initrd, driver->path_len, driver->path);
+            if (file != NULL) {
+                printf("[init] PCI Device matched! %04x:%04x    %.*s\n", key >> 16u, key & 0xFFFF, (int) driver->path_len, driver->path);
+                exec(file, dev);
+            }
         }
     }
 
-    FileEntry* desktop = find_file(initrd, sizeof("/desktop.so")-1, "/desktop.so");
+    /*FileEntry* desktop = find_file(initrd, sizeof("/desktop.so")-1, "/desktop.so");
     if (desktop != NULL) {
         printf("Found desktop! %zu bytes\n", desktop->data_len);
         exec(desktop);
-    }
+    }*/
 
-    syscall(SYS_debug_log, log_stream, log_used);
-    log_used = 0;
+    fault_handler();
 
     for (;;) {
-        syscall(SYS_test, 0);
         syscall(SYS_sleep, 100000);
     }
 }

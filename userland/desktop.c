@@ -19,7 +19,7 @@ void request_handler(void* arg) {
     uint64_t msg[4];
     uint64_t fn = syscall(SYS_mailbox_wait, mailbox, msg);
     for (;;) {
-        // process message
+        //s process message
         // syscall(SYS_test, msg[0]);
 
         // reply and wait for the next message

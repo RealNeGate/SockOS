@@ -119,26 +119,11 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
 
     // kprintf("sched_pick_next(now=%d)\n", now_time);
 
-    // wake up sleepy guys
-    while (sched->waiters.count > 0) {
-        Thread* waiter = wakequeue_peek(&sched->waiters);
-        if (now_time < waiter->wake_time) {
-            break;
-        }
-
-        ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p is awake now (exec time was %d us)\n", core_id, waiter, waiter->exec_time));
-        wakequeue_pop(&sched->waiters);
-        waiter->wake_time = 0;
-        waiter->exec_time += sched->min_exec_time;
-        waiter->status = THREAD_STATE_READY;
-        runqueue_insert(&sched->active, waiter);
-    }
-
     // We run this function when pre-emptions happen so we should check up on the last
     // running task.
     Thread* curr = cpu->current_thread;
     if (curr != NULL) {
-        kassert(curr == runqueue_peek(&sched->active), "bad %p", curr);
+        kassert(curr == runqueue_peek(&sched->active), "bad %p %p", curr, runqueue_peek(&sched->active));
         u64 delta = now_time - curr->start_time;
 
         // update exec_time, higher priorities
@@ -174,6 +159,21 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
             }
         }
         curr->status = THREAD_STATE_READY;
+    }
+
+    // wake up sleepy guys
+    while (sched->waiters.count > 0) {
+        Thread* waiter = wakequeue_peek(&sched->waiters);
+        if (now_time < waiter->wake_time) {
+            break;
+        }
+
+        ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p is awake now (exec time was %d us)\n", core_id, waiter, waiter->exec_time));
+        wakequeue_pop(&sched->waiters);
+        waiter->wake_time = 0;
+        waiter->exec_time += sched->min_exec_time;
+        waiter->status = THREAD_STATE_READY;
+        runqueue_insert(&sched->active, waiter);
     }
 
     // everything in this list should be ready to run, if not then we still remove it because that means it's

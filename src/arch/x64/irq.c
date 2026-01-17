@@ -191,7 +191,7 @@ void set_interrupt_line(u32 line, void fn(void*), void* ctx) {
     ioapic_write(boot_info->ioapic_base, redirect_table_idx + 1, boot_info->cores[0].lapic_id << 24);
     ioapic_write(boot_info->ioapic_base, redirect_table_idx,     entry);
 
-    kprintf("idx: 0x%x, added line: %d | %016b\n", redirect_table_idx, line, entry);
+    ON_DEBUG(IRQ)(kprintf("[irq] idx: 0x%x, added line: %d | %016b\n", redirect_table_idx, line, entry));
 }
 
 void arch_handoff(int id) {
