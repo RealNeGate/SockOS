@@ -41,6 +41,73 @@ static void* pin(size_t size, uintptr_t* paddr) {
     return (void*) syscall(SYS_mpin, 0, 0, size, paddr);
 }
 
+enum {
+    MAX_PORTS = 16,
+};
+
+typedef struct {
+    enum {
+        PORT_DISCONNECTED,
+        PORT_POLLING, // only USB2 does this
+        PORT_CONNECTED,
+    } state;
+    bool usb3;
+    int slot;
+
+    uintptr_t enable_slot_cmd;
+} Port;
+
+static Port ports[MAX_PORTS];
+static volatile uint32_t* doorbell;
+static volatile uint32_t* op_base;
+
+static uintptr_t crcr_paddr;
+static uintptr_t crcr_head;
+static bool command_ring_cycle = true;
+static uint32_t* crcr;
+
+// Doorbell reg 0 is the host controller
+static void ring_doorbell(int slot, int target) {
+    doorbell[slot] = target;
+}
+
+static void port_status_change(volatile uint32_t* sts_ptr, int port) {
+    uint32_t sts = *sts_ptr;
+    if (sts & 1) { // Connect
+        // USB3 will immediately set the PED flag, USB2 requires a reset before doing so
+        if ((sts & 2) == 0) {
+            printf("[usb] Port%u connecting via USB2, sts=%#x (reset enqueued)\n", port, sts);
+
+            ports[port].state = PORT_POLLING;
+            *sts_ptr |= 1 << 4;
+            return;
+        }
+
+        ports[port].usb3 = ports[port].state == PORT_DISCONNECTED;
+        ports[port].state = PORT_CONNECTED;
+        printf("[usb] Port%u connecting via USB%d, sts=%#x, speed=%d\n", port, 2 + ports[port].usb3, sts, (sts >> 10) & 0xF);
+
+        // EnableSlot Command
+        size_t cmd_i = (crcr_head - crcr_paddr) / 4;
+        crcr[cmd_i+0] = 0;
+        crcr[cmd_i+1] = 0;
+        crcr[cmd_i+2] = 0;
+        crcr[cmd_i+3] = (9 << 10u) | command_ring_cycle;
+        ports[port].enable_slot_cmd = crcr_head;
+
+        // Advance command ring
+        crcr_head += 16;
+        if (crcr_head == 4096) {
+            crcr_head = 0;
+            command_ring_cycle = !command_ring_cycle;
+        }
+        ring_doorbell(0, 0);
+    } else { // Disconnect
+        printf("[usb] Port%u disconnecting, sts=%#x\n", port, sts);
+        ports[port].state = PORT_DISCONNECTED;
+    }
+}
+
 int _start(KHandle pci_device) {
     /* uint64_t info[4];
     int fb_bar = syscall(SYS_fb_grab, info);
@@ -53,8 +120,8 @@ int _start(KHandle pci_device) {
     uintptr_t dcbaap_paddr;
     uintptr_t* dcbaap = pin(4096, &dcbaap_paddr);
 
-    uintptr_t crcr_paddr;
-    uintptr_t* crcr = pin(4096, &crcr_paddr);
+    crcr = pin(4096, &crcr_paddr);
+    crcr_head = crcr_paddr;
 
     uintptr_t ers0_paddr;
     uint32_t* ers0 = pin(4096, &ers0_paddr);
@@ -65,11 +132,15 @@ int _start(KHandle pci_device) {
     // ERS0 has 4K worth of TRB entries
     erst[0] = ers0_paddr & 0xFFFFFFFF;
     erst[1] = ers0_paddr >> 32ull;
-    erst[2] = 16;
+    erst[2] = 1024 / 16;
     erst[3] = 0;
 
-    volatile uint32_t* op_base = &mmio[(mmio[0] & 0xFF) >> 2];
-    volatile uint32_t* rt_regs = &mmio[mmio[6] >> 2];
+    op_base  = &mmio[(mmio[0] & 0xFF) >> 2];
+    volatile uint32_t* rt_regs  = &mmio[mmio[6] >> 2];
+    doorbell = &mmio[mmio[5] >> 2];
+
+    printf("Doorbell %p %p\n", mmio, doorbell);
+
     uint32_t max_ports = mmio[1] >> 24u;
 
     // XHCI initialization
@@ -78,13 +149,13 @@ int _start(KHandle pci_device) {
     syscall(SYS_sleep, 100000);
     while (op_base[1] & USBSTS_CNR) {}
     //   2. Program max device slots
-    op_base[14] = 16; // (CONFIG @ 38h)
+    op_base[14] = MAX_PORTS; // (CONFIG @ 38h)
     //   3. Program DCBAAP
     op_base[13] = (dcbaap_paddr >> 32ull);
     op_base[12] = dcbaap_paddr & 0xFFFFFFFF; // (DCBAAP @ 30h)
     //   4. Defgine the Command ring dequeue pointer
+    op_base[6] = (crcr_paddr & 0xFFFFFFFF) | (1<<3) | command_ring_cycle; // (CRCR @ 18h)
     op_base[7] = (crcr_paddr >> 32ull);
-    op_base[6] = crcr_paddr & 0xFFFFFFFF; // (CRCR @ 18h)
     //   5. Runtime Register space
     volatile uint32_t* interrupt = &rt_regs[8];
     {
@@ -125,11 +196,35 @@ int _start(KHandle pci_device) {
             }
 
             uint32_t type = (trb[3] >> 10) & 0b111111;
-            if (type == 0x22) { // Port status change
-                uint32_t port = (trb[0] >> 24) - 1;
-                volatile uint32_t* sts = &op_base[0x100 + (4 * port)];
+            if (type == 0x21) { // Command completion
+                uintptr_t cmd_ptr = trb[0] | ((uintptr_t) trb[1] << 32ull);
+                volatile uint32_t* cmd = &crcr[(cmd_ptr - crcr_paddr) / 4];
 
-                printf("[usb] Port%u connected, sts=%#x\n", port, *sts);
+                uint32_t completed_type = (cmd[3] >> 10) & 0b111111;
+                printf("%d : Completed Event%p %#x (type=%d)\n", trb[2] >> 24u, cmd_ptr, cmd[3], completed_type);
+
+                if (completed_type == 9) {
+                    // We have a slot ID now
+                    size_t i = 0;
+                    for (; i < max_ports; i++) {
+                        if (ports[i].state == PORT_CONNECTED && ports[i].enable_slot_cmd == cmd_ptr) {
+                            break;
+                        }
+                    }
+
+                    if (i < max_ports) {
+                        printf("[usb] Port%zu is associated with Slot%u\n", i, cmd[3] >> 16u);
+                        ports[i].slot = cmd[3] >> 16u;
+
+                        // continue with device init
+                    }
+                }
+            } else if (type == 0x22) { // Port status change
+                int port = (trb[0] >> 24) - 1;
+                volatile uint32_t* sts = &op_base[0x100 + (4 * port)];
+                port_status_change(sts, port);
+            } else {
+                printf("Unsupported event %d\n", type);
             }
             advanced = true;
 
@@ -146,8 +241,10 @@ int _start(KHandle pci_device) {
             erdp_phys = ers0_paddr + trb_i*sizeof(uint32_t);
             interrupt[7] = (erdp_phys >> 32ull);
             interrupt[6] = erdp_phys & 0xFFFFFFFF;
-            fault_handler();
         }
+
+        printf("Ping\n");
+        fault_handler();
 
         syscall(SYS_sleep, 1000000);
     }
