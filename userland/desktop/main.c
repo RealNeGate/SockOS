@@ -201,7 +201,7 @@ int _start(KHandle pci_device) {
                 volatile uint32_t* cmd = &crcr[(cmd_ptr - crcr_paddr) / 4];
 
                 uint32_t completed_type = (cmd[3] >> 10) & 0b111111;
-                printf("%d : Completed Event%p %#x (type=%d)\n", trb[2] >> 24u, cmd_ptr, cmd[3], completed_type);
+                printf("%d : Completed Event%p %#x (type=%d)\n", trb[2] >> 24u, cmd_ptr, trb[3], completed_type);
 
                 if (completed_type == 9) {
                     // We have a slot ID now
@@ -213,8 +213,8 @@ int _start(KHandle pci_device) {
                     }
 
                     if (i < max_ports) {
-                        printf("[usb] Port%zu is associated with Slot%u\n", i, cmd[3] >> 16u);
-                        ports[i].slot = cmd[3] >> 16u;
+                        ports[i].slot = (trb[3] >> 24u) - 1;
+                        printf("[usb] Port%zu is associated with Slot%u\n", i, ports[i].slot);
 
                         // continue with device init
                     }
