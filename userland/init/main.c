@@ -218,19 +218,17 @@ static bool exec(FileEntry* file, KHandle arg) {
 
         // TODO(NeGate): we should coalesce the section VMOs
         KHandle section_vmo = syscall(SYS_vmo_create, 0, memsz);
-        char* dst = mmap(0, section_vmo, 0, segment->p_memsz, PROT_READ | PROT_WRITE, 0);
+        char* dst = mmap(0, section_vmo, 0, memsz, PROT_READ | PROT_WRITE, 0);
         if (segment->p_filesz > 0) {
             memcpy(dst + offset, &file->data[segment->p_offset], segment->p_filesz);
         }
 
         // Map into child environment
         mmap(child_env, section_vmo, (uintptr_t) elf_vmap + vaddr, memsz, PROT_READ | PROT_WRITE, 0);
-        // printf("AAA %p %p %p\n", vaddr, vaddr + memsz - 1, dst + offset);
     }
 
     // Spin up the main thread
     KHandle thread = syscall(SYS_thread_create, child_env, elf_vmap + (elf_header->e_entry - lo), arg, 2*1024*1024, 1);
-    // printf("[init] Loaded %p - %p!!! %p\n", elf_vmap, elf_vmap + (hi - lo) - 1, thread);
     return true;
 }
 

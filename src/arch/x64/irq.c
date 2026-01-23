@@ -347,7 +347,7 @@ static void dump_page_fault(CPUState* state, uintptr_t cr3, PerCPU* cpu, Env* en
 
     // dissassemble code
     if (memmap_translate(old_address_space, state->rip, &translated)) {
-        kprintf("  code:   %d:%p (translated: %p, %x)\n\n", state->cs, state->rip, translated, *(u8*) paddr2kaddr(translated));
+        kprintf("  code:   %d:%p (translated: %p, %#x)\n\n", state->cs, state->rip, translated, *(u8*) paddr2kaddr(translated));
         // x86_print_disasm((uint8_t*) translated, 16);
     } else {
         kprintf("  code:   %d:%p (NOT PRESENT)\n", state->cs, state->rip);

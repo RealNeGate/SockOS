@@ -45,11 +45,43 @@ enum {
     MAX_PORTS = 16,
 };
 
+enum {
+    USB_SPEED_UNKNOWN,
+    USB_SPEED_LOW,
+    USB_SPEED_FULL,       // USB 1.1
+    USB_SPEED_HIGH,       // USB 2.0
+    USB_SPEED_WIRELESS,   // USB 2.5... unsupported by us
+    USB_SPEED_SUPER,      // USB 3.0
+    USB_SPEED_SUPER_PLUS, // USB 3.1 (TODO)
+};
+
+typedef struct {
+    uint32_t data[8];
+} EndpointContext;
+
+typedef struct {
+    // EP Context 0
+    // EP Context 1  OUT (dir=0)
+    // EP Context 1  IN  (dir=1)
+    // ...
+    // EP Context 15 OUT (dir=0)
+    // EP Context 15 IN  (dir=1)
+    EndpointContext arr[33];
+} InputContext;
+
 typedef struct {
     enum {
         PORT_DISCONNECTED,
         PORT_POLLING, // only USB2 does this
-        PORT_CONNECTED,
+
+        // the USB speed has been negociated but no address is setup.
+        PORT_DEFAULT,
+
+        // there's an address but no config.
+        PORT_ADDRESS,
+
+        // there's at least one config!
+        PORT_CONFIGURED,
     } state;
     bool usb3;
     int slot;
@@ -60,6 +92,7 @@ typedef struct {
 static Port ports[MAX_PORTS];
 static volatile uint32_t* doorbell;
 static volatile uint32_t* op_base;
+static volatile uintptr_t* dcbaap;
 
 static uintptr_t crcr_paddr;
 static uintptr_t crcr_head;
@@ -71,40 +104,108 @@ static void ring_doorbell(int slot, int target) {
     doorbell[slot] = target;
 }
 
-static void port_status_change(volatile uint32_t* sts_ptr, int port) {
-    uint32_t sts = *sts_ptr;
-    if (sts & 1) { // Connect
-        // USB3 will immediately set the PED flag, USB2 requires a reset before doing so
-        if ((sts & 2) == 0) {
-            printf("[usb] Port%u connecting via USB2, sts=%#x (reset enqueued)\n", port, sts);
+static uint32_t* prepare_cmd(void) {
+    // EnableSlot Command
+    size_t cmd_i = (crcr_head - crcr_paddr) / 4;
+    return &crcr[cmd_i];
+}
 
-            ports[port].state = PORT_POLLING;
-            *sts_ptr |= 1 << 4;
-            return;
-        }
+static void submit_cmd(void) {
+    // Advance command ring
+    crcr_head += 16;
+    if (crcr_head == 4096) {
+        crcr_head = 0;
+        command_ring_cycle = !command_ring_cycle;
+    }
+    ring_doorbell(0, 0);
+}
 
-        ports[port].usb3 = ports[port].state == PORT_DISCONNECTED;
-        ports[port].state = PORT_CONNECTED;
-        printf("[usb] Port%u connecting via USB%d, sts=%#x, speed=%d\n", port, 2 + ports[port].usb3, sts, (sts >> 10) & 0xF);
+enum {
+    MSG_PORT_CHANGE,
+    MSG_SLOT_ENABLE,
+};
 
-        // EnableSlot Command
-        size_t cmd_i = (crcr_head - crcr_paddr) / 4;
-        crcr[cmd_i+0] = 0;
-        crcr[cmd_i+1] = 0;
-        crcr[cmd_i+2] = 0;
-        crcr[cmd_i+3] = (9 << 10u) | command_ring_cycle;
-        ports[port].enable_slot_cmd = crcr_head;
+static void usb_fsm(int msg, int port, int slot) {
+    volatile uint32_t* sts_ptr = &op_base[0x100 + (4 * port)];
+    switch (msg) {
+        case MSG_PORT_CHANGE: {
+            uint32_t sts = *sts_ptr;
+            if (sts & 1) { // Connect
+                // USB3 will immediately set the PED flag, USB2 requires a reset before doing so
+                if ((sts & 2) == 0) {
+                    printf("[usb] Port%u connecting via USB2, sts=%#x (reset enqueued)\n", port, sts);
 
-        // Advance command ring
-        crcr_head += 16;
-        if (crcr_head == 4096) {
-            crcr_head = 0;
-            command_ring_cycle = !command_ring_cycle;
-        }
-        ring_doorbell(0, 0);
-    } else { // Disconnect
-        printf("[usb] Port%u disconnecting, sts=%#x\n", port, sts);
-        ports[port].state = PORT_DISCONNECTED;
+                    ports[port].state = PORT_POLLING;
+                    *sts_ptr |= 1 << 4;
+                    return;
+                }
+
+                ports[port].slot = -1;
+                ports[port].usb3 = ports[port].state == PORT_DISCONNECTED;
+                ports[port].state = PORT_DEFAULT;
+                printf("[usb] Port%u connecting via USB%d, sts=%#x, speed=%d\n", port, 2 + ports[port].usb3, sts, (sts >> 10) & 0xF);
+
+                // EnableSlot Command
+                uint32_t* cmd = prepare_cmd();
+                cmd[0] = 0;
+                cmd[1] = 0;
+                cmd[2] = 0;
+                cmd[3] = (9 << 10u) | command_ring_cycle;
+                ports[port].enable_slot_cmd = crcr_head;
+                submit_cmd();
+            } else { // Disconnect
+                printf("[usb] Port%u disconnecting, sts=%#x\n", port, sts);
+                ports[port].state = PORT_DISCONNECTED;
+            }
+        } break;
+
+        case MSG_SLOT_ENABLE: {
+            printf("[usb] Port%u is associated with Slot%u\n", port, slot);
+
+            uintptr_t in_ctx_paddr;
+            InputContext* in_ctx = pin(4096, &in_ctx_paddr);
+
+            uintptr_t out_ctx_paddr;
+            uint32_t* out_ctx = pin(4096, &out_ctx_paddr);
+
+            uint32_t speed = (*sts_ptr >> 10u) & 0xF;
+            uint32_t max_packet = 8;
+            switch (speed) {
+                case USB_SPEED_SUPER:
+                max_packet = 512;
+                break;
+
+                case USB_SPEED_FULL: case USB_SPEED_HIGH:
+                max_packet = 64;
+                break;
+            }
+
+            // control context, enabling A0 and A1
+            in_ctx->arr[0].data[1] = 3;
+
+            // slot context
+            in_ctx->arr[1].data[0] = (1 << 27u) | (speed << 20u);
+            in_ctx->arr[1].data[1] = ((port + 1) << 16u);
+
+            // endpoint 0
+            //                        CErr        EP Type     Max Packet Size
+            uintptr_t tr_dequeue = 0;
+            in_ctx->arr[1].data[1] = (3 << 1u) | (4 << 3u) | (max_packet << 16u);
+            in_ctx->arr[1].data[2] = (tr_dequeue & 0xFFFFFFF0) | 1u;
+            in_ctx->arr[1].data[3] = (tr_dequeue >> 32ull);
+
+            dcbaap[slot] = out_ctx_paddr;
+
+            printf("[usb] Initialized Port%u with In:%p, Out:%p\n", port, in_ctx_paddr, out_ctx_paddr);
+
+            // submit AddressDevice command
+            uint32_t* cmd = prepare_cmd();
+            cmd[0] = (in_ctx_paddr & 0xFFFFFFF0);
+            cmd[1] = in_ctx_paddr >> 32ull;
+            cmd[2] = 0;
+            cmd[3] = (slot << 24ull) | (11 << 10u) | command_ring_cycle;
+            submit_cmd();
+        } break;
     }
 }
 
@@ -118,7 +219,7 @@ int _start(KHandle pci_device) {
     mmio = mmap(0, bar0, 0, size, PROT_READ | PROT_WRITE, 0);
 
     uintptr_t dcbaap_paddr;
-    uintptr_t* dcbaap = pin(4096, &dcbaap_paddr);
+    dcbaap = pin(4096, &dcbaap_paddr);
 
     crcr = pin(4096, &crcr_paddr);
     crcr_head = crcr_paddr;
@@ -136,10 +237,8 @@ int _start(KHandle pci_device) {
     erst[3] = 0;
 
     op_base  = &mmio[(mmio[0] & 0xFF) >> 2];
-    volatile uint32_t* rt_regs  = &mmio[mmio[6] >> 2];
+    volatile uint32_t* rt_regs = &mmio[mmio[6] >> 2];
     doorbell = &mmio[mmio[5] >> 2];
-
-    printf("Doorbell %p %p\n", mmio, doorbell);
 
     uint32_t max_ports = mmio[1] >> 24u;
 
@@ -168,7 +267,6 @@ int _start(KHandle pci_device) {
         interrupt[4] = erst_paddr & 0xFFFFFFFF;
         interrupt[5] = (erst_paddr >> 32ull);
     }
-    //   5. Enable event ring
     //   5. Enable interrupts (TODO)
     //   6. Turn host controller on
     op_base[0] |= 1; // (USBCMD @ 00h)
@@ -181,6 +279,9 @@ int _start(KHandle pci_device) {
             *sts |= 1 << 4;
         }
     }
+
+    printf("[usb] Ready to receive events!\n");
+    fault_handler();
 
     bool ccs = true;
     for (;;) {
@@ -207,22 +308,19 @@ int _start(KHandle pci_device) {
                     // We have a slot ID now
                     size_t i = 0;
                     for (; i < max_ports; i++) {
-                        if (ports[i].state == PORT_CONNECTED && ports[i].enable_slot_cmd == cmd_ptr) {
+                        if (ports[i].state == PORT_DEFAULT && ports[i].enable_slot_cmd == cmd_ptr) {
                             break;
                         }
                     }
 
                     if (i < max_ports) {
                         ports[i].slot = (trb[3] >> 24u) - 1;
-                        printf("[usb] Port%zu is associated with Slot%u\n", i, ports[i].slot);
-
-                        // continue with device init
+                        usb_fsm(MSG_SLOT_ENABLE, i, ports[i].slot);
                     }
                 }
             } else if (type == 0x22) { // Port status change
                 int port = (trb[0] >> 24) - 1;
-                volatile uint32_t* sts = &op_base[0x100 + (4 * port)];
-                port_status_change(sts, port);
+                usb_fsm(MSG_PORT_CHANGE, port, ports[i].slot);
             } else {
                 printf("Unsupported event %d\n", type);
             }
