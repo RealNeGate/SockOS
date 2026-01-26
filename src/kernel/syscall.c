@@ -205,6 +205,20 @@ SYS_FN(mdump) {
     return 0;
 }
 
+SYS_FN(get_paddr) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_get_paddr(vaddr=%p)\n", SYS_PARAM0));
+    Env* env = cpu->current_thread->parent;
+    uintptr_t paddr = vmem_translate(&env->addr_space.working_set, SYS_PARAM0);
+    if (paddr == 0) {
+        // Try to commit the page
+        kprintf("get_paddr: Commit page! %p\n", SYS_PARAM0);
+
+        vmem_segfault(env, SYS_PARAM0, false);
+        paddr = vmem_translate(&env->addr_space.working_set, SYS_PARAM0);
+    }
+    return paddr;
+}
+
 SYS_FN(mpin) {
     ON_DEBUG(SYSCALL)(kprintf("SYS_mpin(vmo=%p, offset=%d, size=%d, out_paddr=%p)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2, SYS_PARAM3));
 

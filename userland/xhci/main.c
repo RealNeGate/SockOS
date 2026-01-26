@@ -86,38 +86,107 @@ typedef struct {
     bool usb3;
     int slot;
 
-    uintptr_t enable_slot_cmd;
+    uintptr_t init_cmd;
 } Port;
+
+typedef struct {
+    bool cycle_bit;
+
+    uint32_t count;
+    uint32_t* base;
+    uintptr_t base_paddr;
+
+    // Dequeue pointer
+    uint32_t* dequeue;
+    uintptr_t dequeue_paddr;
+} HCI_Ring;
+
+enum { PAGE_SIZE_DWORDS = 4096 / 4 };
+static void ring_alloc(HCI_Ring* ring, size_t cnt) {
+    size_t size = cnt*16;
+
+    ring->cycle_bit = true;
+    ring->count = cnt;
+
+    ring->base = mmap(0, log_stream, 0, size, PROT_READ | PROT_WRITE, 0);
+    ring->base_paddr = syscall(SYS_get_paddr, ring->base);
+
+    ring->dequeue = ring->base;
+    ring->dequeue_paddr = ring->base_paddr;
+
+    if (size > 4096) {
+        size_t curr = PAGE_SIZE_DWORDS;
+        uintptr_t prev_paddr = ring->base_paddr;
+        uint32_t* base =  ring->base;
+
+        // Insert Link TRBs
+        size_t page_count = (size + 4095) / 4096;
+        FOR_N(i, 1, page_count) {
+            uintptr_t paddr = syscall(SYS_get_paddr, &base[i*PAGE_SIZE_DWORDS]);
+            if (prev_paddr+4096 != paddr) {
+                // Not contiguous? insert link at the end of the prev_paddr
+                uint32_t* link_entry = &base[i*PAGE_SIZE_DWORDS - 4];
+                link_entry[0] = paddr & 0xFFFFFFF0;
+                link_entry[1] = paddr >> 32ull;
+                link_entry[3] = 6u << 10u;
+            }
+            prev_paddr = paddr;
+        }
+
+        // Final Link TRB
+        uint32_t* link_entry = &base[(size - 16) / 4];
+        link_entry[0] = 0;
+        link_entry[1] = 0;
+        link_entry[3] = (6u << 10u) | 2u; // Toggle cycle
+    }
+}
+
+static uint32_t* ring_cmd_at(HCI_Ring* ring, uintptr_t paddr) {
+    return &ring->base[(paddr - ring->base_paddr) / 4];
+}
+
+static void ring_advance(HCI_Ring* ring) {
+    // Move 16B forward
+    ring->dequeue += 4;
+    ring->dequeue_paddr += 16;
+
+    // Check for Link TRBs
+    if (ring->dequeue == &ring->base[ring->count*4]) {
+        // Wrap to start
+        ring->dequeue       = ring->base;
+        ring->dequeue_paddr = ring->base_paddr;
+        ring->cycle_bit     = !ring->cycle_bit;
+    } else {
+        uint32_t type = (ring->dequeue[3] >> 10u) & 0b111111;
+        if (type == 6) {
+            ring->dequeue_paddr = ring->dequeue[0] | ((uintptr_t) ring->dequeue[1] << 32ull);
+        }
+    }
+}
+
+static void ring_submit_cmd(HCI_Ring* ring, int type, int slot, uint32_t cmd[3]) {
+    uint32_t* dst = ring->dequeue;
+
+    // copy command (except control field)
+    FOR_N(i, 0, 3) { dst[i] = cmd[i]; }
+
+    // write out, last word in the command must be written last since
+    // it holds the control field and the producer cycle bit.
+    dst[3] = (slot << 24u) | ((type & 0x3F) << 10u) | ring->cycle_bit;
+
+    ring_advance(ring);
+}
 
 static Port ports[MAX_PORTS];
 static volatile uint32_t* doorbell;
 static volatile uint32_t* op_base;
 static volatile uintptr_t* dcbaap;
 
-static uintptr_t crcr_paddr;
-static uintptr_t crcr_head;
-static bool command_ring_cycle = true;
-static uint32_t* crcr;
+static HCI_Ring crcr;
 
 // Doorbell reg 0 is the host controller
 static void ring_doorbell(int slot, int target) {
     doorbell[slot] = target;
-}
-
-static uint32_t* prepare_cmd(void) {
-    // EnableSlot Command
-    size_t cmd_i = (crcr_head - crcr_paddr) / 4;
-    return &crcr[cmd_i];
-}
-
-static void submit_cmd(void) {
-    // Advance command ring
-    crcr_head += 16;
-    if (crcr_head == 4096) {
-        crcr_head = 0;
-        command_ring_cycle = !command_ring_cycle;
-    }
-    ring_doorbell(0, 0);
 }
 
 enum {
@@ -146,13 +215,10 @@ static void usb_fsm(int msg, int port, int slot) {
                 printf("[usb] Port%u connecting via USB%d, sts=%#x, speed=%d\n", port, 2 + ports[port].usb3, sts, (sts >> 10) & 0xF);
 
                 // EnableSlot Command
-                uint32_t* cmd = prepare_cmd();
-                cmd[0] = 0;
-                cmd[1] = 0;
-                cmd[2] = 0;
-                cmd[3] = (9 << 10u) | command_ring_cycle;
-                ports[port].enable_slot_cmd = crcr_head;
-                submit_cmd();
+                ports[port].init_cmd = crcr.dequeue_paddr;
+                uint32_t cmd[3] = { 0 };
+                ring_submit_cmd(&crcr, 9, 0, cmd);
+                ring_doorbell(0, 0);
             } else { // Disconnect
                 printf("[usb] Port%u disconnecting, sts=%#x\n", port, sts);
                 ports[port].state = PORT_DISCONNECTED;
@@ -167,6 +233,9 @@ static void usb_fsm(int msg, int port, int slot) {
 
             uintptr_t out_ctx_paddr;
             uint32_t* out_ctx = pin(4096, &out_ctx_paddr);
+
+            uintptr_t xfer_paddr = 0;
+            // uint32_t* xfer = pin(4096, &xfer_paddr);
 
             uint32_t speed = (*sts_ptr >> 10u) & 0xF;
             uint32_t max_packet = 8;
@@ -189,22 +258,18 @@ static void usb_fsm(int msg, int port, int slot) {
 
             // endpoint 0
             //                        CErr        EP Type     Max Packet Size
-            uintptr_t tr_dequeue = 0;
             in_ctx->arr[1].data[1] = (3 << 1u) | (4 << 3u) | (max_packet << 16u);
-            in_ctx->arr[1].data[2] = (tr_dequeue & 0xFFFFFFF0) | 1u;
-            in_ctx->arr[1].data[3] = (tr_dequeue >> 32ull);
+            in_ctx->arr[1].data[2] = (xfer_paddr & 0xFFFFFFF0) | 1u;
+            in_ctx->arr[1].data[3] = (xfer_paddr >> 32ull);
 
             dcbaap[slot] = out_ctx_paddr;
-
-            printf("[usb] Initialized Port%u with In:%p, Out:%p\n", port, in_ctx_paddr, out_ctx_paddr);
+            printf("[usb] Initialized Port%u with In:%p, Out:%p Transfer:%p\n", port, in_ctx_paddr, out_ctx_paddr, xfer_paddr);
 
             // submit AddressDevice command
-            uint32_t* cmd = prepare_cmd();
-            cmd[0] = (in_ctx_paddr & 0xFFFFFFF0);
-            cmd[1] = in_ctx_paddr >> 32ull;
-            cmd[2] = 0;
-            cmd[3] = (slot << 24ull) | (11 << 10u) | command_ring_cycle;
-            submit_cmd();
+            ports[port].init_cmd = crcr.dequeue_paddr;
+            uint32_t cmd[3] = { in_ctx_paddr & 0xFFFFFFF0, in_ctx_paddr >> 32ull };
+            ring_submit_cmd(&crcr, 11, slot, cmd);
+            ring_doorbell(0, 0);
         } break;
     }
 }
@@ -221,8 +286,7 @@ int _start(KHandle pci_device) {
     uintptr_t dcbaap_paddr;
     dcbaap = pin(4096, &dcbaap_paddr);
 
-    crcr = pin(4096, &crcr_paddr);
-    crcr_head = crcr_paddr;
+    ring_alloc(&crcr, 256);
 
     uintptr_t ers0_paddr;
     uint32_t* ers0 = pin(4096, &ers0_paddr);
@@ -253,8 +317,8 @@ int _start(KHandle pci_device) {
     op_base[13] = (dcbaap_paddr >> 32ull);
     op_base[12] = dcbaap_paddr & 0xFFFFFFFF; // (DCBAAP @ 30h)
     //   4. Defgine the Command ring dequeue pointer
-    op_base[6] = (crcr_paddr & 0xFFFFFFFF) | (1<<3) | command_ring_cycle; // (CRCR @ 18h)
-    op_base[7] = (crcr_paddr >> 32ull);
+    op_base[6] = (crcr.base_paddr & 0xFFFFFFFF) | (1<<3) | crcr.cycle_bit; // (CRCR @ 18h)
+    op_base[7] = (crcr.base_paddr >> 32ull);
     //   5. Runtime Register space
     volatile uint32_t* interrupt = &rt_regs[8];
     {
@@ -299,7 +363,7 @@ int _start(KHandle pci_device) {
             uint32_t type = (trb[3] >> 10) & 0b111111;
             if (type == 0x21) { // Command completion
                 uintptr_t cmd_ptr = trb[0] | ((uintptr_t) trb[1] << 32ull);
-                volatile uint32_t* cmd = &crcr[(cmd_ptr - crcr_paddr) / 4];
+                volatile uint32_t* cmd = ring_cmd_at(&crcr, cmd_ptr);
 
                 uint32_t completed_type = (cmd[3] >> 10) & 0b111111;
                 printf("%d : Completed Event%p %#x (type=%d)\n", trb[2] >> 24u, cmd_ptr, trb[3], completed_type);
@@ -308,7 +372,7 @@ int _start(KHandle pci_device) {
                     // We have a slot ID now
                     size_t i = 0;
                     for (; i < max_ports; i++) {
-                        if (ports[i].state == PORT_DEFAULT && ports[i].enable_slot_cmd == cmd_ptr) {
+                        if (ports[i].state == PORT_DEFAULT && ports[i].init_cmd == cmd_ptr) {
                             break;
                         }
                     }
@@ -317,6 +381,8 @@ int _start(KHandle pci_device) {
                         ports[i].slot = (trb[3] >> 24u) - 1;
                         usb_fsm(MSG_SLOT_ENABLE, i, ports[i].slot);
                     }
+                } else if (completed_type == 11) {
+
                 }
             } else if (type == 0x22) { // Port status change
                 int port = (trb[0] >> 24) - 1;

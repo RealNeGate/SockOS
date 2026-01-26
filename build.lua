@@ -111,7 +111,7 @@ rules({
 do
     local init_rd_list = {
         "userland/drivers.txt",
-        "objs/desktop.so",
+        "objs/xhci.so",
     }
 
     table.insert(lines, "# INIT PROGRAM")
@@ -119,8 +119,8 @@ do
         flags = elf_cflags.." -fuse-ld=lld -T userland/init/link.ld -fpic"
     })
 
-    table.insert(lines, "# DESKTOP")
-    build("objs/desktop.so", "cc", "userland/desktop/main.c", {
+    table.insert(lines, "# USB")
+    build("objs/xhci.so", "cc", "userland/xhci/main.c", {
         flags = elf_cflags.." -fuse-ld=lld -fpic"
     })
 

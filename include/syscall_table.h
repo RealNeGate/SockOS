@@ -14,6 +14,7 @@ X(mmap)
 X(munmap)
 X(mpin)
 X(mdump)
+X(get_paddr)
 X(vmo_create)
 X(vmo_get_size)
 // PCI
