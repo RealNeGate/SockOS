@@ -32,18 +32,22 @@ bool vmem_addrhm_cmp(const void* a, const void* b) {
 
 static size_t vmem_node_bin_search(VMem_Node* node, uint32_t key, int start_i) {
     bool is_leaf = node->is_leaf;
-    size_t left = start_i, right = node->key_count + !is_leaf;
-    while (left < right) {
+    size_t left = start_i, right = node->key_count;
+    while (left != right) {
         size_t i = (left + right) / 2;
         uintptr_t key_at_idx = node->keys[i];
+
+        // kprintf("  STEP %p %p %d %d\n", key_at_idx, key, i, node->key_count);
         if (key_at_idx >= key) {
-            if (is_leaf) { return i; }
+            if (is_leaf && key_at_idx == key) { return i; }
             right = i;
         } else {
             left = i + 1;
         }
     }
-    return left;
+
+    // kprintf("  A %d %d\n", right - is_leaf, is_leaf);
+    return right - is_leaf;
 }
 
 VMem_Cursor vmem_cursor_first(Env* env) {
@@ -62,35 +66,40 @@ VMem_Cursor vmem_cursor_next(VMem_Cursor cur) {
     return cur;
 }
 
+uintptr_t vmem_cursor_key(VMem_Cursor cur) {
+    return cur.node->keys[cur.index];
+}
+
 bool vmem_cursor_eq(VMem_Cursor* a, VMem_Cursor* b) {
     return a->node == b->node && a->index == b->index;
 }
 
 VMem_Cursor vmem_node_lookup(Env* env, uintptr_t key) {
     VMem_Node* node = env->addr_space.root;
-    kprintf("LOOKUP %p %p\n", env, key);
+    if (node == NULL) {
+        return (VMem_Cursor){ 0 };
+    }
+
+    // kprintf("LOOKUP %p %p\n", env, key);
 
     // layers of binary search
-    while (node) {
+    for (;;) {
         int index = vmem_node_bin_search(node, key, 0);
-        kprintf("  STEP %p %d\n", node->keys[0], index);
+        if (node->is_leaf) {
+            if (index < 0) {
+                // kprintf("  LEAF %p %d (NO MATCH)\n", node->keys[index], index);
+                return (VMem_Cursor){ 0 };
+            }
 
-        if (node->keys[index] > key) {
-            return (VMem_Cursor){ 0 };
+            // kprintf("  LEAF %p %d\n", node->keys[index], index);
+            return (VMem_Cursor){ node, index };
         } else {
-            if (node->is_leaf) {
-                return (VMem_Cursor){ node, index };
-            }
-
-            kassert(node != node->kids[index], "bad B+ tree");
+            kassert(index <= node->key_count, "OOB %d <= %d", index, node->key_count);
+            kassert(node->kids[index] != NULL, "bad B+ tree, %d", index);
+            // kprintf("  INTR %p %d\n", node->keys[index], index);
             node = node->kids[index];
-            if (node == NULL) {
-                vmem_dump(env);
-                kprintf("NODE: %p %p\n", node, key);
-            }
         }
     }
-    return (VMem_Cursor){ 0 };
 }
 
 void vmem_node_split_child(VMem_Node* x, VMem_Node* y, int idx) {
@@ -136,18 +145,22 @@ void vmem_node_split_child(VMem_Node* x, VMem_Node* y, int idx) {
     x->key_count += 1;
 }
 
+void vmem_cursor_remove(Env* env, VMem_Node* node, int start, int count) {
+    if (node != NULL) {
+        // kprintf("REMOVE %d\n", count);
+
+        // shift down
+        node->key_count -= count;
+        FOR_N(i, start + count - 1, node->key_count) {
+            node->keys[i] = node->keys[i + count];
+            node->vals[i] = node->vals[i + count];
+        }
+    }
+}
+
 void vmem_node_remove(Env* env, uintptr_t key) {
     VMem_Cursor cursor = vmem_node_lookup(env, key);
-    if (cursor.node == NULL) { return; }
-
-    // shift down
-    VMem_Node* node = cursor.node;
-    node->key_count -= 1;
-
-    FOR_N(i, cursor.index, node->key_count) {
-        node->keys[i] = node->keys[i + 1];
-        node->vals[i] = node->vals[i + 1];
-    }
+    vmem_cursor_remove(env, cursor.node, cursor.index, 1);
 }
 
 // insert range into B-tree
@@ -209,14 +222,16 @@ VMem_PageDesc* vmem_node_insert(Env* env, uintptr_t key) {
             left = vmem_node_bin_search(node, key, 0);
         }
 
+        kassert(node->key_count > 0, "shouldn't have empty leaf nodes");
+        // kprintf("INSERT @ %p[%d] %p %p\n", node, left, key, node->keys[node->key_count - 1]);
+
         if (left >= 0 && node->keys[left] == key) {
-            node->keys[left] = key;
             return &node->vals[left];
         }
+        left += 1;
 
         // shift up
-        int j = node->key_count;
-        while (j-- && node->keys[j] > key) {
+        FOR_REV_N(j, left, node->key_count) {
             node->keys[j + 1] = node->keys[j];
             node->vals[j + 1] = node->vals[j];
         }
@@ -224,13 +239,13 @@ VMem_PageDesc* vmem_node_insert(Env* env, uintptr_t key) {
         kassert(node->key_count < VMEM_NODE_MAX_KEYS, "jover");
         node->key_count += 1;
 
-        kassert(j + 1 < node->key_count, "jover");
-        node->keys[j + 1] = key;
-        return &node->vals[j + 1];
+        kassert(left < node->key_count, "jover");
+        node->keys[left] = key;
+        return &node->vals[left];
     }
 }
 
-void vmem_split(Env* env, VMem_Cursor cursor, uintptr_t vaddr, bool direction) {
+void vmem_split(Env* env, VMem_Cursor cursor, uintptr_t vaddr) {
     if (cursor.node == NULL) {
         return;
     }
@@ -260,24 +275,39 @@ void vmem_unmap(Env* env, uintptr_t vaddr, size_t size) {
     VMem_Cursor bot_cursor = vmem_node_lookup(env, vaddr);
     if (bot_cursor.node != NULL) {
         VMem_Cursor top_cursor = vmem_node_lookup(env, vaddr + size);
-        vmem_split(env, bot_cursor, vaddr, false);
-        vmem_split(env, top_cursor, vaddr + size, true);
+        vmem_split(env, top_cursor, vaddr + size);
+        vmem_split(env, bot_cursor, vaddr);
 
-        // Remove middle range
-        /* bot_cursor = vmem_node_lookup(env, vaddr);
-        top_cursor = vmem_node_lookup(env, vaddr + size);
+        // Remove any descriptors from the middle of the range
+        VMem_Cursor cursor = vmem_node_lookup(env, vaddr);
+        kprintf("[vmem] Unmap [%p - %p], Starting at %p\n", vaddr, vaddr + size - 1, vmem_cursor_key(cursor));
 
-        // TODO(NeGate): we should do proper range removals, like they
-        // shouldn't be in the tree when we're done.
-        VMem_Cursor it = vmem_cursor_next(bot_cursor);
-        for (; vmem_cursor_eq(&it, &top_cursor); it = vmem_cursor_next(it)) {
-            VMem_PageDesc* desc = &it.node->vals[it.index];
-            desc->valid = 0;
+        cursor = vmem_cursor_next(bot_cursor);
 
-            uintptr_t start_addr = it.node->keys[it.index];
-            uintptr_t end_addr   = start_addr + desc->size;
-            kprintf("[vmem] Unmap [%p - %p]\n", start_addr, end_addr - 1);
-        } */
+        // TODO(NeGate): this is easily some of the most
+        // dogshit handling i could do... let's optimize that in the future
+        while (cursor.node) {
+            size_t key_count = cursor.node->key_count;
+            size_t start_i   = cursor.index;
+            while (cursor.index < key_count) {
+                VMem_PageDesc* desc = &cursor.node->vals[cursor.index];
+                uintptr_t start_addr = cursor.node->keys[cursor.index];
+                uintptr_t end_addr   = start_addr + desc->size;
+                if (start_addr >= vaddr + size) {
+                    vmem_cursor_remove(env, cursor.node, start_i, cursor.index - start_i);
+                    return;
+                }
+
+                kprintf("[vmem] Desc unmap [%p - %p]\n", start_addr, end_addr - 1);
+                cursor.index++;
+            }
+
+            // Remove the remaining piece of the node
+            vmem_cursor_remove(env, cursor.node, start_i, cursor.node->key_count - start_i);
+
+            cursor.node = cursor.node->next;
+            cursor.index = 0;
+        }
     }
 }
 
@@ -285,18 +315,26 @@ void vmem_dump(Env* env) {
     kprintf("MEM DUMP %p\n", env);
 
     VMem_Cursor cursor = vmem_cursor_first(env);
-    for (; cursor.node; cursor = vmem_cursor_next(cursor)) {
-        VMem_PageDesc* desc = &cursor.node->vals[cursor.index];
-        uintptr_t start_addr = cursor.node->keys[cursor.index];
-        uintptr_t end_addr   = start_addr + desc->size;
+    while (cursor.node) {
+        size_t key_count = cursor.node->key_count;
+        while (cursor.index < key_count) {
+            VMem_PageDesc* desc = &cursor.node->vals[cursor.index];
+            uintptr_t start_addr = cursor.node->keys[cursor.index];
+            uintptr_t end_addr   = start_addr + desc->size;
 
-        if (!desc->valid) {
-            kprintf("[%p - %p] FREE\n", start_addr, end_addr);
-        } else if (desc->vmo_handle) {
-            kprintf("[%p - %p] VIEW: [%p + %zu)\n", start_addr, end_addr, desc->vmo_handle, desc->offset);
-        } else {
-            kprintf("[%p - %p]\n", start_addr, end_addr);
+            if (!desc->valid) {
+                kprintf("[%p - %p] FREE\n", start_addr, end_addr);
+            } else if (desc->vmo_handle) {
+                kprintf("[%p - %p] VIEW: [%p + %zu)\n", start_addr, end_addr, desc->vmo_handle, desc->offset);
+            } else {
+                kprintf("[%p - %p]\n", start_addr, end_addr);
+            }
+            cursor.index++;
         }
+        kprintf("VVV\n");
+
+        cursor.node = cursor.node->next;
+        cursor.index = 0;
     }
     kprintf("\n");
 }
@@ -308,7 +346,6 @@ uintptr_t vmem_map(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_t
     if (vaddr == 0) {
         vaddr = 0xA0000000;
         VMem_Cursor cursor = vmem_node_lookup(env, vaddr);
-        kprintf("LOOKUP %p %p[%d]\n", vaddr, cursor.node, cursor.index);
 
         // we only want addresses past vaddr so skip one if we're behind it
         if (cursor.node && cursor.node->keys[cursor.index] < vaddr) {
@@ -443,7 +480,6 @@ bool vmem_segfault(Env* env, uintptr_t access_addr, bool is_write) {
     // we don't care where in the page it's located
     access_addr &= -PAGE_SIZE;
 
-    printf("SEGGY %p\n", access_addr);
     VMem_Cursor cursor = vmem_node_lookup(env, access_addr);
     if (cursor.node == NULL) {
         // literally no pages

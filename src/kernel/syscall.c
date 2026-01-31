@@ -192,16 +192,7 @@ SYS_FN(mdump) {
         KCHECK(env->super.tag == KOBJECT_ENV, RESULT_WRONG_HANDLE);
     }
 
-    kprintf("MEM DUMP %p\n", env);
-    VMem_Cursor cursor = { env->addr_space.root, 0 };
-    for (; cursor.node; cursor = vmem_cursor_next(cursor)) {
-        VMem_PageDesc* desc = &cursor.node->vals[cursor.index];
-        uintptr_t start_addr = cursor.node->keys[cursor.index];
-        uintptr_t end_addr   = start_addr + desc->size;
-
-        kprintf("[%p - %p] %d\n", start_addr, end_addr, desc->valid);
-    }
-    kprintf("\n");
+    vmem_dump(env);
     return 0;
 }
 
@@ -212,8 +203,6 @@ SYS_FN(get_paddr) {
     uintptr_t paddr = vmem_translate(&env->addr_space.working_set, SYS_PARAM0);
     if (paddr == 0) {
         // Try to commit the page
-        kprintf("get_paddr: Commit page! %p\n", SYS_PARAM0);
-
         vmem_segfault(env, SYS_PARAM0, false);
         paddr = vmem_translate(&env->addr_space.working_set, SYS_PARAM0);
     }

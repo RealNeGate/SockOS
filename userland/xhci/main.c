@@ -244,7 +244,6 @@ static void usb_fsm(int msg, int port, int slot) {
 
         case MSG_SLOT_ENABLE: {
             printf("[usb] Port%u is associated with Slot%u\n", port, slot);
-            fault_handler();
 
             uintptr_t in_ctx_paddr;
             InputContext* in_ctx = pin(4096, &in_ctx_paddr);
@@ -256,8 +255,6 @@ static void usb_fsm(int msg, int port, int slot) {
             ring_alloc(xfer_ring, 256);
 
             uint32_t speed = (*sts_ptr >> 10u) & 0xF;
-            syscall(SYS_test, speed);
-
             uint32_t max_packet = 8;
             switch (speed) {
                 case USB_SPEED_SUPER:
@@ -269,15 +266,12 @@ static void usb_fsm(int msg, int port, int slot) {
                 break;
             }
 
-            syscall(SYS_test, 1);
             // control context, enabling A0 and A1
             in_ctx->arr[0].data[1] = 3;
-            syscall(SYS_test, 2);
 
             // slot context
             in_ctx->arr[1].data[0] = (1 << 27u) | (speed << 20u);
             in_ctx->arr[1].data[1] = ((port + 1) << 16u);
-            syscall(SYS_test, 3);
 
             // endpoint 0
             //                        CErr        EP Type     Max Packet Size
@@ -287,7 +281,6 @@ static void usb_fsm(int msg, int port, int slot) {
 
             dcbaap[slot] = out_ctx_paddr;
             printf("[usb] Initialized Port%u with In:%p, Out:%p Transfer:%p (%zu max packet)\n", port, in_ctx_paddr, out_ctx_paddr, xfer_ring->base_paddr, max_packet);
-            fault_handler();
 
             // submit AddressDevice command
             ports[port].state = PORT_WAIT_FOR_ADDRESS;
@@ -419,7 +412,6 @@ int _start(KHandle pci_device) {
                 printf("Unsupported event %d\n", type);
             }
             advanced = true;
-            printf("AA\n");
             fault_handler();
 
             trb_i += 4;

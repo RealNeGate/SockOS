@@ -131,6 +131,7 @@ typedef NBHM VMem_WorkingSet;
 
 uintptr_t vmem_map(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_t size, VMem_Flags flags, uintptr_t* out_paddr);
 void vmem_add_range(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_t vsize, VMem_Flags flags);
+VMem_Cursor vmem_node_lookup(Env* env, uintptr_t key);
 
 // maps a kernel page to a virtual address.
 void vmem_commit_page(Env* env, uintptr_t vaddr, void* kaddr);

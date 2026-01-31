@@ -169,6 +169,24 @@ void kmain(BootInfo* restrict info) {
     }
     #endif
 
+    #if 0
+    Env* env = env_create();
+    FOR_N(i, 0, 32) {
+        printf("HANDLE %zu %p\n", i, 0xA000 + i*4096);
+        vmem_add_range(env, 0, 0xA000 + i*4096, 0, 4096, 0);
+        if (i == 1) {
+            vmem_dump(env);
+        }
+    }
+    vmem_dump(env);
+    vmem_add_range(env, 0, 0xB000, 0, 8192, 0);
+    vmem_dump(env);
+
+    vmem_node_lookup(env, 0);
+    vmem_node_lookup(env, 0x11002);
+    vmem_node_lookup(env, 0x13002);
+
+    #else
     static _Alignas(4096) const uint8_t init_elf[] = {
         #embed "../../objs/init.elf"
     };
@@ -177,6 +195,7 @@ void kmain(BootInfo* restrict info) {
     void* init_elf_ptr = paddr2kaddr(((uintptr_t) init_elf - boot_info->elf_virtual_ptr) + boot_info->elf_physical_ptr);
     Thread* bootstrap = env_load_elf(env, init_elf_ptr, sizeof(init_elf));
     thread_resume(bootstrap);
+    #endif
 
     // Thread* t = thread_create(NULL, sched_load_balancer, 0, (uintptr_t) kheap_alloc(8192), 8192);
     // thread_resume(t);
