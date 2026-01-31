@@ -31,13 +31,27 @@ bool vmem_addrhm_cmp(const void* a, const void* b) {
 #include <nbhm.h>
 
 static size_t vmem_node_bin_search(VMem_Node* node, uint32_t key, int start_i) {
-    size_t left = start_i, right = node->key_count;
+    bool is_leaf = node->is_leaf;
+    size_t left = start_i, right = node->key_count + !is_leaf;
     while (left < right) {
         size_t i = (left + right) / 2;
-        if (node->keys[i] > key) { right = i; }
-        else { left = i + 1; }
+        uintptr_t key_at_idx = node->keys[i];
+        if (key_at_idx >= key) {
+            if (is_leaf) { return i; }
+            right = i;
+        } else {
+            left = i + 1;
+        }
     }
-    return right - 1;
+    return left;
+}
+
+VMem_Cursor vmem_cursor_first(Env* env) {
+    VMem_Node* node = env->addr_space.root;
+    while (!node->is_leaf) {
+        node = node->kids[0];
+    }
+    return (VMem_Cursor){ node, 0 };
 }
 
 VMem_Cursor vmem_cursor_next(VMem_Cursor cur) {
@@ -54,29 +68,29 @@ bool vmem_cursor_eq(VMem_Cursor* a, VMem_Cursor* b) {
 
 VMem_Cursor vmem_node_lookup(Env* env, uintptr_t key) {
     VMem_Node* node = env->addr_space.root;
-    if (node == NULL) {
-        return (VMem_Cursor){ 0 };
-    }
+    kprintf("LOOKUP %p %p\n", env, key);
 
     // layers of binary search
-    for (;;) {
-        uint32_t left = 0, right = node->key_count;
-        while (left < right) {
-            uint32_t i = (left + right) / 2;
-            if (node->keys[i] > key) { right = i; }
-            else { left = i + 1; }
-        }
+    while (node) {
+        int index = vmem_node_bin_search(node, key, 0);
+        kprintf("  STEP %p %d\n", node->keys[0], index);
 
-        if (node->is_leaf) {
-            if (right == 0 && node->keys[0] > key) {
-                return (VMem_Cursor){ 0 };
+        if (node->keys[index] > key) {
+            return (VMem_Cursor){ 0 };
+        } else {
+            if (node->is_leaf) {
+                return (VMem_Cursor){ node, index };
             }
 
-            return (VMem_Cursor){ node, right - 1 };
-        } else {
-            node = node->kids[right - 1];
+            kassert(node != node->kids[index], "bad B+ tree");
+            node = node->kids[index];
+            if (node == NULL) {
+                vmem_dump(env);
+                kprintf("NODE: %p %p\n", node, key);
+            }
         }
     }
+    return (VMem_Cursor){ 0 };
 }
 
 void vmem_node_split_child(VMem_Node* x, VMem_Node* y, int idx) {
@@ -177,6 +191,7 @@ VMem_PageDesc* vmem_node_insert(Env* env, uintptr_t key) {
         int left = vmem_node_bin_search(node, key, 0);
         while (!node->is_leaf) {
             VMem_Node* kid = node->kids[left];
+            kassert(kid, "Bad node, %p[%d] = %p (%p)", node, left, kid, key);
 
             if (kid->key_count == VMEM_NODE_MAX_KEYS) {
                 // If the child is full, then split it
@@ -240,6 +255,8 @@ void vmem_split(Env* env, VMem_Cursor cursor, uintptr_t vaddr, bool direction) {
 }
 
 void vmem_unmap(Env* env, uintptr_t vaddr, size_t size) {
+    ON_DEBUG(VMEM)(kprintf("[vmem] unmap(%p, %p, %#zx)\n", env, vaddr, size));
+
     VMem_Cursor bot_cursor = vmem_node_lookup(env, vaddr);
     if (bot_cursor.node != NULL) {
         VMem_Cursor top_cursor = vmem_node_lookup(env, vaddr + size);
@@ -266,7 +283,8 @@ void vmem_unmap(Env* env, uintptr_t vaddr, size_t size) {
 
 void vmem_dump(Env* env) {
     kprintf("MEM DUMP %p\n", env);
-    VMem_Cursor cursor = { env->addr_space.root, 0 };
+
+    VMem_Cursor cursor = vmem_cursor_first(env);
     for (; cursor.node; cursor = vmem_cursor_next(cursor)) {
         VMem_PageDesc* desc = &cursor.node->vals[cursor.index];
         uintptr_t start_addr = cursor.node->keys[cursor.index];
@@ -275,7 +293,7 @@ void vmem_dump(Env* env) {
         if (!desc->valid) {
             kprintf("[%p - %p] FREE\n", start_addr, end_addr);
         } else if (desc->vmo_handle) {
-            kprintf("[%p - %p] VIEW: %p+%zu)\n", start_addr, end_addr, desc->vmo_handle, desc->valid);
+            kprintf("[%p - %p] VIEW: [%p + %zu)\n", start_addr, end_addr, desc->vmo_handle, desc->offset);
         } else {
             kprintf("[%p - %p]\n", start_addr, end_addr);
         }
@@ -290,20 +308,20 @@ uintptr_t vmem_map(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_t
     if (vaddr == 0) {
         vaddr = 0xA0000000;
         VMem_Cursor cursor = vmem_node_lookup(env, vaddr);
+        kprintf("LOOKUP %p %p[%d]\n", vaddr, cursor.node, cursor.index);
 
         // we only want addresses past vaddr so skip one if we're behind it
         if (cursor.node && cursor.node->keys[cursor.index] < vaddr) {
             cursor.index++;
             if (cursor.index >= cursor.node->key_count) {
                 cursor.index = 0;
-                cursor.node = cursor.node->next;
+                cursor.node  = cursor.node->next;
             }
         }
 
         int i = cursor.index;
         while (cursor.node) {
             kassert(cursor.node->is_leaf, "fuck");
-
             int key_count = cursor.node->key_count;
             for (; i < key_count; i++) {
                 uintptr_t free_space = cursor.node->keys[i] - vaddr;
@@ -325,7 +343,7 @@ uintptr_t vmem_map(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_t
     }
 
     done:
-    ON_DEBUG(VMEM)(kprintf("[vmem] mmap(%#zx) = %p\n", size, vaddr));
+    ON_DEBUG(VMEM)(kprintf("[vmem] map(%p, %#zx) = %p\n", env, size, vaddr));
 
     VMem_PageDesc* desc = vmem_node_insert(env, vaddr);
     *desc = (VMem_PageDesc){ .valid = 1, .flags = flags, .vmo_handle = vmo, .offset = offset, .size = size };
@@ -425,6 +443,7 @@ bool vmem_segfault(Env* env, uintptr_t access_addr, bool is_write) {
     // we don't care where in the page it's located
     access_addr &= -PAGE_SIZE;
 
+    printf("SEGGY %p\n", access_addr);
     VMem_Cursor cursor = vmem_node_lookup(env, access_addr);
     if (cursor.node == NULL) {
         // literally no pages

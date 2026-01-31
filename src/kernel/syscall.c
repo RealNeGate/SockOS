@@ -207,6 +207,7 @@ SYS_FN(mdump) {
 
 SYS_FN(get_paddr) {
     ON_DEBUG(SYSCALL)(kprintf("SYS_get_paddr(vaddr=%p)\n", SYS_PARAM0));
+
     Env* env = cpu->current_thread->parent;
     uintptr_t paddr = vmem_translate(&env->addr_space.working_set, SYS_PARAM0);
     if (paddr == 0) {

@@ -140,6 +140,9 @@ uintptr_t vmem_translate(VMem_WorkingSet* ws, uintptr_t vaddr);
 bool vmem_protect(Env* env, uintptr_t addr, size_t size, VMem_Flags flags);
 bool vmem_segfault(Env* env, uintptr_t access_addr, bool is_write);
 
+void vmem_dump(Env* env);
+
+VMem_Cursor vmem_cursor_first(Env* env);
 VMem_Cursor vmem_cursor_next(VMem_Cursor cur);
 
 ////////////////////////////////

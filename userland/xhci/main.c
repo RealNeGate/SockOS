@@ -70,26 +70,6 @@ typedef struct {
 } InputContext;
 
 typedef struct {
-    enum {
-        PORT_DISCONNECTED,
-        PORT_POLLING, // only USB2 does this
-
-        // the USB speed has been negociated but no address is setup.
-        PORT_DEFAULT,
-
-        // there's an address but no config.
-        PORT_ADDRESS,
-
-        // there's at least one config!
-        PORT_CONFIGURED,
-    } state;
-    bool usb3;
-    int slot;
-
-    uintptr_t init_cmd;
-} Port;
-
-typedef struct {
     bool cycle_bit;
 
     uint32_t count;
@@ -101,6 +81,12 @@ typedef struct {
     uintptr_t dequeue_paddr;
 } HCI_Ring;
 
+#define assert(cond) if (!(cond)) { assert_msg(#cond); }
+static void assert_msg(const char* str) {
+    printf("assert condition failed! %s\n", str);
+    fault_handler();
+}
+
 enum { PAGE_SIZE_DWORDS = 4096 / 4 };
 static void ring_alloc(HCI_Ring* ring, size_t cnt) {
     size_t size = cnt*16;
@@ -108,8 +94,9 @@ static void ring_alloc(HCI_Ring* ring, size_t cnt) {
     ring->cycle_bit = true;
     ring->count = cnt;
 
-    ring->base = mmap(0, log_stream, 0, size, PROT_READ | PROT_WRITE, 0);
+    ring->base = mmap(0, 0, 0, size, PROT_READ | PROT_WRITE, 0);
     ring->base_paddr = syscall(SYS_get_paddr, ring->base);
+    assert(ring->base_paddr);
 
     ring->dequeue = ring->base;
     ring->dequeue_paddr = ring->base_paddr;
@@ -177,6 +164,33 @@ static void ring_submit_cmd(HCI_Ring* ring, int type, int slot, uint32_t cmd[3])
     ring_advance(ring);
 }
 
+typedef struct {
+    enum {
+        PORT_DISCONNECTED,
+        PORT_POLLING, // only USB2 does this
+
+        // the USB speed has been negociated but no address is setup.
+        PORT_DEFAULT,
+
+        // we've submitted the address device command but haven't received an
+        // answer yet.
+        PORT_WAIT_FOR_ADDRESS,
+
+        // there's an address but no config.
+        PORT_ADDRESS,
+
+        // there's at least one config!
+        PORT_CONFIGURED,
+    } state;
+    bool usb3;
+    int slot;
+
+    uintptr_t init_cmd;
+
+    // Device rings
+    HCI_Ring xfer_ring;
+} Port;
+
 static Port ports[MAX_PORTS];
 static volatile uint32_t* doorbell;
 static volatile uint32_t* op_base;
@@ -195,6 +209,9 @@ enum {
 };
 
 static void usb_fsm(int msg, int port, int slot) {
+    printf("USB_FSM(%d, %d, %d)\n", msg, port, slot);
+    fault_handler();
+
     volatile uint32_t* sts_ptr = &op_base[0x100 + (4 * port)];
     switch (msg) {
         case MSG_PORT_CHANGE: {
@@ -227,6 +244,7 @@ static void usb_fsm(int msg, int port, int slot) {
 
         case MSG_SLOT_ENABLE: {
             printf("[usb] Port%u is associated with Slot%u\n", port, slot);
+            fault_handler();
 
             uintptr_t in_ctx_paddr;
             InputContext* in_ctx = pin(4096, &in_ctx_paddr);
@@ -234,10 +252,12 @@ static void usb_fsm(int msg, int port, int slot) {
             uintptr_t out_ctx_paddr;
             uint32_t* out_ctx = pin(4096, &out_ctx_paddr);
 
-            uintptr_t xfer_paddr = 0;
-            // uint32_t* xfer = pin(4096, &xfer_paddr);
+            HCI_Ring* xfer_ring = &ports[port].xfer_ring;
+            ring_alloc(xfer_ring, 256);
 
             uint32_t speed = (*sts_ptr >> 10u) & 0xF;
+            syscall(SYS_test, speed);
+
             uint32_t max_packet = 8;
             switch (speed) {
                 case USB_SPEED_SUPER:
@@ -249,26 +269,31 @@ static void usb_fsm(int msg, int port, int slot) {
                 break;
             }
 
+            syscall(SYS_test, 1);
             // control context, enabling A0 and A1
             in_ctx->arr[0].data[1] = 3;
+            syscall(SYS_test, 2);
 
             // slot context
             in_ctx->arr[1].data[0] = (1 << 27u) | (speed << 20u);
             in_ctx->arr[1].data[1] = ((port + 1) << 16u);
+            syscall(SYS_test, 3);
 
             // endpoint 0
             //                        CErr        EP Type     Max Packet Size
-            in_ctx->arr[1].data[1] = (3 << 1u) | (4 << 3u) | (max_packet << 16u);
-            in_ctx->arr[1].data[2] = (xfer_paddr & 0xFFFFFFF0) | 1u;
-            in_ctx->arr[1].data[3] = (xfer_paddr >> 32ull);
+            in_ctx->arr[2].data[1] = (3 << 1u) | (4 << 3u) | (max_packet << 16u);
+            in_ctx->arr[2].data[2] = (xfer_ring->base_paddr & 0xFFFFFFF0) | 1u;
+            in_ctx->arr[2].data[3] = (xfer_ring->base_paddr >> 32ull);
 
             dcbaap[slot] = out_ctx_paddr;
-            printf("[usb] Initialized Port%u with In:%p, Out:%p Transfer:%p\n", port, in_ctx_paddr, out_ctx_paddr, xfer_paddr);
+            printf("[usb] Initialized Port%u with In:%p, Out:%p Transfer:%p (%zu max packet)\n", port, in_ctx_paddr, out_ctx_paddr, xfer_ring->base_paddr, max_packet);
+            fault_handler();
 
             // submit AddressDevice command
+            ports[port].state = PORT_WAIT_FOR_ADDRESS;
             ports[port].init_cmd = crcr.dequeue_paddr;
             uint32_t cmd[3] = { in_ctx_paddr & 0xFFFFFFF0, in_ctx_paddr >> 32ull };
-            ring_submit_cmd(&crcr, 11, slot, cmd);
+            ring_submit_cmd(&crcr, 11, 1+slot, cmd);
             ring_doorbell(0, 0);
         } break;
     }
@@ -303,6 +328,9 @@ int _start(KHandle pci_device) {
     op_base  = &mmio[(mmio[0] & 0xFF) >> 2];
     volatile uint32_t* rt_regs = &mmio[mmio[6] >> 2];
     doorbell = &mmio[mmio[5] >> 2];
+
+    int slot_size = (mmio[4] >> 2) & 1 ? 64 : 32;
+    printf("[usb] Slot size: %zu\n", slot_size);
 
     uint32_t max_ports = mmio[1] >> 24u;
 
@@ -391,6 +419,8 @@ int _start(KHandle pci_device) {
                 printf("Unsupported event %d\n", type);
             }
             advanced = true;
+            printf("AA\n");
+            fault_handler();
 
             trb_i += 4;
             if (trb_i == 4096/4) {
