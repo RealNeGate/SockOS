@@ -395,10 +395,31 @@ static void usb_fsm(int msg, int port, int slot) {
     }
 }
 
+static KHandle mailbox;
+void request_handler(void* arg) {
+    uint64_t msg[4];
+    uint64_t fn = syscall(SYS_mailbox_wait, mailbox, msg);
+    for (;;) {
+        // process message
+        syscall(SYS_test, msg[0]);
+
+        // reply and wait for the next message
+        fn = syscall(SYS_mailbox_reply, mailbox, msg, msg[0] + 1, 0);
+    }
+}
+
 int _start(KHandle pci_device) {
     /* uint64_t info[4];
     int fb_bar = syscall(SYS_fb_grab, info);
     uint32_t* fb = (uint32_t*) syscall(SYS_mmap, fb_bar, 0, info[3]); */
+
+    // create & install mailbox
+    mailbox = syscall(SYS_mailbox_create, 4);
+    for (int i = 0; i < 4; i++) {
+        syscall(SYS_thread_create, request_handler, NULL);
+    }
+    // TODO(NeGate): register mailbox as endpoint
+    // syscall(SYS_mailbox_send, );
 
     size_t size;
     KHandle bar0 = syscall(SYS_pci_get_bar, pci_device, 0, &size);

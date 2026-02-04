@@ -45,6 +45,20 @@ static bool egest_usermem(uintptr_t dst, void* src, size_t size) {
     return true;
 }
 
+static void translate_vaddr(Env* env, uintptr_t vaddr) {
+    uintptr_t paddr = vmem_translate(&env->addr_space.working_set, vaddr);
+    if (paddr == 0) {
+        // Try to commit the page
+        vmem_segfault(env, SYS_PARAM0, false);
+        paddr = vmem_translate(&env->addr_space.working_set, vaddr);
+    }
+    return paddr;
+}
+
+static void copy_across_spaces(Env* dst, uintptr_t dst_vaddr, Env* src, uintptr_t src_vaddr) {
+
+}
+
 ////////////////////////////////
 // Syscall table
 ////////////////////////////////
@@ -401,7 +415,7 @@ SYS_FN(mailbox_create) {
 }
 
 SYS_FN(mailbox_send) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_send(mailbox=%d, arg0=%d, arg1=%d, arg2=%d, arg3=%d, arg4=%d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2, SYS_PARAM3, SYS_PARAM4, SYS_PARAM5));
+    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_send(mailbox=%d, len=%d, data=%d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2));
 
     Env* env = cpu->current_thread->parent;
     KObject_Mailbox* mailbox = env_get_handle(env, SYS_PARAM0, NULL);
@@ -432,24 +446,30 @@ SYS_FN(mailbox_send) {
     arch_set_address_space(next->parent);
 
     // TODO(NeGate): verify address
-    uint64_t* msg = (uint64_t*) next->state.rsi;
+    size_t msg_len = next->state.rsi;
+    uint64_t* msg = (uint64_t*) next->state.rdx;
 
-    // forward params
+    // msg length should be the min of the sender and receiver
+    if (msg_len < SYS_PARAM1) {
+        msg_len = SYS_PARAM1;
+    }
+
     #ifdef __x86_64__
-    next->state.rax = SYS_PARAM1;
-    msg[0] = SYS_PARAM2;
-    msg[1] = SYS_PARAM3;
-    msg[2] = SYS_PARAM4;
-    msg[3] = SYS_PARAM5;
+    next->state.rax = msg_len;
     #else
     #error "TODO"
     #endif
+
+    // copy packet across address spaces
+    {
+
+    }
 
     do_context_switch(&next->state, 0);
 }
 
 SYS_FN(mailbox_wait) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_wait(mailbox=%d, data=%p)\n", SYS_PARAM0, SYS_PARAM1));
+    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_wait(mailbox=%d, len=%d, data=%p)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2));
 
     Env* env = cpu->current_thread->parent;
     Thread* curr = cpu->current_thread;
