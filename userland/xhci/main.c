@@ -151,7 +151,7 @@ static void ring_advance(HCI_Ring* ring) {
     }
 }
 
-static void ring_submit_cmd(HCI_Ring* ring, int type, int slot, uint32_t cmd[3]) {
+static void ring_submit_cmd(HCI_Ring* ring, int type, uint32_t cmd[4]) {
     uint32_t* dst = ring->dequeue;
 
     // copy command (except control field)
@@ -159,7 +159,7 @@ static void ring_submit_cmd(HCI_Ring* ring, int type, int slot, uint32_t cmd[3])
 
     // write out, last word in the command must be written last since
     // it holds the control field and the producer cycle bit.
-    dst[3] = (slot << 24u) | ((type & 0x3F) << 10u) | ring->cycle_bit;
+    dst[3] = cmd[3] | ((type & 0x3F) << 10u) | ring->cycle_bit;
 
     ring_advance(ring);
 }
@@ -203,9 +203,97 @@ static void ring_doorbell(int slot, int target) {
     doorbell[slot] = target;
 }
 
+// https://www.beyondlogic.org/usbnutshell/usb6.shtml
+// Request type bitmap
+enum {
+    // recipient
+    USB_RECIP_DEVICE    = 0,
+    USB_RECIP_INTERFACE = 1,
+    USB_RECIP_ENDPOINT  = 2,
+    USB_RECIP_OTHER     = 3,
+    // type
+    USB_TYPE_STANDARD   = 0 << 5u,
+    USB_TYPE_CLASS      = 1 << 5u,
+    USB_TYPE_VENDOR     = 2 << 5u,
+    USB_TYPE_RESERVED   = 3 << 5u,
+    // direction
+    USB_HOST2DEV        = 0 << 7, // out
+    USB_DEV2HOST        = 1 << 7, // in
+};
+
+// Request
+enum {
+    USB_GET_STATUS        = 0,
+    USB_CLEAR_FEATURE     = 1,
+    USB_SET_FEATURE       = 3,
+    USB_SET_ADDRESS       = 5,
+    USB_GET_DESCRIPTOR    = 6,
+    USB_SET_DESCRIPTOR    = 7,
+    USB_GET_CONFIGURATION = 8,
+    USB_SET_CONFIGURATION = 9,
+};
+
+typedef struct {
+    // Setup stage
+    uint8_t request_type;
+    uint8_t request;
+    uint16_t value;
+    uint16_t index;
+    uint16_t length;
+
+    // Data stage
+    size_t data_len;
+    void* data;
+
+    // Status stage
+} URB;
+
+void* memcpy(void* dest, const void* src, size_t n) {
+    u8* d = (u8*)dest;
+    u8* s = (u8*)src;
+    for (size_t i = 0; i < n; i++) {
+        d[i] = s[i];
+    }
+    return dest;
+}
+
+static alignas(64) char usb_desc[64];
+static void submit_urb(int port, int slot, URB* urb) {
+    uint32_t cmd[4];
+    int trt = urb->data_len ? (urb->request_type & USB_DEV2HOST ? 3 : 2) : 0;
+
+    // Setup Stage Packet
+    memcpy(cmd, urb, sizeof(uint32_t[2]));
+    cmd[2] = 8u; // TRB Transfer length is fixed at 8
+    cmd[3] = (trt << 16u) | (1u << 6u);
+    ring_submit_cmd(&ports[port].xfer_ring, 2, cmd);
+
+    // Data Stage Packet (optional)
+    bool status_in = urb->request_type & USB_DEV2HOST;
+    if (urb->data_len) {
+        uintptr_t data_paddr = syscall(SYS_get_paddr, urb->data);
+
+        cmd[0] = data_paddr & 0xFFFFFFFF;
+        cmd[1] = data_paddr >> 32ull;
+        cmd[2] = urb->data_len;
+        cmd[3] = status_in << 16u;
+        ring_submit_cmd(&ports[port].xfer_ring, 3, cmd);
+    }
+
+    // Status Stage Packet
+    cmd[0] = 0;
+    cmd[1] = 0;
+    cmd[2] = 0;
+    cmd[3] = status_in << 16u;
+    ring_submit_cmd(&ports[port].xfer_ring, 4, cmd);
+
+    ring_doorbell(1+slot, 1);
+}
+
 enum {
     MSG_PORT_CHANGE,
     MSG_SLOT_ENABLE,
+    MSG_ADDRESSED,
 };
 
 static void usb_fsm(int msg, int port, int slot) {
@@ -233,8 +321,8 @@ static void usb_fsm(int msg, int port, int slot) {
 
                 // EnableSlot Command
                 ports[port].init_cmd = crcr.dequeue_paddr;
-                uint32_t cmd[3] = { 0 };
-                ring_submit_cmd(&crcr, 9, 0, cmd);
+                uint32_t cmd[4] = { 0, 0, 0, (1 + slot) << 24u };
+                ring_submit_cmd(&crcr, 9, cmd);
                 ring_doorbell(0, 0);
             } else { // Disconnect
                 printf("[usb] Port%u disconnecting, sts=%#x\n", port, sts);
@@ -285,9 +373,24 @@ static void usb_fsm(int msg, int port, int slot) {
             // submit AddressDevice command
             ports[port].state = PORT_WAIT_FOR_ADDRESS;
             ports[port].init_cmd = crcr.dequeue_paddr;
-            uint32_t cmd[3] = { in_ctx_paddr & 0xFFFFFFF0, in_ctx_paddr >> 32ull };
-            ring_submit_cmd(&crcr, 11, 1+slot, cmd);
+            uint32_t cmd[4] = { in_ctx_paddr & 0xFFFFFFF0, in_ctx_paddr >> 32ull, (1 + slot) << 24u };
+            ring_submit_cmd(&crcr, 11, cmd);
             ring_doorbell(0, 0);
+        } break;
+        case MSG_ADDRESSED: {
+            printf("Port%u is now addressed!\n", port);
+            ports[port].state = PORT_ADDRESS;
+
+            URB urb = {
+                .request_type = USB_DEV2HOST | USB_TYPE_STANDARD | USB_RECIP_DEVICE,
+                .request      = USB_GET_DESCRIPTOR,
+                .value        = 0,
+                .length       = 8,
+
+                .data_len     = 64,
+                .data         = usb_desc,
+            };
+            submit_urb(port, slot, &urb);
         } break;
     }
 }
@@ -389,21 +492,22 @@ int _start(KHandle pci_device) {
                 uint32_t completed_type = (cmd[3] >> 10) & 0b111111;
                 printf("%d : Completed Event%p %#x (type=%d)\n", trb[2] >> 24u, cmd_ptr, trb[3], completed_type);
 
-                if (completed_type == 9) {
-                    // We have a slot ID now
-                    size_t i = 0;
-                    for (; i < max_ports; i++) {
-                        if (ports[i].state == PORT_DEFAULT && ports[i].init_cmd == cmd_ptr) {
-                            break;
-                        }
+                // We have a slot ID now
+                size_t i = 0;
+                for (; i < max_ports; i++) {
+                    if (ports[i].init_cmd == cmd_ptr) {
+                        ports[i].init_cmd = 0;
+                        break;
                     }
+                }
 
-                    if (i < max_ports) {
+                if (i < max_ports) {
+                    if (ports[i].state == PORT_DEFAULT && completed_type == 9) {
                         ports[i].slot = (trb[3] >> 24u) - 1;
                         usb_fsm(MSG_SLOT_ENABLE, i, ports[i].slot);
+                    } else if (ports[i].state == PORT_WAIT_FOR_ADDRESS && completed_type == 11) {
+                        usb_fsm(MSG_ADDRESSED, i, ports[i].slot);
                     }
-                } else if (completed_type == 11) {
-
                 }
             } else if (type == 0x22) { // Port status change
                 int port = (trb[0] >> 24) - 1;
