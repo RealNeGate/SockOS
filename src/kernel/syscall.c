@@ -474,9 +474,7 @@ static void transfer_time(PerCPU* cpu, Thread* curr, Thread* next, CPUState* sta
     next->calling_thread = curr;
 
     // replace curr thread in scheduler state
-    kassert(cpu->sched->active.data[0] == curr, "BAD!!!");
     cpu->current_thread = next;
-    cpu->sched->active.data[0] = next;
 }
 
 SYS_FN(mailbox_send) {

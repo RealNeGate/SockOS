@@ -277,21 +277,27 @@ int _start(KHandle bootstrap_vmo) {
     uint64_t total_exec[256];
     uint64_t last_time = 0;
     for (;;) {
-        syscall(SYS_sleep, 100000);
+        syscall(SYS_sleep, 200000);
 
         uint64_t now_time = syscall(SYS_sched_time, total_exec);
         uint64_t delta = now_time - last_time;
-        last_time = now_time;
+        if (last_time == 0) {
+            FOR_N(i, 0, 4) {
+                last_exec[i] = total_exec[i];
+            }
+        } else {
+            printf("[");
+            FOR_N(i, 0, 4) {
+                uint64_t active = last_time ? total_exec[i] - last_exec[i] : 0;
+                last_exec[i] = total_exec[i];
 
-        printf("%7lu [", delta);
-        FOR_N(i, 0, 4) {
-            uint64_t active = last_time ? total_exec[i] - last_exec[i] : 0;
-            last_exec[i] = total_exec[i];
-
-            printf(" %7lu", active);
+                uint64_t percent = (active * 1000) / delta;
+                printf(" %3lu.%1lu%%", percent / 10, percent % 10);
+            }
+            printf("] latency = %luus\n", delta - 200000);
+            fault_handler();
         }
-        printf("]\n");
-        fault_handler();
+        last_time = now_time;
     }
 }
 

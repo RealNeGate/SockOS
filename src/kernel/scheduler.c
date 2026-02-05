@@ -131,7 +131,6 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
     // running task.
     Thread* curr = cpu->current_thread;
     if (curr != NULL) {
-        kassert(curr == runqueue_peek(&sched->active), "bad %p %p", curr, runqueue_peek(&sched->active));
         u64 delta = now_time - curr->start_time;
 
         // update total_exec_time
@@ -152,16 +151,11 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
                 return curr;
             }
 
-            // remove curr
-            runqueue_pop(&sched->active);
-
             // if the thread has completed it's time slice, we need to re-insert
             // into the queue with the new exec_time.
             ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p has stopped (max %lu us)\n", core_id, curr, curr->max_exec_time));
             runqueue_insert(&sched->active, curr);
         } else {
-            // remove curr
-            runqueue_pop(&sched->active);
             curr->exec_time -= sched->min_exec_time;
             ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p is blocked after %lu us\n", core_id, curr, curr->exec_time));
 
@@ -226,7 +220,7 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
     }
 
     // use lowest exec time thread
-    curr = runqueue_peek(&sched->active);
+    curr = runqueue_pop(&sched->active);
     curr->core_id = core_id;
     curr->status = THREAD_STATE_RUNNING;
 
@@ -235,8 +229,6 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
         sched->min_exec_time = curr->exec_time;
     }
 
-    // ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p with lowest exec time (%f ms)\n", core_id, curr, exec_time / 1000.0f));
-
     // allocate time slice
     curr->start_time = now_time;
     if (sched->ideal_exec_time > exec_time) {
@@ -244,25 +236,6 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
     } else {
         curr->max_exec_time = 1;
     }
-
-    // check the next timed wait, if there's something coming up which "deserves" the time more, we'll
-    // truncate our slice and resolve them as quickly as possible.
-    #if 0
-    if (sched->waiters.count > 0) {
-        Thread* waiter = sched->waiters.data[sched->waiters.head];
-        kassert(now_time < waiter->wake_time, "how is it still in the wait queue? %d %d", now_time, waiter->wake_time);
-
-        uint64_t time_until_wake = waiter->wake_time - now_time;
-
-        // exec time if it ran until the pre-empt point
-        uint64_t next_active  = (curr->exec_time + time_until_wake) - sched->min_exec_time;
-
-        // exec time if it ran normally
-        uint64_t next_active2 = (curr->exec_time + curr->max_exec_time) - sched->min_exec_time;
-
-        ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p gonna wake in %f ms (waiter: %f ms vs active: %f ms vs active2: %f ms)\n", core_id, waiter, (waiter->wake_time - now_time) / 1000.0f, waiter->exec_time / 1000.0f, next_active / 1000.0f, next_active2 / 1000.0f));
-    }
-    #endif
 
     ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p was alloted %lu us (exec time = %lu)\n", core_id, curr, curr->max_exec_time, exec_time));
     *out_wake_us = now_time + curr->max_exec_time;
