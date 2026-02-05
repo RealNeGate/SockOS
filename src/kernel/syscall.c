@@ -45,18 +45,49 @@ static bool egest_usermem(uintptr_t dst, void* src, size_t size) {
     return true;
 }
 
-static void translate_vaddr(Env* env, uintptr_t vaddr) {
-    uintptr_t paddr = vmem_translate(&env->addr_space.working_set, vaddr);
+static uintptr_t translate_vaddr(Env* env, uintptr_t vaddr) {
+    uintptr_t page_aligned = vaddr & -PAGE_SIZE;
+    uintptr_t paddr = vmem_translate(&env->addr_space.working_set, page_aligned);
     if (paddr == 0) {
         // Try to commit the page
-        vmem_segfault(env, SYS_PARAM0, false);
-        paddr = vmem_translate(&env->addr_space.working_set, vaddr);
+        vmem_segfault(env, page_aligned, false);
+        paddr = vmem_translate(&env->addr_space.working_set, page_aligned);
     }
-    return paddr;
+    return paddr + (vaddr & PAGE_SIZE - 1);
 }
 
-static void copy_across_spaces(Env* dst, uintptr_t dst_vaddr, Env* src, uintptr_t src_vaddr) {
+static bool copy_across_spaces(Env* dst, uintptr_t dst_vaddr, const char* src_vaddr, size_t size) {
+    uintptr_t end_dst = dst_vaddr + size;
+    while (dst_vaddr != end_dst) {
+        // EoP is End-of-Page
+        size_t eop_dst = (dst_vaddr + PAGE_SIZE) & -PAGE_SIZE;
+        if (eop_dst > end_dst) { eop_dst = end_dst; }
+        // Copy subregion of the page
+        uintptr_t dst_paddr = translate_vaddr(dst, dst_vaddr);
+        memcpy(paddr2kaddr(dst_paddr), src_vaddr, eop_dst - dst_vaddr);
+        // Advance to the next page
+        src_vaddr += eop_dst - dst_vaddr;
+        dst_vaddr = eop_dst;
+    }
+    return true;
+}
 
+static _Noreturn void yield_syscall(PerCPU* cpu, uintptr_t cr3, CPUState* state) {
+    const uint8_t* code = (const uint8_t*) state->rip;
+    printf("YIELD SYSCALL!!!\n");
+
+    #ifdef __x86_64__
+    kassert(code[-2] == 0x0F && code[-1] == 0x05, "not a syscall? huh?");
+    state->rip -= 2; // 0F 05
+    #else
+    #error "TODO"
+    #endif
+
+    sched_wait(SYS_PARAM0);
+
+    state->interrupt_num = 32;
+    uintptr_t new_cr3 = x86_irq_int_handler(state, cr3, cpu);
+    do_context_switch(state, new_cr3);
 }
 
 ////////////////////////////////
@@ -69,6 +100,24 @@ SYS_FN(sleep) {
     state->interrupt_num = 32;
     uintptr_t new_cr3 = x86_irq_int_handler(state, cr3, cpu);
     do_context_switch(state, new_cr3);
+}
+
+SYS_FN(sched_time) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_sched_time(arr=%p)\n", SYS_PARAM0));
+
+    u64 now_time = __rdtsc() / boot_info->tsc_freq;
+    u64* arr = (u64*) SYS_PARAM0;
+    FOR_N(i, 0, boot_info->core_count) {
+        PerCPU* some_cpu = &boot_info->cores[i];
+        if (cpu != some_cpu) {
+            spin_lock(&cpu->sched->lock);
+            arr[i] = sched_total_exec_time(some_cpu, now_time);
+            spin_unlock(&cpu->sched->lock);
+        } else {
+            arr[i] = sched_total_exec_time(some_cpu, now_time);
+        }
+    }
+    return now_time;
 }
 
 SYS_FN(debug_log) {
@@ -414,8 +463,24 @@ SYS_FN(mailbox_create) {
     return env_open_handle(env, 0, &mailbox->super);
 }
 
+static void transfer_time(PerCPU* cpu, Thread* curr, Thread* next, CPUState* state) {
+    // save out state
+    curr->state = *state;
+
+    next->start_time = curr->start_time;
+    next->exec_time = curr->exec_time;
+    next->max_exec_time = curr->max_exec_time;
+    next->wait_obj = NULL;
+    next->calling_thread = curr;
+
+    // replace curr thread in scheduler state
+    kassert(cpu->sched->active.data[0] == curr, "BAD!!!");
+    cpu->current_thread = next;
+    cpu->sched->active.data[0] = next;
+}
+
 SYS_FN(mailbox_send) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_send(mailbox=%d, len=%d, data=%d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2));
+    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_send(mailbox=%d, len=%d, data=%p)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2));
 
     Env* env = cpu->current_thread->parent;
     KObject_Mailbox* mailbox = env_get_handle(env, SYS_PARAM0, NULL);
@@ -424,45 +489,40 @@ SYS_FN(mailbox_send) {
 
     Thread* curr = cpu->current_thread;
     Thread* next = mailbox_send(mailbox);
+    if (next == NULL) {
+        // TODO(NeGate): mailbox has no one waiting to answer responses,
+        // we should setup a smarter scheduling at some point to signal
+        // when it's ready but for now we'll just yield.
+        yield_syscall(cpu, cr3, state);
+    }
 
     spin_lock(&cpu->sched->lock);
-    // if we're switching, save old thread state
-    curr->state = *state;
-
-    // transfer our time
-    next->start_time = curr->start_time;
-    next->exec_time = curr->exec_time;
-    next->max_exec_time = curr->max_exec_time;
-    next->wait_obj = NULL;
-    next->calling_thread = curr;
     // the sender thread is now blocked
+    transfer_time(cpu, curr, next, state);
     curr->wait_obj = mailbox;
-
-    cpu->current_thread = next;
-    cpu->sched->active.data[0] = next;
     spin_unlock(&cpu->sched->lock);
 
     kassert(next->parent, "mailboxes can't live in kernel-threads");
     arch_set_address_space(next->parent);
 
-    // TODO(NeGate): verify address
+    #ifdef __x86_64__
     size_t msg_len = next->state.rsi;
-    uint64_t* msg = (uint64_t*) next->state.rdx;
+    uintptr_t dst_ptr = next->state.rdx;
+    u64* out_val = &next->state.rax;
+    #else
+    #error "TODO"
+    #endif
 
     // msg length should be the min of the sender and receiver
     if (msg_len < SYS_PARAM1) {
         msg_len = SYS_PARAM1;
     }
+    *out_val = msg_len;
 
-    #ifdef __x86_64__
-    next->state.rax = msg_len;
-    #else
-    #error "TODO"
-    #endif
-
-    // copy packet across address spaces
-    {
-
+    // copy message across address spaces
+    if (!copy_across_spaces(next->parent, next->state.rdx, (const char*) SYS_PARAM2, msg_len)) {
+        // TODO(NeGate): error
+        kassert(0, "BADD!!!");
     }
 
     do_context_switch(&next->state, 0);
@@ -490,7 +550,7 @@ SYS_FN(mailbox_wait) {
 }
 
 SYS_FN(mailbox_reply) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_reply(mailbox=%d, msg=%p, ret0=%d, ret1=%d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2, SYS_PARAM3));
+    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_reply(mailbox=%d, len=%d, msg=%p)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2));
     Env* env = cpu->current_thread->parent;
     KObject_Mailbox* mailbox = env_get_handle(env, SYS_PARAM0, NULL);
     KCHECK(mailbox, RESULT_NO_HANDLE);
@@ -500,29 +560,24 @@ SYS_FN(mailbox_reply) {
     Thread* next = curr->calling_thread;
 
     spin_lock(&cpu->sched->lock);
-    // save old thread state
-    curr->state = *state;
-    // transfer our time
-    next->start_time = curr->start_time;
-    next->exec_time = curr->exec_time;
-    next->max_exec_time = curr->max_exec_time;
-    next->wait_obj = NULL;
     // the mailbox thread is now blocked
+    transfer_time(cpu, curr, next, state);
     curr->calling_thread = NULL;
     curr->wait_obj = mailbox;
     mailbox_recv(mailbox, curr);
-
-    cpu->current_thread = next;
-    cpu->sched->active.data[0] = next;
     spin_unlock(&cpu->sched->lock);
 
-    // passthru the params
     #ifdef __x86_64__
-    next->state.rax = SYS_PARAM2;
-    next->state.rdx = SYS_PARAM3;
+    uintptr_t dst_ptr = next->state.rdx;
+    size_t msg_len    = next->state.rsi;
     #else
     #error "TODO"
     #endif
+
+    if (!copy_across_spaces(next->parent, next->state.rdx, (const char*) SYS_PARAM2, msg_len)) {
+        // TODO(NeGate): error
+        kassert(0, "BADD!!!");
+    }
 
     kassert(next->parent, "mailboxes can't live in kernel-threads");
     uintptr_t new_cr3 = kaddr2paddr(next->parent->addr_space.hw_tables);

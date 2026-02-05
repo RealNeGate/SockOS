@@ -273,8 +273,25 @@ int _start(KHandle bootstrap_vmo) {
 
     fault_handler();
 
+    uint64_t last_exec[256];
+    uint64_t total_exec[256];
+    uint64_t last_time = 0;
     for (;;) {
         syscall(SYS_sleep, 100000);
+
+        uint64_t now_time = syscall(SYS_sched_time, total_exec);
+        uint64_t delta = now_time - last_time;
+        last_time = now_time;
+
+        printf("%7lu [", delta);
+        FOR_N(i, 0, 4) {
+            uint64_t active = last_time ? total_exec[i] - last_exec[i] : 0;
+            last_exec[i] = total_exec[i];
+
+            printf(" %7lu", active);
+        }
+        printf("]\n");
+        fault_handler();
     }
 }
 

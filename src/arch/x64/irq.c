@@ -247,6 +247,7 @@ uintptr_t timer_interrupt(CPUState* state, uintptr_t cr3, PerCPU* cpu, u64 now) 
     u64 next_wake;
     spin_lock(&cpu->sched->lock);
     Thread* next = sched_pick_next(cpu, now_micros, &next_wake);
+
     PageTable* old_address_space = paddr2kaddr(cr3);
 
     // if we're switching, save old thread state

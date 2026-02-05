@@ -113,18 +113,29 @@ bool sched_is_blocked(Thread* t) {
     return t->wake_time != 0 || atomic_load_explicit(&t->wait_obj, memory_order_relaxed);
 }
 
+u64 sched_total_exec_time(PerCPU* cpu, u64 now_time) {
+    u64 exec_time = atomic_load_explicit(&cpu->sched->total_exec_time, memory_order_relaxed);
+    Thread* curr = cpu->current_thread;
+    if (curr != NULL) {
+        exec_time += now_time - curr->start_time;
+    }
+    return exec_time;
+}
+
 Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
     int core_id = cpu - boot_info->cores;
     PerCPU_Scheduler* sched = cpu->sched;
 
     // kprintf("sched_pick_next(now=%d)\n", now_time);
-
     // We run this function when pre-emptions happen so we should check up on the last
     // running task.
     Thread* curr = cpu->current_thread;
     if (curr != NULL) {
         kassert(curr == runqueue_peek(&sched->active), "bad %p %p", curr, runqueue_peek(&sched->active));
         u64 delta = now_time - curr->start_time;
+
+        // update total_exec_time
+        atomic_fetch_add_explicit(&cpu->sched->total_exec_time, delta, memory_order_relaxed);
 
         // update exec_time, higher priorities
         curr->exec_time += delta;

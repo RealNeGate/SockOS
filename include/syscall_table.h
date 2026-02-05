@@ -1,4 +1,5 @@
 X(sleep)
+X(sched_time)
 X(test)
 // Env/Threads
 X(env_create)

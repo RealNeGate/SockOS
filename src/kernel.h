@@ -248,7 +248,7 @@ KObject_Mailbox* mailbox_create(size_t max_requests);
 // return the thread we'll be using the respond
 Thread* mailbox_send(KObject_Mailbox* mailbox);
 // hand the thread back, we're now waiting for new messages
-void mailbox_recv(KObject_Mailbox* mailbox, Thread* thread);
+bool mailbox_recv(KObject_Mailbox* mailbox, Thread* thread);
 
 KObject_Pipe* pipe_create(size_t max_requests);
 KObject_VMO* pipe_recv(KObject_Pipe* restrict pipe, uint64_t* offset, uint64_t* size);
@@ -346,6 +346,7 @@ struct PerCPU_Scheduler {
     Lock lock;
 
     atomic_bool idleing;
+    atomic_u64 total_exec_time;
 
     // in micros
     u64 ideal_exec_time;
@@ -360,6 +361,7 @@ void sched_yield(void);
 void sched_wait(u64 timeout);
 int sched_load_balancer(void*);
 
+u64 sched_total_exec_time(PerCPU* cpu, u64 now_time);
 Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us);
 
 void tq_insert(ThreadQueue* tq, Thread* t, bool is_waiter);
