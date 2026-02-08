@@ -49,7 +49,6 @@ void env_kill(Env* env) {
     spin_unlock(&env->lock);
 }
 
-static int round_robin_load_balance;
 Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintptr_t stack, size_t stack_size) {
     bool is_user = env != NULL;
 
@@ -97,24 +96,22 @@ Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintpt
     return new_thread;
 }
 
-void thread_resume(Thread* thread) {
-    /*int i = round_robin_load_balance;
-    if (++round_robin_load_balance == boot_info->core_count) {
-        round_robin_load_balance = 0;
-    }*/
-    // ON_DEBUG(SCHED)(kprintf("[sched] created Thread-%p, placed onto CPU-%d (%s)\n", thread, i, thread->parent ? "USER" : "KERNEL"));
+void thread_resume(Thread* thread, PerCPU* cpu) {
+    if (cpu == NULL) {
+        cpu = &boot_info->cores[0];
+    }
 
-    int i = 0;
+    int i = cpu - boot_info->cores;
 
     // Put to sleep on a core
-    PerCPU_Scheduler* sched = boot_info->cores[i].sched;
-    spin_lock(&sched->lock);
+    PerCPU_Scheduler* sched = cpu->sched;
+    spin_lock(&cpu->sched->lock);
     kassert(!sched_is_blocked(thread), "we shouldn't be blocked atm... why are you resuming us");
-    Thread* latest = atomic_load_explicit(&boot_info->cores[i].blocked_threads, memory_order_relaxed);
+    Thread* latest = atomic_load_explicit(&cpu->blocked_threads, memory_order_relaxed);
     do {
         thread->next_in_blocked = latest;
-    } while (!atomic_compare_exchange_strong_explicit(&boot_info->cores[i].blocked_threads, &latest, thread, memory_order_acq_rel, memory_order_acquire));
-    spin_unlock(&sched->lock);
+    } while (!atomic_compare_exchange_strong_explicit(&cpu->blocked_threads, &latest, thread, memory_order_acq_rel, memory_order_acquire));
+    spin_unlock(&cpu->sched->lock);
 
     arch_wake_up(i);
 }

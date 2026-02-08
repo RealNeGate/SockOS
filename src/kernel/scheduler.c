@@ -32,9 +32,29 @@ void sleep(u64 timeout) {
     sched_yield();
 }
 
+static int distance_to_core(int a, int b) {
+    if (a == b) {
+        return 0;
+    }
+    return 32 - __builtin_clz(a ^ b);
+}
+
+static int* sched_weight_matrix;
 void sched_init(void) {
     PerCPU* cpu = cpu_get();
     cpu->sched = kheap_zalloc(sizeof(PerCPU_Scheduler));
+
+    if (0 && cpu == &boot_info->cores[0]) {
+        kprintf("Init weight matrix!!!\n");
+        FOR_N(j, 0, boot_info->core_count) {
+            printf("[");
+            FOR_N(i, 0, boot_info->core_count) {
+                int dist = distance_to_core(i, j);
+                printf(" %d", dist);
+            }
+            printf(" ]\n");
+        }
+    }
 }
 
 void sched_wait(u64 timeout) {
@@ -136,7 +156,7 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
         // update total_exec_time
         atomic_fetch_add_explicit(&cpu->sched->total_exec_time, delta, memory_order_relaxed);
 
-        // update exec_time, higher priorities
+        // update exec_time
         curr->exec_time += delta;
         curr->start_time = now_time;
 

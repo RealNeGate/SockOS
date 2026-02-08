@@ -47,13 +47,50 @@ static bool egest_usermem(uintptr_t dst, void* src, size_t size) {
 
 static uintptr_t translate_vaddr(Env* env, uintptr_t vaddr) {
     uintptr_t page_aligned = vaddr & -PAGE_SIZE;
-    uintptr_t paddr = vmem_translate(&env->addr_space.working_set, page_aligned);
-    if (paddr == 0) {
-        // Try to commit the page
-        vmem_segfault(env, page_aligned, false);
-        paddr = vmem_translate(&env->addr_space.working_set, page_aligned);
+    uintptr_t page_offset = (vaddr & PAGE_SIZE - 1);
+
+    VMem_Cursor cursor = vmem_node_lookup(env, page_aligned);
+    if (cursor.node == NULL) {
+        // literally no pages
+        return 0;
     }
-    return paddr + (vaddr & PAGE_SIZE - 1);
+
+    // check if we're in range
+    VMem_PageDesc* desc  = &cursor.node->vals[cursor.index];
+    uintptr_t start_addr = cursor.node->keys[cursor.index];
+    uintptr_t end_addr   = start_addr + desc->size;
+    if (!desc->valid || page_aligned < start_addr || page_aligned >= end_addr) {
+        // we're in the gap between page descriptor
+        return 0;
+    }
+
+    VMem_WorkingSet* ws = &env->addr_space.working_set;
+    uintptr_t in_space_addr = page_aligned;
+    if (desc->vmo_handle != 0) {
+        // Translate address into VMO space
+        size_t offset = page_aligned - start_addr;
+        in_space_addr = desc->offset + offset;
+
+        KObject_VMO* vmo_ptr = env_get_handle(env, desc->vmo_handle, NULL);
+        if (vmo_ptr == NULL) {
+            return 0;
+        }
+
+        if (vmo_ptr->paddr) {
+            // physical addresses don't get cached in the working set, we're
+            // better off just not putting entries into a hash map.
+            return vmo_ptr->paddr + in_space_addr + page_offset;
+        }
+
+        // TODO(NeGate): implement pager behavior
+        ws = &vmo_ptr->pages;
+    }
+
+    uintptr_t paddr = vmem_translate(ws, in_space_addr);
+    if (paddr == 0) {
+        paddr = vmem_try_commit(env, desc, page_aligned, start_addr, end_addr);
+    }
+    return paddr ? paddr + page_offset : 0;
 }
 
 static bool copy_across_spaces(Env* dst, uintptr_t dst_vaddr, const char* src_vaddr, size_t size) {
@@ -72,7 +109,7 @@ static bool copy_across_spaces(Env* dst, uintptr_t dst_vaddr, const char* src_va
     return true;
 }
 
-static _Noreturn void yield_syscall(PerCPU* cpu, uintptr_t cr3, CPUState* state) {
+static _Noreturn void yield_syscall(PerCPU* cpu, uintptr_t cr3, CPUState* state, WaitQueue* wq) {
     const uint8_t* code = (const uint8_t*) state->rip;
     printf("YIELD SYSCALL!!!\n");
 
@@ -83,6 +120,7 @@ static _Noreturn void yield_syscall(PerCPU* cpu, uintptr_t cr3, CPUState* state)
     #error "TODO"
     #endif
 
+    waitqueue_wait(wq, cpu->current_thread);
     sched_wait(SYS_PARAM0);
 
     state->interrupt_num = 32;
@@ -263,12 +301,8 @@ SYS_FN(get_paddr) {
     ON_DEBUG(SYSCALL)(kprintf("SYS_get_paddr(vaddr=%p)\n", SYS_PARAM0));
 
     Env* env = cpu->current_thread->parent;
-    uintptr_t paddr = vmem_translate(&env->addr_space.working_set, SYS_PARAM0);
-    if (paddr == 0) {
-        // Try to commit the page
-        vmem_segfault(env, SYS_PARAM0, false);
-        paddr = vmem_translate(&env->addr_space.working_set, SYS_PARAM0);
-    }
+    uintptr_t paddr = translate_vaddr(env, SYS_PARAM0);
+    kprintf("TRANSLATE %p %p\n", SYS_PARAM0, paddr);
     return paddr;
 }
 
@@ -339,7 +373,7 @@ SYS_FN(thread_create) {
     KCHECK(thread, RESULT_NO_MEM);
 
     // make an accessible handle for the thread
-    thread_resume(thread);
+    thread_resume(thread, NULL);
     return env_open_handle(env, 0, &thread->super);
 }
 
@@ -491,7 +525,7 @@ SYS_FN(mailbox_send) {
         // TODO(NeGate): mailbox has no one waiting to answer responses,
         // we should setup a smarter scheduling at some point to signal
         // when it's ready but for now we'll just yield.
-        yield_syscall(cpu, cr3, state);
+        yield_syscall(cpu, cr3, state, &mailbox->tx_wait);
     }
 
     spin_lock(&cpu->sched->lock);
@@ -541,6 +575,9 @@ SYS_FN(mailbox_wait) {
     mailbox_recv(mailbox, curr);
     spin_unlock(&cpu->sched->lock);
 
+    // Notify any senders who think there's no one waiting
+    waitqueue_wake(&mailbox->tx_wait, cpu);
+
     // Pick a new task
     state->interrupt_num = 32;
     uintptr_t new_cr3 = x86_irq_int_handler(state, cr3, cpu);
@@ -558,12 +595,15 @@ SYS_FN(mailbox_reply) {
     Thread* next = curr->calling_thread;
 
     spin_lock(&cpu->sched->lock);
-    // the mailbox thread is now blocked
     transfer_time(cpu, curr, next, state);
     curr->calling_thread = NULL;
+    // Put the mailbox thread back on the wait list
     curr->wait_obj = mailbox;
     mailbox_recv(mailbox, curr);
     spin_unlock(&cpu->sched->lock);
+
+    // Notify any senders who think there's no one waiting
+    waitqueue_wake(&mailbox->tx_wait, cpu);
 
     #ifdef __x86_64__
     uintptr_t dst_ptr = next->state.rdx;

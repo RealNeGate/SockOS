@@ -138,7 +138,7 @@ static int ebr_thread_fn(void* arg) {
 
 void ebr_init(void) {
     Thread* t = thread_create(NULL, ebr_thread_fn, 0, (uintptr_t) kheap_alloc(KERNEL_STACK_SIZE), KERNEL_STACK_SIZE);
-    thread_resume(t);
+    thread_resume(t, NULL);
 }
 
 void ebr_free(void* ptr, size_t size) {

@@ -257,10 +257,12 @@ void* memcpy(void* dest, const void* src, size_t n) {
     return dest;
 }
 
-static alignas(64) char usb_desc[64];
+static alignas(4096) char usb_desc[4096];
 static void submit_urb(int port, int slot, URB* urb) {
     uint32_t cmd[4];
     int trt = urb->data_len ? (urb->request_type & USB_DEV2HOST ? 3 : 2) : 0;
+
+    printf("TRT: %d\n", trt);
 
     // Setup Stage Packet
     memcpy(cmd, urb, sizeof(uint32_t[2]));
@@ -270,15 +272,23 @@ static void submit_urb(int port, int slot, URB* urb) {
 
     // Data Stage Packet (optional)
     bool status_in = urb->request_type & USB_DEV2HOST;
+    uintptr_t data_paddr = 0;
     if (urb->data_len) {
-        uintptr_t data_paddr = syscall(SYS_get_paddr, urb->data);
+        data_paddr = syscall(SYS_get_paddr, urb->data);
 
         cmd[0] = data_paddr & 0xFFFFFFFF;
         cmd[1] = data_paddr >> 32ull;
         cmd[2] = urb->data_len;
         cmd[3] = status_in << 16u;
         ring_submit_cmd(&ports[port].xfer_ring, 3, cmd);
+
+        printf("DATA: %s\n", status_in ? "IN" : "OUT");
+        status_in = !status_in;
+    } else {
+        status_in = true;
     }
+
+    printf("STATUS: %s\n", status_in ? "IN" : "OUT");
 
     // Status Stage Packet
     cmd[0] = 0;
@@ -286,8 +296,9 @@ static void submit_urb(int port, int slot, URB* urb) {
     cmd[2] = 0;
     cmd[3] = status_in << 16u;
     ring_submit_cmd(&ports[port].xfer_ring, 4, cmd);
-
     ring_doorbell(1+slot, 1);
+
+    printf("URB.%d: %p | %d bytes!!!\n", slot, data_paddr, urb->data_len);
 }
 
 enum {
@@ -373,7 +384,7 @@ static void usb_fsm(int msg, int port, int slot) {
             // submit AddressDevice command
             ports[port].state = PORT_WAIT_FOR_ADDRESS;
             ports[port].init_cmd = crcr.dequeue_paddr;
-            uint32_t cmd[4] = { in_ctx_paddr & 0xFFFFFFF0, in_ctx_paddr >> 32ull, (1 + slot) << 24u };
+            uint32_t cmd[4] = { in_ctx_paddr & 0xFFFFFFF0, in_ctx_paddr >> 32ull, 0, (1 + slot) << 24u };
             ring_submit_cmd(&crcr, 11, cmd);
             ring_doorbell(0, 0);
         } break;
@@ -384,11 +395,11 @@ static void usb_fsm(int msg, int port, int slot) {
             URB urb = {
                 .request_type = USB_DEV2HOST | USB_TYPE_STANDARD | USB_RECIP_DEVICE,
                 .request      = USB_GET_DESCRIPTOR,
-                .value        = 0,
+                .value        = 1 << 8, // DT_DEVICE
                 .length       = 8,
 
-                .data_len     = 64,
-                .data         = usb_desc,
+                .data_len     = 8,
+                .data         = usb_desc + (slot*64),
             };
             submit_urb(port, slot, &urb);
         } break;
@@ -446,8 +457,8 @@ int _start(KHandle pci_device) {
     erst[2] = 1024 / 16;
     erst[3] = 0;
 
-    op_base  = &mmio[(mmio[0] & 0xFF) >> 2];
     volatile uint32_t* rt_regs = &mmio[mmio[6] >> 2];
+    op_base  = &mmio[(mmio[0] & 0xFF) >> 2];
     doorbell = &mmio[mmio[5] >> 2];
 
     int slot_size = (mmio[4] >> 2) & 1 ? 64 : 32;
@@ -515,7 +526,8 @@ int _start(KHandle pci_device) {
                 volatile uint32_t* cmd = ring_cmd_at(&crcr, cmd_ptr);
 
                 uint32_t completed_type = (cmd[3] >> 10) & 0b111111;
-                printf("%d : Completed Event%p %#x (type=%d)\n", trb[2] >> 24u, cmd_ptr, trb[3], completed_type);
+                uint32_t completition_code = trb[2] >> 24u;
+                printf("%d : Completed Event%p %#x (type=%d, cc=%#x)\n", trb[2] >> 24u, cmd_ptr, trb[3], completed_type, completition_code);
 
                 // We have a slot ID now
                 size_t i = 0;

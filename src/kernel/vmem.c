@@ -428,7 +428,7 @@ uintptr_t vmem_translate(VMem_WorkingSet* ws, uintptr_t vaddr) {
     return (uintptr_t) vmem_addrhm_get(ws, (char*) (vaddr + VMEM_WORKING_SET_OFFSET));
 }
 
-static void try_commit(Env* env, VMem_PageDesc* desc, uintptr_t access_addr, uintptr_t start_addr, uintptr_t end_addr) {
+uintptr_t vmem_try_commit(Env* env, VMem_PageDesc* desc, uintptr_t access_addr, uintptr_t start_addr, uintptr_t end_addr) {
     // Find the page's working set
     VMem_WorkingSet* ws = &env->addr_space.working_set;
     uintptr_t in_space_addr = access_addr;
@@ -440,7 +440,7 @@ static void try_commit(Env* env, VMem_PageDesc* desc, uintptr_t access_addr, uin
         KObject_VMO* vmo_ptr = env_get_handle(env, desc->vmo_handle, NULL);
         if (vmo_ptr == NULL) {
             kprintf("[vmem] touched page with invalid VMO %p (%p => VMO:%p)\n", desc->vmo_handle, access_addr, in_space_addr);
-            return;
+            return 0;
         }
 
         ON_DEBUG(VMEM)(kprintf("[vmem] first touch on VMO %p (%p => VMO:%p)\n", vmo_ptr, access_addr, in_space_addr));
@@ -450,7 +450,7 @@ static void try_commit(Env* env, VMem_PageDesc* desc, uintptr_t access_addr, uin
             // better off just not putting entries into a hash map.
             uintptr_t new_page = vmo_ptr->paddr + in_space_addr;
             arch_pte_update(env, access_addr & -PAGE_SIZE, new_page, desc->flags);
-            return;
+            return 0;
         }
 
         // TODO(NeGate): implement pager behavior
@@ -473,6 +473,7 @@ static void try_commit(Env* env, VMem_PageDesc* desc, uintptr_t access_addr, uin
     }
 
     arch_pte_update(env, access_addr & -PAGE_SIZE, actual_page, desc->flags);
+    return actual_page;
 }
 
 static _Alignas(4096) const uint8_t VMEM_ZERO_PAGE[4096];
@@ -525,7 +526,7 @@ bool vmem_segfault(Env* env, uintptr_t access_addr, bool is_write) {
 
     // kprintf("%p %zu (%p %p)\n", access_addr, pages_to_commit, start_addr, end_addr);
     FOR_N(i, 0, pages_to_commit) {
-        try_commit(env, desc, access_addr + i*PAGE_SIZE, start_addr, end_addr);
+        vmem_try_commit(env, desc, access_addr + i*PAGE_SIZE, start_addr, end_addr);
     }
     return true;
 }

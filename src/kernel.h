@@ -137,6 +137,7 @@ VMem_Cursor vmem_node_lookup(Env* env, uintptr_t key);
 void vmem_commit_page(Env* env, uintptr_t vaddr, void* kaddr);
 
 uintptr_t vmem_translate(VMem_WorkingSet* ws, uintptr_t vaddr);
+uintptr_t vmem_try_commit(Env* env, VMem_PageDesc* desc, uintptr_t access_addr, uintptr_t start_addr, uintptr_t end_addr);
 
 bool vmem_protect(Env* env, uintptr_t addr, size_t size, VMem_Flags flags);
 bool vmem_segfault(Env* env, uintptr_t access_addr, bool is_write);
@@ -149,6 +150,11 @@ VMem_Cursor vmem_cursor_next(VMem_Cursor cur);
 ////////////////////////////////
 // Kernel objects
 ////////////////////////////////
+typedef struct {
+    Lock lock;
+    Thread* thread;
+} WaitQueue;
+
 typedef enum {
     KACCESS_,
 } KAccessRights;
@@ -186,6 +192,8 @@ typedef struct {
     KObject super; // tag = KOBJECT_MAILBOX
     u32 cap_log2;
     void* handler_pc;
+
+    WaitQueue tx_wait; // blocked on send()
 
     _Alignas(64) atomic_u64 head;
     _Alignas(64) atomic_u64 tail;
@@ -310,28 +318,12 @@ bool env_close_handle(Env* env, KHandle handle);
 ////////////////////////////////
 typedef int ThreadEntryFn(void*);
 
-typedef struct WaitNode WaitNode;
-struct WaitNode {
-    WaitNode* next;
-    Thread* thread;
-};
-
-typedef struct {
-    Lock lock;
-
-    WaitNode* tail;
-    WaitNode dummy;
-} WaitQueue;
-
 Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintptr_t stack, size_t stack_size);
-void thread_resume(Thread* thread);
+void thread_resume(Thread* thread, PerCPU* cpu);
 void thread_kill(Thread* thread);
 
-WaitQueue* waitqueue_alloc(void);
-void waitqueue_free(WaitQueue* wq);
-
 void waitqueue_wait(WaitQueue* wq, Thread* t);
-Thread* waitqueue_wake(WaitQueue* wq);
+Thread* waitqueue_wake(WaitQueue* wq, PerCPU* cpu);
 void waitqueue_broadcast(WaitQueue* wq);
 
 ////////////////////////////////

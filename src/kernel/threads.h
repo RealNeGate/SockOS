@@ -39,6 +39,8 @@ struct Thread {
 
     ThreadState status;
 
+    // Wait-list info
+    Thread* next_in_wait;
     // waiting on signalling objects
     _Atomic(void*) wait_obj;
 
