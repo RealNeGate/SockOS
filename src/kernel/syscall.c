@@ -302,7 +302,6 @@ SYS_FN(get_paddr) {
 
     Env* env = cpu->current_thread->parent;
     uintptr_t paddr = translate_vaddr(env, SYS_PARAM0);
-    kprintf("TRANSLATE %p %p\n", SYS_PARAM0, paddr);
     return paddr;
 }
 

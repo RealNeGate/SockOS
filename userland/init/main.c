@@ -279,7 +279,7 @@ int _start(KHandle bootstrap_vmo) {
     for (;;) {
         syscall(SYS_sleep, 200000);
 
-        uint64_t now_time = syscall(SYS_sched_time, total_exec);
+        /*uint64_t now_time = syscall(SYS_sched_time, total_exec);
         uint64_t delta = now_time - last_time;
         if (last_time == 0) {
             FOR_N(i, 0, 4) {
@@ -297,7 +297,7 @@ int _start(KHandle bootstrap_vmo) {
             printf("] latency = %luus\n", delta - 200000);
             fault_handler();
         }
-        last_time = now_time;
+        last_time = now_time;*/
     }
 }
 

@@ -235,18 +235,53 @@ enum {
 
 typedef struct {
     // Setup stage
-    uint8_t request_type;
-    uint8_t request;
-    uint16_t value;
-    uint16_t index;
-    uint16_t length;
+    struct URB_Setup {
+        uint8_t request_type;
+        uint8_t request;
+        uint16_t value;
+        uint16_t index;
+        uint16_t length;
+    } setup;
 
     // Data stage
     size_t data_len;
     void* data;
 
     // Status stage
+    void* user_data;
+    void (*cont)(void* user_data);
 } URB;
+_Static_assert(sizeof(struct URB_Setup) == 8, "bad!!!");
+
+typedef struct {
+    // Key
+    uintptr_t paddr;
+
+    // Value
+    void* user_data;
+    void (*cont)(void* user_data);
+} PendingURB;
+
+static int pending_urb_count;
+static PendingURB pending_urbs[512];
+
+static void signal_pending_urb(uintptr_t paddr, int cc) {
+    for (int i = 0; i < pending_urb_count; i++) {
+        if (pending_urbs[i].paddr == paddr) {
+            printf("Completed URB! %p\n", paddr);
+            if (pending_urbs[i].cont) {
+                pending_urbs[i].cont(pending_urbs[i].user_data);
+            }
+
+            // Remove from list
+            pending_urbs[i] = pending_urbs[--pending_urb_count];
+            break;
+        }
+    }
+}
+
+static int pending_urb_count;
+static PendingURB pending_urbs[512];
 
 void* memcpy(void* dest, const void* src, size_t n) {
     u8* d = (u8*)dest;
@@ -257,21 +292,26 @@ void* memcpy(void* dest, const void* src, size_t n) {
     return dest;
 }
 
+enum {
+    TRB_SETUP  = 2,
+    TRB_DATA   = 3,
+    TRB_STATUS = 4,
+};
+
 static alignas(4096) char usb_desc[4096];
 static void submit_urb(int port, int slot, URB* urb) {
     uint32_t cmd[4];
-    int trt = urb->data_len ? (urb->request_type & USB_DEV2HOST ? 3 : 2) : 0;
-
-    printf("TRT: %d\n", trt);
+    int trt = urb->data_len ? (urb->setup.request_type & USB_DEV2HOST ? 3 : 2) : 0;
+    // printf("TRT: %d\n", trt);
 
     // Setup Stage Packet
-    memcpy(cmd, urb, sizeof(uint32_t[2]));
+    memcpy(cmd, &urb->setup, sizeof(struct URB_Setup));
     cmd[2] = 8u; // TRB Transfer length is fixed at 8
     cmd[3] = (trt << 16u) | (1u << 6u);
-    ring_submit_cmd(&ports[port].xfer_ring, 2, cmd);
+    ring_submit_cmd(&ports[port].xfer_ring, TRB_SETUP, cmd);
 
     // Data Stage Packet (optional)
-    bool status_in = urb->request_type & USB_DEV2HOST;
+    bool status_in = urb->setup.request_type & USB_DEV2HOST;
     uintptr_t data_paddr = 0;
     if (urb->data_len) {
         data_paddr = syscall(SYS_get_paddr, urb->data);
@@ -280,23 +320,27 @@ static void submit_urb(int port, int slot, URB* urb) {
         cmd[1] = data_paddr >> 32ull;
         cmd[2] = urb->data_len;
         cmd[3] = status_in << 16u;
-        ring_submit_cmd(&ports[port].xfer_ring, 3, cmd);
+        ring_submit_cmd(&ports[port].xfer_ring, TRB_DATA, cmd);
 
-        printf("DATA: %s\n", status_in ? "IN" : "OUT");
+        // printf("DATA: %s\n", status_in ? "IN" : "OUT");
         status_in = !status_in;
     } else {
         status_in = true;
     }
+    // printf("STATUS: %s\n", status_in ? "IN" : "OUT");
 
-    printf("STATUS: %s\n", status_in ? "IN" : "OUT");
-
-    // Status Stage Packet
+    // Status Stage Packet (IOC=true)
     cmd[0] = 0;
     cmd[1] = 0;
     cmd[2] = 0;
-    cmd[3] = status_in << 16u;
-    ring_submit_cmd(&ports[port].xfer_ring, 4, cmd);
+    cmd[3] = (1u << 5u) | (status_in << 16u);
+    uintptr_t paddr = ports[port].xfer_ring.dequeue_paddr;
+    ring_submit_cmd(&ports[port].xfer_ring, TRB_STATUS, cmd);
     ring_doorbell(1+slot, 1);
+
+    pending_urbs[pending_urb_count++] = (PendingURB){
+        paddr, urb->user_data, urb->cont
+    };
 
     printf("URB.%d: %p | %d bytes!!!\n", slot, data_paddr, urb->data_len);
 }
@@ -307,9 +351,40 @@ enum {
     MSG_ADDRESSED,
 };
 
+static void usb_got_desc2(void* p) {
+    printf("DEVICE!!!\n");
+
+    uint32_t* arr = p;
+    for (uint32_t i = 0; i < 18/4; i++) {
+        printf("  %08x\n", arr[i]);
+    }
+}
+
+static void usb_got_desc(void* p) {
+    printf("YIPPEE!!!\n");
+
+    Port* port = p;
+    int slot = port->slot;
+
+    URB urb = {
+        .setup = {
+            .request_type = USB_DEV2HOST | USB_TYPE_STANDARD | USB_RECIP_DEVICE,
+            .request      = USB_GET_DESCRIPTOR,
+            .value        = 0x0100, // DT_DEVICE
+            .length       = 18,
+        },
+        .data_len     = 18,
+        .data         = usb_desc + (slot*64),
+
+        .user_data    = usb_desc + (slot*64),
+        .cont         = usb_got_desc2,
+    };
+    submit_urb(port - ports, slot, &urb);
+}
+
 static void usb_fsm(int msg, int port, int slot) {
-    printf("USB_FSM(%d, %d, %d)\n", msg, port, slot);
-    fault_handler();
+    // printf("USB_FSM(%d, %d, %d)\n", msg, port, slot);
+    // fault_handler();
 
     volatile uint32_t* sts_ptr = &op_base[0x100 + (4 * port)];
     switch (msg) {
@@ -393,13 +468,17 @@ static void usb_fsm(int msg, int port, int slot) {
             ports[port].state = PORT_ADDRESS;
 
             URB urb = {
-                .request_type = USB_DEV2HOST | USB_TYPE_STANDARD | USB_RECIP_DEVICE,
-                .request      = USB_GET_DESCRIPTOR,
-                .value        = 1 << 8, // DT_DEVICE
-                .length       = 8,
-
+                .setup = {
+                    .request_type = USB_DEV2HOST | USB_TYPE_STANDARD | USB_RECIP_DEVICE,
+                    .request      = USB_GET_DESCRIPTOR,
+                    .value        = 0x0100, // DT_DEVICE
+                    .length       = 8,
+                },
                 .data_len     = 8,
                 .data         = usb_desc + (slot*64),
+
+                .user_data    = &ports[port],
+                .cont         = usb_got_desc,
             };
             submit_urb(port, slot, &urb);
         } break;
@@ -549,6 +628,11 @@ int _start(KHandle pci_device) {
             } else if (type == 0x22) { // Port status change
                 int port = (trb[0] >> 24) - 1;
                 usb_fsm(MSG_PORT_CHANGE, port, ports[i].slot);
+            } else if (type == 0x20) { // Transfer event
+                uintptr_t cmd_ptr = trb[0] | ((uintptr_t) trb[1] << 32ull);
+                uint32_t completition_code = trb[2] >> 24u;
+
+                signal_pending_urb(cmd_ptr, completition_code);
             } else {
                 printf("Unsupported event %d\n", type);
             }

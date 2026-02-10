@@ -280,7 +280,7 @@ void vmem_unmap(Env* env, uintptr_t vaddr, size_t size) {
 
         // Remove any descriptors from the middle of the range
         VMem_Cursor cursor = vmem_node_lookup(env, vaddr);
-        kprintf("[vmem] Unmap [%p - %p], Starting at %p\n", vaddr, vaddr + size - 1, vmem_cursor_key(cursor));
+        ON_DEBUG(VMEM)(kprintf("[vmem] Unmap [%p - %p], Starting at %p\n", vaddr, vaddr + size - 1, vmem_cursor_key(cursor)));
 
         cursor = vmem_cursor_next(bot_cursor);
 
@@ -298,7 +298,7 @@ void vmem_unmap(Env* env, uintptr_t vaddr, size_t size) {
                     return;
                 }
 
-                kprintf("[vmem] Desc unmap [%p - %p]\n", start_addr, end_addr - 1);
+                ON_DEBUG(VMEM)(kprintf("[vmem] Desc unmap [%p - %p]\n", start_addr, end_addr - 1));
                 cursor.index++;
             }
 
