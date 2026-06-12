@@ -370,6 +370,10 @@ static bool pci_check_device(PCI_Device *dev, u32 bus, u32 device, u8 func) {
             }
             dev->irq_line = hdr0.interrupt_line;
             dev->irq_pin  = hdr0.interrupt_pin;
+
+            /* if (hdr0.status & (1u << 4u)) {
+                hdr0.cap_ptr;
+            } */
         } break;
         case 0x1: {
             PCI_Header_1 hdr1 = {};
