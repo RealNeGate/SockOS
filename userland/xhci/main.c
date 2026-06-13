@@ -455,9 +455,60 @@ static int read_string(USB_Device* dev, int index, char* dst) {
     return cnt;
 }
 
-static void usbhid_boot_protocol() {
+static void usbhid_handle(USB_Device* dev, char* interface, int interface_size) {
+    // identify the interrupt IN endpoint
+    for (int i = interface[0], j = 0; i < interface_size; i += interface[i], j++) {
+        USB_EndpointDesc* ep = (USB_EndpointDesc*) &interface[i];
+        bool dir_in = ep->addr >> 7;
 
+        const char* type_str;
+        switch (ep->attrs & 3) {
+            case 0: type_str = "Ctrl"; break;
+            case 1: type_str = "Iso";  break;
+            case 2: type_str = "Bulk"; break;
+            case 3: type_str = "Int";  break;
+        }
+
+        printf("ENDPOINT%d: num=%d, dir=%s, type=%s, rate=%d\n", j, ep->addr & 0xF, dir_in ? "IN" : "OUT", type_str, ep->interval);
+
+        if ((ep->attrs & 3) && dir_in) {
+            printf("  Connect up!!!\n");
+        }
+    }
+
+    USB_RequestBlock urb = {
+        .dev = dev,
+        .setup = {
+            .request_type = 0x21,
+            .request      = 0x0B, // SetProtocol
+            .value        = 0,    // Boot
+        },
+    };
+    usb_submit_urb_sync(&urb);
+    printf("Connected HID!!! %d\n", interface_size);
+
+    char report[8];
+    for (;;) {
+        // GetReport
+        urb.setup.request_type = 0xA1;
+        urb.setup.request      = 1;
+        urb.setup.length       = 8;
+        urb.data_len           = 8;
+        urb.data               = report;
+        usb_submit_urb_sync(&urb);
+
+        printf("REPORT %d: ", DEV_SLOT(dev));
+        for (int j = 0; j < 8; j++) {
+            printf(" %02x", report[j]);
+        }
+        printf("\n");
+    }
 }
+
+enum {
+    USB_DRIVER_NONE,
+    USB_DRIVER_HID,
+};
 
 static void usb_device_thread(void* d) {
     USB_Device* dev = d;
@@ -479,6 +530,10 @@ static void usb_device_thread(void* d) {
     usb_submit_urb_sync(&urb);
     urb.data = scratch;
 
+    char* interface = NULL;
+    size_t interface_size = 0;
+
+    int usb_type = USB_DRIVER_NONE;
     if (dev->desc.dev_class == 0 && dev->desc.dev_sub_class == 0) {
         printf(" FOUND HID-DEVICES!!! %#02x:%#02x, %d\n", dev->desc.dev_class, dev->desc.dev_sub_class, dev->desc.num_configs);
 
@@ -488,7 +543,8 @@ static void usb_device_thread(void* d) {
         }
         printf("\n");
 
-        int num_interfaces = 0;
+        int selected_config = 0;
+        int selected_interface = 0;
         for (int i = 0; i < dev->desc.num_configs; i++) {
             urb.setup.request_type = USB_DEV2HOST | USB_TYPE_STANDARD | USB_RECIP_DEVICE;
             urb.setup.request = USB_GET_DESCRIPTOR;
@@ -497,12 +553,12 @@ static void usb_device_thread(void* d) {
             urb.data_len      = 9;
             usb_submit_urb_sync(&urb);
 
-            int len = read_string(dev, scratch[6], str);
+            /* read_string(dev, scratch[6], str);
             printf("CONFIG %zu.%d '%-24s' (total=%d):", DEV_SLOT(dev), i, str, scratch[0]);
             for (int j = 0; j < 9; j++) {
                 printf(" %02x", scratch[j] & 0xFF);
             }
-            printf("\n");
+            printf("\n"); */
 
             urb.setup.length = urb.data_len = scratch[2] | (scratch[3] << 8);
             usb_submit_urb_sync(&urb);
@@ -510,33 +566,56 @@ static void usb_device_thread(void* d) {
             // dump interfaces & endpoints
             size_t pos = 9;
             while (pos < urb.data_len) {
-                int len = scratch[pos];
-                if (scratch[pos+1] == 4) {
-                    USB_InterfaceDesc* idesc = (USB_InterfaceDesc*) &scratch[pos];
-                    int len = read_string(dev, idesc->interface_str, str);
+                // scan for interfaces, drivers latch onto those technically
+                uint8_t len  = scratch[pos];
+                uint8_t type = scratch[pos+1];
 
-                    printf("  %d INTERFACE %d:%d '%s'\n", pos, idesc->interface_class, idesc->interface_subclass, str);
-                } else if (scratch[pos+1] == 5) {
-                    printf("    ENDPOINT\n");
-                } else if (scratch[pos+1] == USB_DT_HID) {
-                    printf("    HID DESC\n");
-                } else {
-                    printf("    UNKNOWN DESC!!! len=%d, type=%d\n", scratch[pos], scratch[pos+1]);
+                // interface
+                if (type == 4) {
+                    USB_InterfaceDesc* idesc = (USB_InterfaceDesc*) &scratch[pos];
+                    if (idesc->interface_class == 3 && idesc->interface_subclass == 1) {
+                        usb_type = USB_DRIVER_HID;
+                        selected_interface = idesc->interface_num;
+
+                        // scan until either the end or the next interface
+                        size_t pos2 = pos + len;
+                        while (pos2 < urb.data_len && scratch[pos2+1] != 4) {
+                            pos2 += scratch[pos2];
+                        }
+                        interface_size = pos2 - pos;
+                        interface = &scratch[pos];
+                        goto found;
+                    }
                 }
                 pos += len;
             }
         }
 
-        // select config
+        found:;
         urb.setup.request_type = USB_DEV2HOST | USB_TYPE_STANDARD | USB_RECIP_DEVICE;
-        urb.setup.request = USB_SET_CONFIGURATION;
-        urb.setup.value   = 0;
         urb.setup.length  = 0;
         urb.data_len      = 0;
+
+        // select config
+        if (selected_config) {
+            urb.setup.request = USB_SET_CONFIGURATION;
+            urb.setup.value   = selected_config;
+            usb_submit_urb_sync(&urb);
+        }
+
+        // select interface
+        if (selected_config) {
+            urb.setup.request = USB_SET_INTERFACE;
+            urb.setup.value   = selected_interface;
+        }
         usb_submit_urb_sync(&urb);
     }
 
-    for (;;) { }
+    if (usb_type == USB_DRIVER_HID) {
+        usbhid_handle(dev, interface, interface_size);
+    }
+
+    for (;;) {}
 }
 
 static KHandle mailbox;

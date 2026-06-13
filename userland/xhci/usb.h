@@ -45,6 +45,18 @@ typedef struct {
     uint8_t interface_str;
 } USB_InterfaceDesc;
 
+typedef struct {
+    uint8_t  length;
+    uint8_t  type;
+    uint8_t  addr;
+    uint8_t  attrs;
+    uint16_t max_packet_size;
+
+    // polling interval, units are frames which are
+    // 1ms for low/full speed and 125us for high speed.
+    uint8_t  interval;
+} USB_EndpointDesc;
+
 enum {
     USB_SPEED_UNKNOWN,
     USB_SPEED_LOW,
@@ -83,6 +95,9 @@ enum {
     USB_SET_DESCRIPTOR    = 7,
     USB_GET_CONFIGURATION = 8,
     USB_SET_CONFIGURATION = 9,
+    USB_GET_INTERFACE     = 10,
+    USB_SET_INTERFACE     = 11,
+    USB_SYNCH_FRAME       = 12,
 };
 
 typedef struct {
