@@ -825,7 +825,6 @@ int _start(KHandle pci_device) {
                     //   allow others to use it now
                     if (poke == (cmd[3] >> 24u)) {
                         dev_to_refresh = 0;
-                        printf("Refresh Dev%d\n", poke - 1);
                     }
                 } else {
                     // We have a slot ID now, forward it to whoever was waiting
@@ -867,7 +866,7 @@ int _start(KHandle pci_device) {
             fault_handler();
 
             trb_i += 4;
-            if (trb_i == 4096/4) {
+            if (trb_i == 0x100) {
                 // wrap around
                 trb_i = 0;
                 ccs = !ccs;
@@ -889,10 +888,8 @@ int _start(KHandle pci_device) {
             interrupt[6] = erdp_phys & 0xFFFFFFFF;
         }
 
-        printf("Ping\n");
         fault_handler();
-
-        syscall(SYS_sleep, 100000);
+        syscall(SYS_sleep, 10000);
     }
 
     return 0;

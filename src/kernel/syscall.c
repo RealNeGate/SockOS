@@ -194,43 +194,6 @@ SYS_FN(env_create) {
     return env_open_handle(parent, 0, &env->super);
 }
 
-SYS_FN(pipe_create) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_pipe_create(capacity=%d)\n", SYS_PARAM0));
-    Env* env = cpu->current_thread->parent;
-    KObject_Pipe* pipe = pipe_create(SYS_PARAM0);
-    return env_open_handle(env, 0, &pipe->super);
-}
-
-SYS_FN(pipe_send) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_pipe_send(pipe=%p, vmo=%p, offset=%p, size=%p)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2));
-    Env* env = cpu->current_thread->parent;
-    KObject_Pipe* pipe = env_get_handle(env, SYS_PARAM0, NULL);
-    KCHECK(pipe, RESULT_NO_HANDLE);
-    KCHECK(pipe->super.tag == KOBJECT_PIPE, RESULT_WRONG_HANDLE);
-
-    KObject_VMO* vmo = env_get_handle(env, SYS_PARAM1, NULL);
-    KCHECK(vmo, RESULT_NO_HANDLE);
-    KCHECK(vmo->super.tag == KOBJECT_VMO, RESULT_WRONG_HANDLE);
-
-    pipe_send(pipe, vmo, SYS_PARAM2, SYS_PARAM3);
-    return 0;
-}
-
-SYS_FN(pipe_recv) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_pipe_recv(pipe=%p, offset=%p, size=%p)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2));
-    Env* env = cpu->current_thread->parent;
-    KObject_Pipe* pipe = env_get_handle(env, SYS_PARAM0, NULL);
-    KCHECK(pipe, RESULT_NO_HANDLE);
-    KCHECK(pipe->super.tag == KOBJECT_PIPE, RESULT_WRONG_HANDLE);
-
-    uint64_t offset, size;
-    KObject_VMO* vmo_ptr = pipe_recv(pipe, &offset, &size);
-
-    egest_usermem(SYS_PARAM1, &offset, sizeof(uintptr_t));
-    egest_usermem(SYS_PARAM2, &size,   sizeof(uintptr_t));
-    return env_open_handle(env, 0, &vmo_ptr->super);
-}
-
 SYS_FN(vmo_create) {
     ON_DEBUG(SYSCALL)(kprintf("SYS_vmo_create(paddr=%p, size=%d)\n", SYS_PARAM0, SYS_PARAM1));
     Env* env = cpu->current_thread->parent;
@@ -376,6 +339,36 @@ SYS_FN(thread_create) {
     return env_open_handle(env, 0, &thread->super);
 }
 
+SYS_FN(event_create) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_event_create()\n"));
+    Env* parent = cpu->current_thread->parent;
+    KObject_Event* event = event_create();
+    return env_open_handle(parent, 0, &event->super);
+}
+
+SYS_FN(event_wait) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_event_wait(%p)\n", SYS_PARAM0));
+
+    Env* env = cpu->current_thread->parent;
+    KObject_Event* event = env_get_handle(env, SYS_PARAM0, NULL);
+    KCHECK(event, RESULT_NO_HANDLE);
+    KCHECK(event->super.tag == KOBJECT_EVENT, RESULT_WRONG_HANDLE);
+
+    spin_lock(&cpu->sched->lock);
+    event_wait(event, cpu->current_thread);
+    spin_unlock(&cpu->sched->lock);
+
+    // Pick a new task
+    state->interrupt_num = 32;
+    uintptr_t new_cr3 = x86_irq_int_handler(state, cr3, cpu);
+    do_context_switch(state, new_cr3);
+}
+
+SYS_FN(event_signal) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_event_signal(%p)\n", SYS_PARAM0));
+    return 0;
+}
+
 SYS_FN(test) {
     kprintf("SYS_test(%p)\n", SYS_PARAM0);
     return 0;
@@ -496,7 +489,7 @@ SYS_FN(mailbox_create) {
     return env_open_handle(env, 0, &mailbox->super);
 }
 
-static void transfer_time(PerCPU* cpu, Thread* curr, Thread* next, CPUState* state) {
+void transfer_time(PerCPU* cpu, Thread* curr, Thread* next, CPUState* state) {
     // save out state
     curr->state = *state;
 

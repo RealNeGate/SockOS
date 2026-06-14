@@ -83,12 +83,12 @@ X(PCI_SUBCLASS_NET_FABRIC,      0x8,  "Fabric Controller")
 static const char *pci_subclass_net_names[] = {
     #define X(tag, id, name) [id] = name,
     PCI_SUBCLASS_NET
-        #undef X
+    #undef X
 };
 typedef enum {
     #define X(tag, id, name) tag = id,
     PCI_SUBCLASS_NET
-        #undef X
+    #undef X
 } PCI_Subclass_Network;
 
 #define PCI_SUBCLASS_DISP                        \
@@ -99,12 +99,12 @@ X(PCI_SUBCLASS_DISP_3D,  0x2,  "3D Controller")
 static const char *pci_subclass_display_names[] = {
     #define X(tag, id, name) [id] = name,
     PCI_SUBCLASS_DISP
-        #undef X
+    #undef X
 };
 typedef enum {
     #define X(tag, id, name) tag = id,
     PCI_SUBCLASS_DISP
-        #undef X
+    #undef X
 } PCI_Subclass_Display;
 
 #define PCI_SUBCLASS_STR                        \
@@ -115,12 +115,12 @@ X(PCI_SUBCLASS_STR_FLOPPY,  0x2,  "Floppy Disk Controller")
 static const char *pci_subclass_storage_names[] = {
     #define X(tag, id, name) [id] = name,
     PCI_SUBCLASS_STR
-        #undef X
+    #undef X
 };
 typedef enum {
     #define X(tag, id, name) tag = id,
     PCI_SUBCLASS_STR
-        #undef X
+    #undef X
 } PCI_Subclass_Storage;
 
 PCI_SegmentGroup* pci_segment_group;

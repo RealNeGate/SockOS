@@ -1,5 +1,6 @@
 #include "x64.h"
 #include "../../kernel/threads.h"
+#include "../../kernel/pci.h"
 
 #define PIC1_COMMAND 0x20
 #define PIC1_DATA    0x21
@@ -53,13 +54,7 @@ static volatile enum {
 } apic_timer_status;
 
 static u64 apic_freq;
-
-typedef struct {
-    void* ctx;
-    void (*fn)(void* ctx);
-} InterruptLineCallback;
-
-static InterruptLineCallback line_callbacks[24];
+static KObject_Event* line_callbacks[24];
 
 static void irq_disable_pic(void) {
     // set ICW1
@@ -179,13 +174,13 @@ void ioapic_write(u64 ioapic_addr, u32 reg, u32 val) {
     *(u32 volatile *)(ioapic_addr + 0x10) = val;
 }
 
-void set_interrupt_line(u32 line, void fn(void*), void* ctx) {
+void set_interrupt_line(PCI_Device* pci_dev, KObject_Event* event) {
     // redirect table has 2 32-bit entries per interrupt slot
+    u32 line = pci_dev->irq_line;
     u32 redirect_table_idx = (line * 2) + 0x10;
     u32 entry = 0x50 + line;
 
-    line_callbacks[line].ctx = ctx;
-    line_callbacks[line].fn = fn;
+    line_callbacks[line] = event;
 
     ioapic_write(boot_info->ioapic_base, redirect_table_idx,     1 << 16); // Mask the interrupt while we tweak
     ioapic_write(boot_info->ioapic_base, redirect_table_idx + 1, boot_info->cores[0].lapic_id << 24);
@@ -355,6 +350,7 @@ static void dump_page_fault(CPUState* state, uintptr_t cr3, PerCPU* cpu, Env* en
     }
 }
 
+void transfer_time(PerCPU* cpu, Thread* curr, Thread* next, CPUState* state);
 uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
     int id = cpu - boot_info->cores;
     if (apic_timer_status == APIC_CALIBRATED) {
@@ -430,14 +426,17 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
     } else if (state->interrupt_num == 0x20) {
         cr3 = timer_interrupt(state, cr3, cpu, now);
     } else if (state->interrupt_num >= 0x50) {
-        // interrupt lines
-        InterruptLineCallback* c = &line_callbacks[state->interrupt_num - 0x50];
-        if (c->fn) {
-            c->fn(c->ctx);
-
+        KObject_Event* event = line_callbacks[state->interrupt_num - 0x50];
+        if (event) {
+            Thread* curr = cpu->current_thread;
+            Thread* next = event_signal(event);
+            if (next) {
+                spin_lock(&cpu->sched->lock);
+                transfer_time(cpu, curr, next, state);
+                next->wait_obj = NULL;
+                spin_unlock(&cpu->sched->lock);
+            }
             APIC(0xB0) = 0;
-        } else {
-            x86_halt();
         }
     } else {
         x86_halt();

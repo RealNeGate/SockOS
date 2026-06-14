@@ -171,6 +171,7 @@ struct KObject {
         // IPC
         KOBJECT_PIPE,
         KOBJECT_MAILBOX,
+        KOBJECT_EVENT,
         // Devices
         KOBJECT_DEV_PCI,
     } tag;
@@ -201,26 +202,12 @@ typedef struct {
     atomic_u64 ids_n_items[];
 } KObject_Mailbox;
 
-typedef struct {
-    // Bottom 16b is flags, Top 16b are command
-    _Atomic(uint32_t) header;
-    _Atomic(KObject_VMO*) vmo;
-    // Slice of the VMO
-    _Atomic(uint64_t) offset, size;
-} PipeEntry;
+typedef struct KObject_Event KObject_Event;
+struct KObject_Event {
+    KObject super; // tag = KOBJECT_EVENT
 
-typedef struct {
-    KObject super; // tag = KOBJECT_PIPE
-    u32 cap;
-
-    _Alignas(64) u32 head;
-    _Alignas(64) u32 tail;
-
-    bool p_state;
-    bool c_state;
-
-    PipeEntry entries[];
-} KObject_Pipe;
+    _Alignas(64) _Atomic(Thread*) waiting_thread;
+};
 
 // 10 cache lines worth of handles
 typedef struct {
@@ -258,9 +245,9 @@ Thread* mailbox_send(KObject_Mailbox* mailbox);
 // hand the thread back, we're now waiting for new messages
 bool mailbox_recv(KObject_Mailbox* mailbox, Thread* thread);
 
-KObject_Pipe* pipe_create(size_t max_requests);
-KObject_VMO* pipe_recv(KObject_Pipe* restrict pipe, uint64_t* offset, uint64_t* size);
-void pipe_send(KObject_Pipe* restrict pipe, KObject_VMO* vmo, uint64_t offset, uint64_t size);
+KObject_Event* event_create(void);
+Thread* event_signal(KObject_Event* restrict event);
+bool event_wait(KObject_Event* restrict event, Thread* thread);
 
 ////////////////////////////////
 // Environment (memory + resources accessible bound to some set of threads)
@@ -369,7 +356,6 @@ void arch_handoff(int core_id);
 void arch_wake_up(int core_id);
 uintptr_t arch_canonical_addr(uintptr_t p);
 void arch_set_address_space(Env* env);
-
 void arch_pte_update(Env* env, uintptr_t access_addr, uintptr_t translated, VMem_Flags flags);
 
 // broadcast to all cores running an Env that we've modified the address space
@@ -383,7 +369,8 @@ void* memmap_view(PageTable* address_space, uintptr_t phys_addr, uintptr_t virt_
 void memmap_unview(PageTable* address_space, uintptr_t virt_addr, size_t size);
 bool memmap_translate(PageTable* address_space, uintptr_t virt, u64* out);
 
-void set_interrupt_line(u32 line, void fn(void*), void* ctx);
+// Signal this waiting thread to wake up when the interrupt is hit.
+void set_interrupt_line(PCI_Device* pci_dev, KObject_Event* event);
 
 // we emulate I/O ports on all platforms, it's used for PCI mostly
 u8 io_in8(u16 port);

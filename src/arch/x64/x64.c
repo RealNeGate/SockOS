@@ -74,7 +74,6 @@ void arch_init(int id) {
 
         kheap_multicore(boot_info->core_count);
         pci_init();
-        ps2_init();
         sched_init();
 
         kernel_idle_state = new_thread_state(kernel_idle, 0, 0, 0, false);

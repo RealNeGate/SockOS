@@ -247,7 +247,7 @@ static bool init_eth(PCI_Device *eth_dev) {
     write_cmd(reg_base + E1000_REG_TCTRL, tctl);
     kprintf("[eth] TX ring configured\n");
 
-    set_interrupt_line(eth_dev->irq_line, eth_interrupt, NULL);
+    // set_interrupt_line(eth_dev->irq_line, eth_interrupt, NULL);
 
     // Enable Interrupts
     write_cmd(reg_base + E1000_MASK_SET,

@@ -6,10 +6,10 @@ X(env_create)
 X(thread_create)
 // Tracing/Debug
 X(debug_log)
-// Pipe
-X(pipe_create)
-X(pipe_send)
-X(pipe_recv)
+// Event
+X(event_create)
+X(event_wait)
+X(event_signal)
 // VMM
 X(mmap)
 X(munmap)

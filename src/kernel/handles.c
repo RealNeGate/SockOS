@@ -1,5 +1,6 @@
 // The handle table is built out of a concurrent bitmap, we also wanna grab the lowest IDs first.
 #include <kernel.h>
+#include "threads.h"
 
 KObject_VMO* vmo_create_physical(uintptr_t addr, size_t size, VMem_Flags flags) {
     kassert((addr & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", addr);
@@ -31,56 +32,28 @@ KObject_Mailbox* mailbox_create(size_t max_requests) {
     return obj;
 }
 
-KObject_Pipe* pipe_create(size_t max_requests) {
-    KObject_Pipe* obj = kheap_zalloc(sizeof(KObject_Pipe) + max_requests*sizeof(PipeEntry));
-    *obj = (KObject_Pipe){
+KObject_Event* event_create(void) {
+    KObject_Event* obj = kheap_zalloc(sizeof(KObject_Event));
+    *obj = (KObject_Event){
         .super = {
-            .tag = KOBJECT_PIPE,
+            .tag = KOBJECT_EVENT,
         },
-        .cap = max_requests,
     };
     return obj;
 }
 
-KObject_VMO* pipe_recv(KObject_Pipe* restrict pipe, uint64_t* offset, uint64_t* size) {
-    int i = pipe->head;
-    // wait until entry is available to consumer
-    while ((pipe->entries[i].header & 1) != pipe->c_state) {
-        // TODO(NeGate): Block
+Thread* event_signal(KObject_Event* restrict event) {
+    Thread* t = atomic_load_explicit(&event->waiting_thread, memory_order_acquire);
+    if (t != NULL && atomic_compare_exchange_strong(&event->waiting_thread, &t, NULL)) {
+        return t;
     }
-
-    // Advance head
-    if (++pipe->head == pipe->cap) {
-        pipe->head = 0;
-        pipe->c_state = !pipe->c_state;
-    }
-
-    PipeEntry e = pipe->entries[i];
-    pipe->entries[i].header ^= 1;
-
-    // Flip bit to mark as unused
-    *offset = e.offset;
-    *size   = e.size;
-    return e.vmo;
+    return NULL;
 }
 
-void pipe_send(KObject_Pipe* restrict pipe, KObject_VMO* vmo, uint64_t offset, uint64_t size) {
-    int i = pipe->tail;
-    // wait until entry is available to producer
-    while ((pipe->entries[i].header & 1) == pipe->p_state) {
-        // TODO(NeGate): Block
-    }
-
-    // Advance tail
-    if (++pipe->tail == pipe->cap) {
-        pipe->tail = 0;
-        pipe->p_state = !pipe->p_state;
-    }
-
-    pipe->entries[i].offset = 0;
-    pipe->entries[i].size   = size;
-    pipe->entries[i].vmo    = vmo;
-    pipe->entries[i].header = pipe->p_state;
+bool event_wait(KObject_Event* restrict event, Thread* thread) {
+    // we expect the scheduler locked here
+    thread->wait_obj = event;
+    return atomic_compare_exchange_strong(&event->waiting_thread, &(Thread*){ NULL }, thread);
 }
 
 Thread* mailbox_send(KObject_Mailbox* restrict mailbox) {
