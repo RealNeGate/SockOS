@@ -151,6 +151,7 @@ typedef struct {
 
     // USB_GET_DESCRIPTOR(DT_DEVICE, 0)
     USB_DevDesc desc;
+    char name[32];
 
     // Device rings
     HCI_Ring xfer_ring[4];

@@ -197,7 +197,7 @@ static atomic_int dev_to_refresh;
 static void signal_pending_urb(uintptr_t paddr, int cc) {
     for (int i = 0; i < pending_urb_count; i++) {
         if (pending_urbs[i].paddr == paddr) {
-            printf("Completed URB! %p (CC=%d)\n", paddr, cc);
+            // printf("Completed URB! %p (CC=%d)\n", paddr, cc);
             if (pending_urbs[i].cont) {
                 pending_urbs[i].cont(pending_urbs[i].user_data);
             }
@@ -219,6 +219,7 @@ void* memcpy(void* dest, const void* src, size_t n) {
 }
 
 enum {
+    TRB_NORMAL = 1,
     TRB_SETUP  = 2,
     TRB_DATA   = 3,
     TRB_STATUS = 4,
@@ -270,30 +271,18 @@ static uintptr_t submit_bulk_urb(USB_RequestBlock* urb) {
     USB_Device* dev = urb->dev;
     HCI_Ring* ring = &dev->xfer_ring[urb->pipe];
 
-    // Data Stage Packet (optional)
-    bool status_in = urb->setup.request_type & USB_DEV2HOST;
-    uintptr_t data_paddr = 0;
-    if (urb->data_len) {
-        data_paddr = syscall(SYS_get_paddr, urb->data);
+    assert(urb->pipe > 0);
+    bool status_in = !(urb->pipe & 1);
 
-        cmd[0] = data_paddr & 0xFFFFFFFF;
-        cmd[1] = data_paddr >> 32ull;
-        cmd[2] = urb->data_len;
-        cmd[3] = status_in << 16u;
-        ring_submit_cmd(ring, TRB_DATA, cmd);
+    // Normal Packet
+    uintptr_t data_paddr = syscall(SYS_get_paddr, urb->data);
+    cmd[0] = data_paddr & 0xFFFFFFFF;
+    cmd[1] = data_paddr >> 32ull;
+    cmd[2] = urb->data_len;
+    cmd[3] = (1u << 5u);
 
-        status_in = !status_in;
-    } else {
-        status_in = true;
-    }
-
-    // Status Stage Packet (IOC=true)
-    cmd[0] = 0;
-    cmd[1] = 0;
-    cmd[2] = 0;
-    cmd[3] = (1u << 5u) | (status_in << 16u);
     uintptr_t paddr = ring->dequeue_paddr;
-    ring_submit_cmd(ring, TRB_STATUS, cmd);
+    ring_submit_cmd(ring, TRB_NORMAL, cmd);
     return paddr;
 }
 
@@ -313,8 +302,6 @@ static void usb_submit_bulk_urb_sync(USB_RequestBlock* urb) {
     dev->complete_sync = false;
 
     uintptr_t paddr = submit_bulk_urb(urb);
-    printf("BULK %p %d\n", paddr, urb->pipe + 1);
-    fault_handler();
 
     SPIN_LOCK(&pending_urb_lock);
     pending_urbs[pending_urb_count++] = (PendingURB){
@@ -510,7 +497,7 @@ static void usb_set_endpoint(USB_Device* dev, USB_EndpointDesc* ep, int ring_cap
     }
 }
 
-static int read_string(USB_Device* dev, int index, char* dst) {
+static int read_string(USB_Device* dev, int index, char* dst, size_t cap) {
     // First read the header
     USB_RequestBlock urb = {
         .dev   = dev,
@@ -531,6 +518,10 @@ static int read_string(USB_Device* dev, int index, char* dst) {
     usb_submit_urb_sync(&urb);
 
     int cnt = (len - 2) / 2;
+    if (cnt >= cap) {
+        cnt = cap - 1;
+    }
+
     for (int i = 0; i < cnt; i++) {
         dst[i] = dst[i*2 + 2];
     }
@@ -569,7 +560,7 @@ static void usbhid_handle(USB_Device* dev, char* interface, int interface_size) 
         },
     };
     usb_submit_urb_sync(&urb);
-    printf("Connected HID!!! %d\n", interface_size);
+    printf("Connected HID!!! %d '%s'\n", interface_size, dev->name);
 
     char report[8];
     for (;;) {
@@ -583,7 +574,7 @@ static void usbhid_handle(USB_Device* dev, char* interface, int interface_size) 
 
         printf("REPORT %d: ", DEV_SLOT(dev));
         for (int j = 0; j < 8; j++) {
-            printf(" %02x", report[j]);
+            printf(" %02x", report[j] & 0xFF);
         }
         printf("\n");
         fault_handler();
@@ -638,8 +629,8 @@ static void usb_device_thread(void* d) {
             urb.data_len      = 9;
             usb_submit_urb_sync(&urb);
 
-            /* read_string(dev, scratch[6], str);
-            printf("CONFIG %zu.%d '%-24s' (total=%d):", DEV_SLOT(dev), i, str, scratch[0]);
+            read_string(dev, scratch[6], dev->name, 32);
+            /* printf("CONFIG %zu.%d '%-24s' (total=%d):", DEV_SLOT(dev), i, str, scratch[0]);
             for (int j = 0; j < 9; j++) {
                 printf(" %02x", scratch[j] & 0xFF);
             }
