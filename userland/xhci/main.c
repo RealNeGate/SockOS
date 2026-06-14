@@ -57,20 +57,6 @@ enum {
     MAX_SLOTS = 256,
 };
 
-typedef struct {
-    uint32_t data[8];
-} EndpointContext;
-
-typedef struct {
-    // EP Context 0
-    // EP Context 1  OUT (dir=0)
-    // EP Context 1  IN  (dir=1)
-    // ...
-    // EP Context 15 OUT (dir=0)
-    // EP Context 15 IN  (dir=1)
-    EndpointContext arr[33];
-} InputContext;
-
 #define assert(cond) if (!(cond)) { assert_msg(#cond); }
 static void assert_msg(const char* str) {
     printf("assert condition failed! %s\n", str);
@@ -80,6 +66,8 @@ static void assert_msg(const char* str) {
 enum { PAGE_SIZE_DWORDS = 4096 / 4 };
 static void ring_alloc(HCI_Ring* ring, size_t cnt) {
     size_t size = cnt*16;
+    // round to page
+    size = (size + 4095) & ~4095ull;
 
     ring->cycle_bit = true;
     ring->count = cnt;
@@ -202,11 +190,14 @@ static PendingConnection pending_con[256];
 
 static int pending_urb_count;
 static PendingURB pending_urbs[512];
+static atomic_int pending_urb_lock;
+
+static atomic_int dev_to_refresh;
 
 static void signal_pending_urb(uintptr_t paddr, int cc) {
     for (int i = 0; i < pending_urb_count; i++) {
         if (pending_urbs[i].paddr == paddr) {
-            // printf("Completed URB! %p (CC=%d)\n", paddr, cc);
+            printf("Completed URB! %p (CC=%d)\n", paddr, cc);
             if (pending_urbs[i].cont) {
                 pending_urbs[i].cont(pending_urbs[i].user_data);
             }
@@ -217,10 +208,6 @@ static void signal_pending_urb(uintptr_t paddr, int cc) {
         }
     }
 }
-
-static atomic_int pending_urb_lock;
-static int pending_urb_count;
-static PendingURB pending_urbs[512];
 
 void* memcpy(void* dest, const void* src, size_t n) {
     u8* d = (u8*)dest;
@@ -241,12 +228,13 @@ static uintptr_t submit_urb(USB_RequestBlock* urb) {
     uint32_t cmd[4];
     int trt = urb->data_len ? (urb->setup.request_type & USB_DEV2HOST ? 3 : 2) : 0;
     USB_Device* dev = urb->dev;
+    HCI_Ring* ring = &dev->xfer_ring[urb->pipe];
 
     // Setup Stage Packet
     memcpy(cmd, &urb->setup, sizeof(struct URB_Setup));
     cmd[2] = 8u; // TRB Transfer length is fixed at 8
     cmd[3] = (trt << 16u) | (1u << 6u);
-    ring_submit_cmd(&dev->xfer_ring, TRB_SETUP, cmd);
+    ring_submit_cmd(ring, TRB_SETUP, cmd);
 
     // Data Stage Packet (optional)
     bool status_in = urb->setup.request_type & USB_DEV2HOST;
@@ -258,7 +246,7 @@ static uintptr_t submit_urb(USB_RequestBlock* urb) {
         cmd[1] = data_paddr >> 32ull;
         cmd[2] = urb->data_len;
         cmd[3] = status_in << 16u;
-        ring_submit_cmd(&dev->xfer_ring, TRB_DATA, cmd);
+        ring_submit_cmd(ring, TRB_DATA, cmd);
 
         // printf("DATA: %s\n", status_in ? "IN" : "OUT");
         status_in = !status_in;
@@ -272,8 +260,40 @@ static uintptr_t submit_urb(USB_RequestBlock* urb) {
     cmd[1] = 0;
     cmd[2] = 0;
     cmd[3] = (1u << 5u) | (status_in << 16u);
-    uintptr_t paddr = dev->xfer_ring.dequeue_paddr;
-    ring_submit_cmd(&dev->xfer_ring, TRB_STATUS, cmd);
+    uintptr_t paddr = ring->dequeue_paddr;
+    ring_submit_cmd(ring, TRB_STATUS, cmd);
+    return paddr;
+}
+
+static uintptr_t submit_bulk_urb(USB_RequestBlock* urb) {
+    uint32_t cmd[4];
+    USB_Device* dev = urb->dev;
+    HCI_Ring* ring = &dev->xfer_ring[urb->pipe];
+
+    // Data Stage Packet (optional)
+    bool status_in = urb->setup.request_type & USB_DEV2HOST;
+    uintptr_t data_paddr = 0;
+    if (urb->data_len) {
+        data_paddr = syscall(SYS_get_paddr, urb->data);
+
+        cmd[0] = data_paddr & 0xFFFFFFFF;
+        cmd[1] = data_paddr >> 32ull;
+        cmd[2] = urb->data_len;
+        cmd[3] = status_in << 16u;
+        ring_submit_cmd(ring, TRB_DATA, cmd);
+
+        status_in = !status_in;
+    } else {
+        status_in = true;
+    }
+
+    // Status Stage Packet (IOC=true)
+    cmd[0] = 0;
+    cmd[1] = 0;
+    cmd[2] = 0;
+    cmd[3] = (1u << 5u) | (status_in << 16u);
+    uintptr_t paddr = ring->dequeue_paddr;
+    ring_submit_cmd(ring, TRB_STATUS, cmd);
     return paddr;
 }
 
@@ -288,6 +308,25 @@ static void signal_complete(void* dev) {
     ((USB_Device*) dev)->complete_sync = true;
 }
 
+static void usb_submit_bulk_urb_sync(USB_RequestBlock* urb) {
+    USB_Device* dev = urb->dev;
+    dev->complete_sync = false;
+
+    uintptr_t paddr = submit_bulk_urb(urb);
+    printf("BULK %p %d\n", paddr, urb->pipe + 1);
+    fault_handler();
+
+    SPIN_LOCK(&pending_urb_lock);
+    pending_urbs[pending_urb_count++] = (PendingURB){
+        paddr, dev, signal_complete
+    };
+    SPIN_UNLOCK(&pending_urb_lock);
+    ring_doorbell(dev, urb->pipe + 1);
+
+    // Wait for URB
+    while (!dev->complete_sync) {}
+}
+
 static void usb_submit_urb_sync(USB_RequestBlock* urb) {
     USB_Device* dev = urb->dev;
     dev->complete_sync = false;
@@ -298,7 +337,7 @@ static void usb_submit_urb_sync(USB_RequestBlock* urb) {
         paddr, dev, signal_complete
     };
     SPIN_UNLOCK(&pending_urb_lock);
-    ring_doorbell(dev, 1);
+    ring_doorbell(dev, urb->pipe + 1);
 
     // Wait for URB
     while (!dev->complete_sync) {}
@@ -361,7 +400,7 @@ static void usb_fsm(int msg, int port, int slot) {
             uintptr_t out_ctx_paddr;
             uint32_t* out_ctx = pin(4096, &out_ctx_paddr);
 
-            HCI_Ring* xfer_ring = &dev->xfer_ring;
+            HCI_Ring* xfer_ring = &dev->xfer_ring[0];
             ring_alloc(xfer_ring, 256);
 
             uint32_t speed = (*sts_ptr >> 10u) & 0xF;
@@ -391,6 +430,11 @@ static void usb_fsm(int msg, int port, int slot) {
 
             dcbaap[slot] = out_ctx_paddr;
             printf("[usb] Initialized Port%u with In:%p, Out:%p Transfer:%p (%zu max packet)\n", port, in_ctx_paddr, out_ctx_paddr, xfer_ring->base_paddr, max_packet);
+
+            dev->in_ctx_paddr = in_ctx_paddr;
+            dev->out_ctx_paddr = out_ctx_paddr;
+            dev->in_ctx  = in_ctx;
+            dev->out_ctx = out_ctx;
 
             // submit AddressDevice command
             pending_con[pending_con_count++] = (PendingConnection){
@@ -424,6 +468,45 @@ static void usb_fsm(int msg, int port, int slot) {
             SPIN_UNLOCK(&pending_urb_lock);
             ring_doorbell(dev, 1);
         } break;
+    }
+}
+
+// see 4.8.2.4
+static void usb_set_endpoint(USB_Device* dev, USB_EndpointDesc* ep, int ring_cap) {
+    bool dir_in = ep->addr >> 7;
+    int ep_type = dir_in ? 7 : 3;
+    int index   = ep->addr & 0xF;
+    int i       = (index - 1)*2 + (dir_in ? 4 : 3);
+
+    HCI_Ring* ring = &dev->xfer_ring[i - 2];
+    ring_alloc(ring, ring_cap);
+
+    InputContext* in_ctx = dev->in_ctx;
+    in_ctx->arr[0].data[1] = 0;
+    in_ctx->arr[0].data[1] = 1 | (1 << (i - 1));
+
+    // update context entries to contain the highest DCI
+    int curr_context_entries = in_ctx->arr[1].data[0] >> 27u;
+    if (i - 1 >= curr_context_entries) {
+        uint32_t mask = 0b11111 << 27u;
+        in_ctx->arr[1].data[0] = (in_ctx->arr[1].data[0] & ~mask) | (i << 27u);
+    }
+
+    //                        Interval
+    int interval = 8;
+    in_ctx->arr[i].data[0] = (interval << 16);
+    //                        CErr        EP Type           Max Packet Size                Max Burst
+    in_ctx->arr[i].data[1] = (3 << 1u) | (ep_type << 3u) | (ep->max_packet_size << 16u) | (0 << 8u);
+    in_ctx->arr[i].data[2] = (ring->base_paddr & 0xFFFFFFF0) | 1u;
+    in_ctx->arr[i].data[3] = (ring->base_paddr >> 32ull);
+
+    // Ask to refresh device
+    int id = 1 + DEV_SLOT(dev);
+    while (!atomic_compare_exchange_strong(&dev_to_refresh, &(int){ 0 }, id)) {
+    }
+
+    // Wait for it to complete
+    while (dev_to_refresh == id) {
     }
 }
 
@@ -469,9 +552,10 @@ static void usbhid_handle(USB_Device* dev, char* interface, int interface_size) 
             case 3: type_str = "Int";  break;
         }
 
-        printf("ENDPOINT%d: num=%d, dir=%s, type=%s, rate=%d\n", j, ep->addr & 0xF, dir_in ? "IN" : "OUT", type_str, ep->interval);
+        printf("ENDPOINT%d: num=%d, dir=%-3s, type=%s, rate=%d\n", j, ep->addr & 0xF, dir_in ? "IN" : "OUT", type_str, ep->interval);
 
         if ((ep->attrs & 3) && dir_in) {
+            usb_set_endpoint(dev, ep, 256);
             printf("  Connect up!!!\n");
         }
     }
@@ -489,19 +573,20 @@ static void usbhid_handle(USB_Device* dev, char* interface, int interface_size) 
 
     char report[8];
     for (;;) {
-        // GetReport
-        urb.setup.request_type = 0xA1;
-        urb.setup.request      = 1;
-        urb.setup.length       = 8;
-        urb.data_len           = 8;
-        urb.data               = report;
-        usb_submit_urb_sync(&urb);
+        // TODO(NeGate): setup interrupter forwarding here
+
+        // Interrupt IN endpoint
+        urb.pipe     = 2;
+        urb.data_len = 8;
+        urb.data     = report;
+        usb_submit_bulk_urb_sync(&urb);
 
         printf("REPORT %d: ", DEV_SLOT(dev));
         for (int j = 0; j < 8; j++) {
             printf(" %02x", report[j]);
         }
         printf("\n");
+        fault_handler();
     }
 }
 
@@ -597,7 +682,7 @@ static void usb_device_thread(void* d) {
         urb.data_len      = 0;
 
         // select config
-        if (selected_config) {
+        /* if (selected_config) {
             urb.setup.request = USB_SET_CONFIGURATION;
             urb.setup.value   = selected_config;
             usb_submit_urb_sync(&urb);
@@ -608,7 +693,8 @@ static void usb_device_thread(void* d) {
             urb.setup.request = USB_SET_INTERFACE;
             urb.setup.value   = selected_interface;
         }
-        usb_submit_urb_sync(&urb);
+        usb_submit_urb_sync(&urb);*/
+        assert(selected_config == 0 || selected_interface == 0);
     }
 
     if (usb_type == USB_DRIVER_HID) {
@@ -725,6 +811,7 @@ int _start(KHandle pci_device) {
         uintptr_t erdp_phys = (interrupt[6] & ~15) | ((uintptr_t) interrupt[7] << 32ull);
         uintptr_t trb_i = (erdp_phys - ers0_paddr) / sizeof(uint32_t);
 
+        int poke = dev_to_refresh;
         bool advanced = false;
         for (int i = 0; i < 4; i++) {
             volatile uint32_t* trb = &ers0[trb_i];
@@ -742,25 +829,34 @@ int _start(KHandle pci_device) {
                 uint32_t completition_code = trb[2] >> 24u;
                 printf("%d : Completed Event%p %#x (type=%d, cc=%#x)\n", trb[2] >> 24u, cmd_ptr, trb[3], completed_type, completition_code);
 
-                // We have a slot ID now, forward it to whoever was waiting
-                for (int i = 0; i < pending_con_count; i++) {
-                    if (pending_con[i].init_cmd == cmd_ptr) {
-                        // remove-swap
-                        int state = pending_con[i].state;
-                        int port  = pending_con[i].port;
-                        if (--pending_con_count) {
-                            pending_con[i] = pending_con[pending_con_count];
-                        }
+                if (completed_type == 12) {
+                    // configure endpoint
+                    //   allow others to use it now
+                    if (poke == (cmd[3] >> 24u)) {
+                        dev_to_refresh = 0;
+                        printf("Refresh Dev%d\n", poke - 1);
+                    }
+                } else {
+                    // We have a slot ID now, forward it to whoever was waiting
+                    for (int i = 0; i < pending_con_count; i++) {
+                        if (pending_con[i].init_cmd == cmd_ptr) {
+                            // remove-swap
+                            int state = pending_con[i].state;
+                            int port  = pending_con[i].port;
+                            if (--pending_con_count) {
+                                pending_con[i] = pending_con[pending_con_count];
+                            }
 
-                        if (state == PORT_DEFAULT && completed_type == 9) {
-                            int slot = (trb[3] >> 24u) - 1;
-                            devices[slot].state = state;
-                            ports[port].slot = slot;
-                            usb_fsm(MSG_SLOT_ENABLE, port, slot);
-                        } else if (state == PORT_WAIT_FOR_ADDRESS && completed_type == 11) {
-                            usb_fsm(MSG_ADDRESSED, port, ports[port].slot);
+                            if (state == PORT_DEFAULT && completed_type == 9) {
+                                int slot = (trb[3] >> 24u) - 1;
+                                devices[slot].state = state;
+                                ports[port].slot = slot;
+                                usb_fsm(MSG_SLOT_ENABLE, port, slot);
+                            } else if (state == PORT_WAIT_FOR_ADDRESS && completed_type == 11) {
+                                usb_fsm(MSG_ADDRESSED, port, ports[port].slot);
+                            }
+                            break;
                         }
-                        break;
                     }
                 }
             } else if (type == 0x22) { // Port status change
@@ -785,6 +881,14 @@ int _start(KHandle pci_device) {
                 trb_i = 0;
                 ccs = !ccs;
             }
+        }
+
+        if (poke) {
+            USB_Device* dev = &devices[poke - 1];
+
+            uint32_t cmd[4] = { dev->in_ctx_paddr & 0xFFFFFFF0, dev->in_ctx_paddr >> 32ull, 0, (1 + DEV_SLOT(dev)) << 24u };
+            ring_submit_cmd(&crcr, 12, cmd);
+            ring_doorbell(NULL, 0);
         }
 
         if (advanced) {

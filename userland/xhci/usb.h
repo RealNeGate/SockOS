@@ -53,7 +53,7 @@ typedef struct {
     uint16_t max_packet_size;
 
     // polling interval, units are frames which are
-    // 1ms for low/full speed and 125us for high speed.
+    // 1ms for low/full speed and 125us for high/super speed.
     uint8_t  interval;
 } USB_EndpointDesc;
 
@@ -113,6 +113,20 @@ typedef struct {
 } HCI_Ring;
 
 typedef struct {
+    uint32_t data[8];
+} EndpointContext;
+
+typedef struct {
+    // EP Context 0
+    // EP Context 1  OUT (dir=0)
+    // EP Context 1  IN  (dir=1)
+    // ...
+    // EP Context 15 OUT (dir=0)
+    // EP Context 15 IN  (dir=1)
+    EndpointContext arr[33];
+} InputContext;
+
+typedef struct {
     enum USB_DeviceState {
         PORT_DISCONNECTED,
         PORT_POLLING, // only USB2 does this
@@ -139,7 +153,12 @@ typedef struct {
     USB_DevDesc desc;
 
     // Device rings
-    HCI_Ring xfer_ring;
+    HCI_Ring xfer_ring[4];
+
+    // Endpoint descriptors
+    uintptr_t in_ctx_paddr, out_ctx_paddr;
+    InputContext* in_ctx;
+    uint32_t* out_ctx;
 
     // for notifying usb_submit_urb_sync
     atomic_bool complete_sync;
@@ -147,6 +166,7 @@ typedef struct {
 
 typedef struct {
     USB_Device* dev;
+    int pipe;
 
     // Setup stage
     struct URB_Setup {
