@@ -88,6 +88,9 @@ struct PerCPU {
     // place by the boot EFI
     u32 tss[26];
     #endif
+
+    // Message passing internals
+    char message_buffer[64];
 };
 
 // This is all the crap we throw into the loader

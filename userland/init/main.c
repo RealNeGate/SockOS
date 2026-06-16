@@ -265,10 +265,12 @@ int _start(KHandle bootstrap_vmo) {
         }
     }
 
+    // Launch the desktop server, this will handle I/O relevant to
+    // visualizing and interfacing with a UI.
     /*FileEntry* desktop = find_file(initrd, sizeof("/desktop.so")-1, "/desktop.so");
     if (desktop != NULL) {
         printf("Found desktop! %zu bytes\n", desktop->data_len);
-        exec(desktop);
+        exec(desktop, 0);
     }*/
 
     fault_handler();

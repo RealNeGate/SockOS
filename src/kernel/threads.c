@@ -105,13 +105,11 @@ void thread_resume(Thread* thread, PerCPU* cpu) {
 
     // Put to sleep on a core
     PerCPU_Scheduler* sched = cpu->sched;
-    spin_lock(&cpu->sched->lock);
     kassert(!sched_is_blocked(thread), "we shouldn't be blocked atm... why are you resuming us");
     Thread* latest = atomic_load_explicit(&cpu->blocked_threads, memory_order_relaxed);
     do {
         thread->next_in_blocked = latest;
     } while (!atomic_compare_exchange_strong_explicit(&cpu->blocked_threads, &latest, thread, memory_order_acq_rel, memory_order_acquire));
-    spin_unlock(&cpu->sched->lock);
 
     arch_wake_up(i);
 }

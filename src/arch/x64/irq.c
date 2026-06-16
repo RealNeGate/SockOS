@@ -240,7 +240,6 @@ uintptr_t timer_interrupt(CPUState* state, uintptr_t cr3, PerCPU* cpu, u64 now) 
     u64 now_micros = now / boot_info->tsc_freq;
 
     u64 next_wake;
-    spin_lock(&cpu->sched->lock);
     Thread* next = sched_pick_next(cpu, now_micros, &next_wake);
 
     PageTable* old_address_space = paddr2kaddr(cr3);
@@ -290,8 +289,6 @@ uintptr_t timer_interrupt(CPUState* state, uintptr_t cr3, PerCPU* cpu, u64 now) 
 
         *state = kernel_idle_state;
         cpu->current_thread = NULL;
-
-        spin_unlock(&cpu->sched->lock);
         return kaddr2paddr(boot_info->kernel_pml4);
     }
 
@@ -300,7 +297,6 @@ uintptr_t timer_interrupt(CPUState* state, uintptr_t cr3, PerCPU* cpu, u64 now) 
         *state = next->state;
         cpu->current_thread = next;
     }
-    spin_unlock(&cpu->sched->lock);
 
     #if DEBUG_SPALL
     {
@@ -431,10 +427,8 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
             Thread* curr = cpu->current_thread;
             Thread* next = event_signal(event);
             if (next) {
-                spin_lock(&cpu->sched->lock);
                 transfer_time(cpu, curr, next, state);
                 next->wait_obj = NULL;
-                spin_unlock(&cpu->sched->lock);
             }
             APIC(0xB0) = 0;
         }

@@ -126,6 +126,10 @@ typedef struct {
     EndpointContext arr[33];
 } InputContext;
 
+enum { MAX_ENDPOINTS = 31 };
+
+// there's ever only 255 devices or hubs and
+// the root controller is attached to slot0
 typedef struct {
     enum USB_DeviceState {
         PORT_DISCONNECTED,
@@ -145,24 +149,25 @@ typedef struct {
         PORT_CONFIGURED,
     } state;
 
-    // there's ever only 255 devices or hubs and
-    // the root controller is attached to slot0
-    // int slot;
-
     // USB_GET_DESCRIPTOR(DT_DEVICE, 0)
     USB_DevDesc desc;
     char name[32];
 
+    // Mailbox for control transfers
+    KHandle mailbox;
+
     // Device rings
-    HCI_Ring xfer_ring[4];
+    HCI_Ring xfer_ring[MAX_ENDPOINTS];
+
+    // User-facing rings
+    KHandle ipc_ring_vmo[MAX_ENDPOINTS];
+    KHandle ipc_ring_evt[MAX_ENDPOINTS];
+    IPC_Ring* ipc_ring[MAX_ENDPOINTS];
 
     // Endpoint descriptors
     uintptr_t in_ctx_paddr, out_ctx_paddr;
     InputContext* in_ctx;
     uint32_t* out_ctx;
-
-    // for notifying usb_submit_urb_sync
-    atomic_bool complete_sync;
 } USB_Device;
 
 typedef struct {
@@ -187,4 +192,19 @@ typedef struct {
     // void (*cont)(void* user_data);
 } USB_RequestBlock;
 _Static_assert(sizeof(struct URB_Setup) == 8, "bad!!!");
+
+// Mailbox commands
+enum {
+    //
+    USB_CMD_SET_CONFIG,
+
+    //
+    USB_CMD_SET_INTERFACE,
+
+    // ()
+    USB_CMD_CTRL_XFER,
+
+    // (Pipe) -> VMO
+    USB_CMD_BULK_XFER,
+};
 

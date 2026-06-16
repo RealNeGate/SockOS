@@ -72,58 +72,6 @@ void sched_wait(u64 timeout) {
     }
 }
 
-// keeps moving tasks to try to keep the exec times near each other
-int sched_load_balancer(void*) {
-    static i64 total_exec[256];
-    for (;;) {
-        // find average
-        /*u64 avg = 0;
-        FOR_N(i, 0, boot_info->core_count) {
-            total_exec[i] = boot_info->cores[i].sched->total_exec;
-        }
-        FOR_N(i, 0, boot_info->core_count) {
-            avg += total_exec[i];
-        }
-        boot_info->average_exec_time = avg / boot_info->core_count;
-        ON_DEBUG(SCHED)(kprintf("[sched] Average CPU exec time: %d us\n", avg));
-
-        if (avg > 1000) {
-            FOR_N(i, 0, boot_info->core_count) {
-                // if we're above average in exec times, we'll throw tasks into the
-                // lowest exec core.
-                if (total_exec[i] <= boot_info->average_exec_time) {
-                    continue;
-                }
-
-                int overhead = boot_info->average_exec_time - total_exec[i];
-
-                // round to min quanta
-                overhead = (overhead + 999) / 1000 * 1000;
-
-                ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: APLAPLPA %d\n", i, overhead));
-
-                int lowest = -1;
-                FOR_N(j, 0, boot_info->core_count) if (i != j) {
-                    if (lowest < 0 || total_exec[j] < total_exec[lowest]) {
-                        lowest = j;
-                    }
-                }
-
-                // pluck highest task
-                PerCPU_Scheduler* sched = boot_info->cores[i].sched;
-
-                PerCPU_Scheduler* sched2 = boot_info->cores[i].sched;
-                spin_lock(&sched->lock);
-
-                spin_lock(&sched->lock);
-            }
-        }*/
-
-        kprintf("POLL!\n");
-        sleep(1000000);
-    }
-}
-
 enum {
     SCHED_MIN_QUANTA =  1000,
     SCHED_LATENCY    = 16666, // 60Hz

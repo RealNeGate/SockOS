@@ -322,8 +322,6 @@ typedef struct {
 } ThreadQueue;
 
 struct PerCPU_Scheduler {
-    Lock lock;
-
     atomic_bool idleing;
     atomic_u64 total_exec_time;
 

@@ -17,7 +17,7 @@ Thread* waitqueue_wake(WaitQueue* wq, PerCPU* cpu) {
     spin_lock(&wq->lock);
 
     Thread* t = wq->thread;
-    if (t != NULL) {
+    if (t == NULL) {
         spin_unlock(&wq->lock);
         return NULL;
     }

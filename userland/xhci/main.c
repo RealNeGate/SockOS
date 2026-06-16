@@ -3,9 +3,10 @@
 #include <stdatomic.h>
 #include "../src/kernel/printf.c"
 
-#include "usb.h"
+#define IPC_RING_IMPL
+#include "../ipc_ring.h"
 
-#define USBSTS_CNR (1<<11)
+#include "usb.h"
 
 static volatile uint32_t* mmio;
 
@@ -14,7 +15,7 @@ static char* log_buffer;
 static int log_used;
 static atomic_int log_lock;
 
-#define SPIN_LOCK(x)   while (atomic_exchange((x), 1)) {}
+#define SPIN_LOCK(x)   while (!atomic_compare_exchange_strong((x), &(int){ 0 }, 1)) {}
 #define SPIN_UNLOCK(x) atomic_store((x), 0)
 
 void* memset(void* buffer, int c, size_t n) {
@@ -27,11 +28,17 @@ void* memset(void* buffer, int c, size_t n) {
 
 void fault_handler(void) {
     SPIN_LOCK(&log_lock);
-    if (log_stream) {
+    if (log_stream && log_used) {
         syscall(SYS_debug_log, log_stream, log_used);
         log_used = 0;
     }
     SPIN_UNLOCK(&log_lock);
+}
+
+#define assert(cond) if (!(cond)) { assert_msg(#cond); }
+static void assert_msg(const char* str) {
+    printf("assert condition failed! %s\n", str);
+    fault_handler();
 }
 
 void _putchar(char ch) {
@@ -52,95 +59,13 @@ static void* pin(size_t size, uintptr_t* paddr) {
     return (void*) syscall(SYS_mpin, 0, 0, size, paddr);
 }
 
+// Source files
+#include "ring.c"
+
 enum {
     MAX_PORTS = 16,
     MAX_SLOTS = 256,
 };
-
-#define assert(cond) if (!(cond)) { assert_msg(#cond); }
-static void assert_msg(const char* str) {
-    printf("assert condition failed! %s\n", str);
-    fault_handler();
-}
-
-enum { PAGE_SIZE_DWORDS = 4096 / 4 };
-static void ring_alloc(HCI_Ring* ring, size_t cnt) {
-    size_t size = cnt*16;
-    // round to page
-    size = (size + 4095) & ~4095ull;
-
-    ring->cycle_bit = true;
-    ring->count = cnt;
-
-    ring->base = mmap(0, 0, 0, size, PROT_READ | PROT_WRITE, 0);
-    ring->base_paddr = syscall(SYS_get_paddr, ring->base);
-    assert(ring->base_paddr);
-
-    ring->dequeue = ring->base;
-    ring->dequeue_paddr = ring->base_paddr;
-
-    if (size > 4096) {
-        size_t curr = PAGE_SIZE_DWORDS;
-        uintptr_t prev_paddr = ring->base_paddr;
-        uint32_t* base =  ring->base;
-
-        // Insert Link TRBs
-        size_t page_count = (size + 4095) / 4096;
-        FOR_N(i, 1, page_count) {
-            uintptr_t paddr = syscall(SYS_get_paddr, &base[i*PAGE_SIZE_DWORDS]);
-            if (prev_paddr+4096 != paddr) {
-                // Not contiguous? insert link at the end of the prev_paddr
-                uint32_t* link_entry = &base[i*PAGE_SIZE_DWORDS - 4];
-                link_entry[0] = paddr & 0xFFFFFFF0;
-                link_entry[1] = paddr >> 32ull;
-                link_entry[3] = 6u << 10u;
-            }
-            prev_paddr = paddr;
-        }
-
-        // Final Link TRB
-        uint32_t* link_entry = &base[(size - 16) / 4];
-        link_entry[0] = 0;
-        link_entry[1] = 0;
-        link_entry[3] = (6u << 10u) | 2u; // Toggle cycle
-    }
-}
-
-static uint32_t* ring_cmd_at(HCI_Ring* ring, uintptr_t paddr) {
-    return &ring->base[(paddr - ring->base_paddr) / 4];
-}
-
-static void ring_advance(HCI_Ring* ring) {
-    // Move 16B forward
-    ring->dequeue += 4;
-    ring->dequeue_paddr += 16;
-
-    // Check for Link TRBs
-    if (ring->dequeue == &ring->base[ring->count*4]) {
-        // Wrap to start
-        ring->dequeue       = ring->base;
-        ring->dequeue_paddr = ring->base_paddr;
-        ring->cycle_bit     = !ring->cycle_bit;
-    } else {
-        uint32_t type = (ring->dequeue[3] >> 10u) & 0b111111;
-        if (type == 6) {
-            ring->dequeue_paddr = ring->dequeue[0] | ((uintptr_t) ring->dequeue[1] << 32ull);
-        }
-    }
-}
-
-static void ring_submit_cmd(HCI_Ring* ring, int type, uint32_t cmd[4]) {
-    uint32_t* dst = ring->dequeue;
-
-    // copy command (except control field)
-    FOR_N(i, 0, 3) { dst[i] = cmd[i]; }
-
-    // write out, last word in the command must be written last since
-    // it holds the control field and the producer cycle bit.
-    dst[3] = cmd[3] | ((type & 0x3F) << 10u) | ring->cycle_bit;
-
-    ring_advance(ring);
-}
 
 typedef struct {
     int usb_type;
@@ -150,7 +75,7 @@ typedef struct {
 #define DEV_SLOT(dev) ((dev) - devices)
 
 static Port ports[MAX_PORTS];
-static USB_Device devices[MAX_SLOTS];
+static USB_Device* devices;
 
 static volatile uint32_t* doorbell;
 static volatile uint32_t* op_base;
@@ -167,14 +92,15 @@ static void ring_doorbell(USB_Device* dev, int target) {
     }
 }
 
-typedef struct {
+typedef struct PendingURB PendingURB;
+struct PendingURB {
     // Key
     uintptr_t paddr;
 
     // Value
-    void* user_data;
-    void (*cont)(void* user_data);
-} PendingURB;
+    USB_Device* dev;
+    int pipe;
+};
 
 typedef struct {
     enum USB_DeviceState state;
@@ -194,18 +120,29 @@ static atomic_int pending_urb_lock;
 
 static atomic_int dev_to_refresh;
 
+static void mark_pending_urb(uintptr_t paddr, USB_Device* dev, int pipe) {
+    SPIN_LOCK(&pending_urb_lock);
+    pending_urbs[pending_urb_count++] = (PendingURB){
+        paddr, dev, pipe
+    };
+    SPIN_UNLOCK(&pending_urb_lock);
+}
+
 static void signal_pending_urb(uintptr_t paddr, int cc) {
+    SPIN_LOCK(&pending_urb_lock);
+    PendingURB pending = { 0};
     for (int i = 0; i < pending_urb_count; i++) {
         if (pending_urbs[i].paddr == paddr) {
-            // printf("Completed URB! %p (CC=%d)\n", paddr, cc);
-            if (pending_urbs[i].cont) {
-                pending_urbs[i].cont(pending_urbs[i].user_data);
-            }
-
             // Remove from list
+            pending = pending_urbs[i];
             pending_urbs[i] = pending_urbs[--pending_urb_count];
             break;
         }
+    }
+    SPIN_UNLOCK(&pending_urb_lock);
+
+    if (pending.dev) {
+        syscall(SYS_event_signal, pending.dev->ipc_ring_evt[pending.pipe]);
     }
 }
 
@@ -262,27 +199,8 @@ static uintptr_t submit_urb(USB_RequestBlock* urb) {
     cmd[2] = 0;
     cmd[3] = (1u << 5u) | (status_in << 16u);
     uintptr_t paddr = ring->dequeue_paddr;
+    mark_pending_urb(paddr, dev, urb->pipe);
     ring_submit_cmd(ring, TRB_STATUS, cmd);
-    return paddr;
-}
-
-static uintptr_t submit_bulk_urb(USB_RequestBlock* urb) {
-    uint32_t cmd[4];
-    USB_Device* dev = urb->dev;
-    HCI_Ring* ring = &dev->xfer_ring[urb->pipe];
-
-    assert(urb->pipe > 0);
-    bool status_in = !(urb->pipe & 1);
-
-    // Normal Packet
-    uintptr_t data_paddr = syscall(SYS_get_paddr, urb->data);
-    cmd[0] = data_paddr & 0xFFFFFFFF;
-    cmd[1] = data_paddr >> 32ull;
-    cmd[2] = urb->data_len;
-    cmd[3] = (1u << 5u);
-
-    uintptr_t paddr = ring->dequeue_paddr;
-    ring_submit_cmd(ring, TRB_NORMAL, cmd);
     return paddr;
 }
 
@@ -293,53 +211,21 @@ enum {
     MSG_ADDRESSED,
 };
 
-static void signal_complete(void* dev) {
-    ((USB_Device*) dev)->complete_sync = true;
-}
-
-static void usb_submit_bulk_urb_sync(USB_RequestBlock* urb) {
-    USB_Device* dev = urb->dev;
-    dev->complete_sync = false;
-
-    uintptr_t paddr = submit_bulk_urb(urb);
-
-    SPIN_LOCK(&pending_urb_lock);
-    pending_urbs[pending_urb_count++] = (PendingURB){
-        paddr, dev, signal_complete
-    };
-    SPIN_UNLOCK(&pending_urb_lock);
-    ring_doorbell(dev, urb->pipe + 1);
-
-    // Wait for URB
-    while (!dev->complete_sync) {}
-}
-
 static void usb_submit_urb_sync(USB_RequestBlock* urb) {
     USB_Device* dev = urb->dev;
-    dev->complete_sync = false;
-
-    uintptr_t paddr = submit_urb(urb);
-    SPIN_LOCK(&pending_urb_lock);
-    pending_urbs[pending_urb_count++] = (PendingURB){
-        paddr, dev, signal_complete
-    };
-    SPIN_UNLOCK(&pending_urb_lock);
+    submit_urb(urb);
     ring_doorbell(dev, urb->pipe + 1);
 
     // Wait for URB
-    while (!dev->complete_sync) {}
+    syscall(SYS_event_wait, dev->ipc_ring_evt[0]);
 }
 
 static void usb_device_thread(void* arg);
-static void usb_got_desc(void* p) {
-    syscall(SYS_thread_create, NULL, usb_device_thread, p, 8192, 0);
-}
-
 static void usb_fsm(int msg, int port, int slot) {
     USB_Device* dev = slot >= 0 ? &devices[slot] : NULL;
 
-    printf("USB_FSM(%d, %d, %d, %p)\n", msg, port, slot, dev);
-    fault_handler();
+    // printf("USB_FSM(%d, %d, %d, %p)\n", msg, port, slot, dev);
+    // fault_handler();
 
     volatile uint32_t* sts_ptr = &op_base[0x100 + (4 * port)];
     switch (msg) {
@@ -435,25 +321,9 @@ static void usb_fsm(int msg, int port, int slot) {
         case MSG_ADDRESSED: {
             printf("Port%u is now addressed!\n", port);
             dev->state = PORT_ADDRESS;
-
-            USB_RequestBlock urb = {
-                .dev   = dev,
-                .setup = {
-                    .request_type = USB_DEV2HOST | USB_TYPE_STANDARD | USB_RECIP_DEVICE,
-                    .request      = USB_GET_DESCRIPTOR,
-                    .value        = 0x0100, // DT_DEVICE
-                    .length       = 8,
-                },
-                .data_len     = 8,
-                .data         = &dev->desc,
-            };
-            uintptr_t paddr = submit_urb(&urb);
-            SPIN_LOCK(&pending_urb_lock);
-            pending_urbs[pending_urb_count++] = (PendingURB){
-                paddr, dev, usb_got_desc
-            };
-            SPIN_UNLOCK(&pending_urb_lock);
-            ring_doorbell(dev, 1);
+            dev->mailbox = syscall(SYS_mailbox_create, 1);
+            dev->ipc_ring_evt[0] = syscall(SYS_event_create);
+            syscall(SYS_thread_create, NULL, usb_device_thread, dev, 8192, 0);
         } break;
     }
 }
@@ -465,12 +335,15 @@ static void usb_set_endpoint(USB_Device* dev, USB_EndpointDesc* ep, int ring_cap
     int index   = ep->addr & 0xF;
     int i       = (index - 1)*2 + (dir_in ? 4 : 3);
 
+    assert(i - 2 < MAX_ENDPOINTS);
     HCI_Ring* ring = &dev->xfer_ring[i - 2];
     ring_alloc(ring, ring_cap);
 
+    dev->ipc_ring[i - 2] = ipc_ring_alloc(ep->max_packet_size, 16, &dev->ipc_ring_vmo[i - 2]);
+    dev->ipc_ring_evt[i - 2] = syscall(SYS_event_create);
+
     InputContext* in_ctx = dev->in_ctx;
-    in_ctx->arr[0].data[1] = 0;
-    in_ctx->arr[0].data[1] = 1 | (1 << (i - 1));
+    in_ctx->arr[0].data[1] |= 1 << (i - 1);
 
     // update context entries to contain the highest DCI
     int curr_context_entries = in_ctx->arr[1].data[0] >> 27u;
@@ -486,15 +359,6 @@ static void usb_set_endpoint(USB_Device* dev, USB_EndpointDesc* ep, int ring_cap
     in_ctx->arr[i].data[1] = (3 << 1u) | (ep_type << 3u) | (ep->max_packet_size << 16u) | (0 << 8u);
     in_ctx->arr[i].data[2] = (ring->base_paddr & 0xFFFFFFF0) | 1u;
     in_ctx->arr[i].data[3] = (ring->base_paddr >> 32ull);
-
-    // Ask to refresh device
-    int id = 1 + DEV_SLOT(dev);
-    while (!atomic_compare_exchange_strong(&dev_to_refresh, &(int){ 0 }, id)) {
-    }
-
-    // Wait for it to complete
-    while (dev_to_refresh == id) {
-    }
 }
 
 static int read_string(USB_Device* dev, int index, char* dst, size_t cap) {
@@ -529,95 +393,49 @@ static int read_string(USB_Device* dev, int index, char* dst, size_t cap) {
     return cnt;
 }
 
-static void usbhid_handle(USB_Device* dev, char* interface, int interface_size) {
-    // identify the interrupt IN endpoint
-    for (int i = interface[0], j = 0; i < interface_size; i += interface[i], j++) {
-        USB_EndpointDesc* ep = (USB_EndpointDesc*) &interface[i];
-        bool dir_in = ep->addr >> 7;
-
-        const char* type_str;
-        switch (ep->attrs & 3) {
-            case 0: type_str = "Ctrl"; break;
-            case 1: type_str = "Iso";  break;
-            case 2: type_str = "Bulk"; break;
-            case 3: type_str = "Int";  break;
-        }
-
-        printf("ENDPOINT%d: num=%d, dir=%-3s, type=%s, rate=%d\n", j, ep->addr & 0xF, dir_in ? "IN" : "OUT", type_str, ep->interval);
-
-        if ((ep->attrs & 3) && dir_in) {
-            usb_set_endpoint(dev, ep, 256);
-            printf("  Connect up!!!\n");
-        }
-    }
-
-    USB_RequestBlock urb = {
-        .dev = dev,
-        .setup = {
-            .request_type = 0x21,
-            .request      = 0x0B, // SetProtocol
-            .value        = 0,    // Boot
-        },
-    };
-    usb_submit_urb_sync(&urb);
-    printf("Connected HID!!! %d '%s'\n", interface_size, dev->name);
-
-    char report[8];
-    for (;;) {
-        // TODO(NeGate): setup interrupter forwarding here
-
-        // Interrupt IN endpoint
-        urb.pipe     = 2;
-        urb.data_len = 8;
-        urb.data     = report;
-        usb_submit_bulk_urb_sync(&urb);
-
-        printf("REPORT %d: ", DEV_SLOT(dev));
-        for (int j = 0; j < 8; j++) {
-            printf(" %02x", report[j] & 0xFF);
-        }
-        printf("\n");
-        fault_handler();
-    }
-}
-
 enum {
     USB_DRIVER_NONE,
     USB_DRIVER_HID,
 };
 
+static void usb_endpoint_thread(void* arg);
+static void interrupt_in_try(USB_Device* dev, int pipe, char* data, size_t data_len);
+
 static void usb_device_thread(void* d) {
     USB_Device* dev = d;
-
-    char scratch[256];
-    char str[256];
-    size_t desc_len = dev->desc.length;
     USB_RequestBlock urb = {
-        .dev = dev,
+        .dev   = dev,
         .setup = {
             .request_type = USB_DEV2HOST | USB_TYPE_STANDARD | USB_RECIP_DEVICE,
             .request      = USB_GET_DESCRIPTOR,
-            .value        = USB_DT_DEVICE << 8,
-            .length       = desc_len,
+            .value        = 0x0100, // DT_DEVICE
+            .length       = 8,
         },
-        .data_len     = desc_len,
+        .data_len     = 8,
         .data         = &dev->desc,
     };
     usb_submit_urb_sync(&urb);
+
+    size_t desc_len  = dev->desc.length;
+    urb.setup.length = urb.data_len = desc_len;
+    usb_submit_urb_sync(&urb);
+
+    char str[256];
+    char scratch[256];
     urb.data = scratch;
 
     char* interface = NULL;
     size_t interface_size = 0;
-
     int usb_type = USB_DRIVER_NONE;
     if (dev->desc.dev_class == 0 && dev->desc.dev_sub_class == 0) {
+        #if 0
         printf(" FOUND HID-DEVICES!!! %#02x:%#02x, %d\n", dev->desc.dev_class, dev->desc.dev_sub_class, dev->desc.num_configs);
-
         char* buf = (char*) &dev->desc;
         for (int j = 0; j < desc_len; j++) {
             printf(" %02x", buf[j]);
         }
         printf("\n");
+        #endif
 
         int selected_config = 0;
         int selected_interface = 0;
@@ -688,11 +506,139 @@ static void usb_device_thread(void* d) {
         assert(selected_config == 0 || selected_interface == 0);
     }
 
-    if (usb_type == USB_DRIVER_HID) {
-        usbhid_handle(dev, interface, interface_size);
+    // Initialize the interface's endpoints
+    if (interface_size > 0) {
+        int slot = DEV_SLOT(dev);
+        printf("[usb] dev%d: connected '%s' %04x:%04x\n", slot, dev->name, dev->desc.id_vendor, dev->desc.id_product);
+        fault_handler();
+
+        InputContext* in_ctx = dev->in_ctx;
+        in_ctx->arr[0].data[1] = 0;
+        in_ctx->arr[0].data[1] = 1;
+
+        // TODO(NeGate): negotiate bandwidth
+        for (int i = interface[0], j = 0; i < interface_size; i += interface[i], j++) {
+            USB_EndpointDesc* ep = (USB_EndpointDesc*) &interface[i];
+            bool dir_in = ep->addr >> 7;
+
+            const char* type_str;
+            switch (ep->attrs & 3) {
+                case 0: type_str = "Ctrl"; break;
+                case 1: type_str = "Iso";  break;
+                case 2: type_str = "Bulk"; break;
+                case 3: type_str = "Int";  break;
+            }
+
+            printf("[usb] dev%d: endpoint%d: num=%d, dir=%-3s, type=%s, rate=%d, max_packet=%d\n", slot, j, ep->addr & 0xF, dir_in ? "IN" : "OUT", type_str, ep->interval, ep->max_packet_size);
+            usb_set_endpoint(dev, ep, 256);
+        }
+        fault_handler();
+
+        // Ask to refresh device
+        int id = 1 + DEV_SLOT(dev);
+        while (!atomic_compare_exchange_strong(&dev_to_refresh, &(int){ 0 }, id)) {
+        }
+
+        // Wait for it to complete
+        while (dev_to_refresh == id) {
+        }
+
+        if (usb_type == USB_DRIVER_HID) {
+            urb.setup.request_type = 0x21; // SetProtocol
+            urb.setup.request      = 0x0B; // Boot
+            urb.setup.value        = 0;
+            usb_submit_urb_sync(&urb);
+        }
+
+        // Launch listener threads to track interrupt IN channels
+        for (int i = interface[0], j = 0; i < interface_size; i += interface[i], j++) {
+            USB_EndpointDesc* ep = (USB_EndpointDesc*) &interface[i];
+            bool dir_in = ep->addr >> 7;
+
+            // "Bootstrap" the interrupt process
+            if ((ep->attrs & 3) == 3 && dir_in) {
+                bool dir_in = ep->addr >> 7;
+                int ep_type = dir_in ? 7 : 3;
+                int index   = ep->addr & 0xF;
+                int i       = (index - 1)*2 + (dir_in ? 4 : 3);
+
+                uintptr_t val = (i - 2) | (DEV_SLOT(dev) << 32u);
+                syscall(SYS_thread_create, NULL, usb_endpoint_thread, (void*) val, 8192, 0);
+            }
+        }
     }
 
-    for (;;) {}
+    KHandle mailbox = dev->mailbox;
+
+    // Process messages
+    KHandle handle;
+    uint64_t args[2], msg[4];
+    uint64_t info = mailbox_wait(mailbox, sizeof(msg) << 16u, args, msg, &handle);
+    for (;;) {
+        char* ptr = 0;
+        switch (msg[0]) {
+            case USB_CMD_CTRL_XFER: {
+                break;
+            }
+
+            case USB_CMD_BULK_XFER: {
+                handle = dev->ipc_ring_vmo[args[0]];
+                break;
+            }
+        }
+        // reply and wait for the next message
+        info = mailbox_reply(mailbox, info, args, ptr, &handle);
+    }
+}
+
+static void usb_endpoint_thread(void* arg) {
+    uintptr_t a     = (uintptr_t) arg;
+    USB_Device* dev = &devices[a >> 32u];
+    int pipe        = a & 0xFFFFFFFF;
+
+    uint32_t max_packet_size = dev->in_ctx->arr[2 + pipe].data[1] >> 16u;
+    IPC_Endpoint ep = ipc_endpoint(dev->ipc_ring[pipe], false);
+
+    // TODO(NeGate): CACHE to avoid get_paddr calls
+    // uintptr_t last_data_paddr = 0;
+    // uintptr_t last_data = 0;
+    do {
+        // Send packet
+        char* packet = ipc_write_reserve(&ep);
+        {
+            uint32_t cmd[4];
+            HCI_Ring* ring = &dev->xfer_ring[pipe];
+            assert(pipe > 0);
+
+            // Normal Packet
+            uintptr_t data_paddr = syscall(SYS_get_paddr, packet);
+            cmd[0] = data_paddr & 0xFFFFFFFF;
+            cmd[1] = data_paddr >> 32ull;
+            cmd[2] = max_packet_size;
+            cmd[3] = (1u << 5u);
+
+            uintptr_t paddr = ring->dequeue_paddr;
+            mark_pending_urb(paddr, dev, pipe);
+            ring_submit_cmd(ring, TRB_NORMAL, cmd);
+            ring_doorbell(dev, pipe + 1);
+        }
+
+        // Wait for packet
+        syscall(SYS_event_wait, dev->ipc_ring_evt[pipe]);
+
+        /* printf("REPORT %d.%d: ", DEV_SLOT(dev), pipe);
+        for (int j = 0; j < 8; j++) {
+            printf(" %02x", packet[j] & 0xFF);
+        }
+        printf("\n");
+        fault_handler(); */
+
+        printf("A\n");
+        fault_handler();
+
+        // Tell user about it
+        ipc_write_commit(&ep, max_packet_size);
+    } while (true);
 }
 
 static KHandle mailbox;
@@ -709,11 +655,9 @@ void request_handler(void* arg) {
     }
 }
 
+#define USBSTS_CNR (1<<11)
 int _start(KHandle pci_device) {
-    /* uint64_t info[4];
-    int fb_bar = syscall(SYS_fb_grab, info);
-    uint32_t* fb = (uint32_t*) syscall(SYS_mmap, fb_bar, 0, info[3]); */
-
+    #if 0
     // create & install mailbox
     mailbox = syscall(SYS_mailbox_create, 4);
     for (int i = 0; i < 4; i++) {
@@ -724,6 +668,7 @@ int _start(KHandle pci_device) {
     uint64_t x = 1;
     syscall(SYS_mailbox_send, mailbox, sizeof(x), &x);
     syscall(SYS_test, x);
+    #endif
 
     size_t size;
     KHandle bar0 = syscall(SYS_pci_get_bar, pci_device, 0, &size);
@@ -755,6 +700,7 @@ int _start(KHandle pci_device) {
 
     uint32_t max_ports = mmio[1] >> 24u;
     uint32_t max_slots = mmio[1] & 0xFF;
+    devices = mmap(0, 0, 0, max_slots*sizeof(USB_Device), PROT_READ | PROT_WRITE, 0);
 
     // XHCI initialization
     //   1. Wait for hardware reset (USBSTS @ 4h)
@@ -818,8 +764,8 @@ int _start(KHandle pci_device) {
 
                 uint32_t completed_type = (cmd[3] >> 10) & 0b111111;
                 uint32_t completition_code = trb[2] >> 24u;
-                printf("%d : Completed Event%p %#x (type=%d, cc=%#x)\n", trb[2] >> 24u, cmd_ptr, trb[3], completed_type, completition_code);
 
+                // printf("%d : Completed Event%p %#x (type=%d, cc=%#x)\n", trb[2] >> 24u, cmd_ptr, trb[3], completed_type, completition_code);
                 if (completed_type == 12) {
                     // configure endpoint
                     //   allow others to use it now
@@ -855,10 +801,7 @@ int _start(KHandle pci_device) {
             } else if (type == 0x20) { // Transfer event
                 uintptr_t cmd_ptr = trb[0] | ((uintptr_t) trb[1] << 32ull);
                 uint32_t completition_code = trb[2] >> 24u;
-
-                SPIN_LOCK(&pending_urb_lock);
                 signal_pending_urb(cmd_ptr, completition_code);
-                SPIN_UNLOCK(&pending_urb_lock);
             } else {
                 printf("Unsupported event %d\n", type);
             }

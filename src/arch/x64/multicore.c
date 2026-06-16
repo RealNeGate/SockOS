@@ -51,14 +51,12 @@ void arch_tlb_shootdown(Env* env) {
     // notify any thread which is running this environment to stand down
     int checkpoint_count = 0;
     FOR_N(i, 0, boot_info->core_count) {
-        spin_lock(&boot_info->cores[i].sched->lock);
         Thread* t = boot_info->cores[i].current_thread;
         if (t != curr && t != NULL && t->parent == env) {
             // sending an IPI which triggers int#32 (Timer)
             x86_send_ipi(boot_info->cores[i].lapic_id, 0x20);
             checkpoint_count++;
         }
-        spin_unlock(&boot_info->cores[i].sched->lock);
     }
 
     // barrier until all of those threads have crossed the checkpoint

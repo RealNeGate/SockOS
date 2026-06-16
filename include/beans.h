@@ -37,6 +37,9 @@ enum {
     // Handle errors
     RESULT_NO_HANDLE    = -5, // Handle was 0
     RESULT_WRONG_HANDLE = -6, // Type mismatch
+
+    // Mailbox errors
+    RESULT_PACKET_TOO_BIG = -7,
 };
 
 typedef enum {
@@ -49,9 +52,26 @@ typedef enum {
 #ifndef KERNEL_LAND
 #include "syscall_helper.h"
 
-// Wrappers for syscalls
-static uint64_t mailbox_wait(KHandle mailbox, uint64_t msg[4]) { return syscall(SYS_mailbox_wait, mailbox, msg); }
-static uint64_t mailbox_reply(KHandle mailbox, uint64_t msg[4], uint64_t ret0, uint64_t ret1) { return syscall(SYS_mailbox_reply, mailbox, msg, ret0, ret1); }
+// info { len:48 fn:15 handle:1 }
+// mailbox_send (box, info, arg0, arg1, body, handle)
+//
+// mailbox_reply(box, info, arg0, arg1, body, handle)
+// mailbox_wait (box, info, arg0, arg1, body, handle)
+//                          ^^^^^^^^^^
+//                          out params
+//
+//                0    1     2     3     4     5
+static uint64_t mailbox_send(KHandle mailbox, uint64_t info, uint64_t arg0, uint64_t arg1, void* ptr, KHandle* handle) {
+    return syscall(SYS_mailbox_send, mailbox, info, arg0, arg1, ptr, handle);
+}
+
+static uint64_t mailbox_reply(KHandle mailbox, uint64_t info, uint64_t args[2], void* ptr, KHandle* handle) {
+    return __syscall6_out2(SYS_mailbox_reply, mailbox, info, &args[0], &args[1], (long) ptr, handle);
+}
+
+static uint64_t mailbox_wait(KHandle mailbox, uint64_t info, uint64_t args[2], void* ptr, KHandle* handle) {
+    return __syscall6_out2(SYS_mailbox_wait, mailbox, info, &args[0], &args[1], (long) ptr, handle);
+}
 
 static KHandle vmo_create(size_t size)  { return syscall(SYS_vmo_create, size); }
 static size_t vmo_get_size(KHandle vmo) { return syscall(SYS_vmo_get_size, vmo); }

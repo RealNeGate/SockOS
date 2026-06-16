@@ -50,7 +50,6 @@ function build(name, cmd, input, content)
     end
 end
 
-
 -- package freestanding headers into C file
 function list_files(path, pat)
     local x = {}
@@ -112,6 +111,7 @@ do
     local init_rd_list = {
         "userland/drivers.txt",
         "objs/xhci.so",
+        "objs/bochs.so",
     }
 
     table.insert(lines, "# INIT PROGRAM")
@@ -121,6 +121,11 @@ do
 
     table.insert(lines, "# USB")
     build("objs/xhci.so", "cc", "userland/xhci/main.c", {
+        flags = elf_cflags.." -fuse-ld=lld -fpic"
+    })
+
+    table.insert(lines, "# BOCHS")
+    build("objs/bochs.so", "cc", "userland/bochs/main.c", {
         flags = elf_cflags.." -fuse-ld=lld -fpic"
     })
 

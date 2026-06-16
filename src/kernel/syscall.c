@@ -21,15 +21,23 @@ size_t syscall_table_count = SYS_MAX;
 #ifdef __x86_64__
 #include "threads.h"
 
-#define SYS_PARAM0 state->rdi
-#define SYS_PARAM1 state->rsi
-#define SYS_PARAM2 state->rdx
-#define SYS_PARAM3 state->r10
-#define SYS_PARAM4 state->r8
-#define SYS_PARAM5 state->r9
+#define GET_RETURN(s) (s)->rax
+#define GET_PARAM0(s) (s)->rdi
+#define GET_PARAM1(s) (s)->rsi
+#define GET_PARAM2(s) (s)->rdx
+#define GET_PARAM3(s) (s)->r10
+#define GET_PARAM4(s) (s)->r8
+#define GET_PARAM5(s) (s)->r9
 #else
 #error "TODO: Syscall parameters aren't available for this arch"
 #endif
+
+#define SYS_PARAM0 GET_PARAM0(state)
+#define SYS_PARAM1 GET_PARAM1(state)
+#define SYS_PARAM2 GET_PARAM2(state)
+#define SYS_PARAM3 GET_PARAM3(state)
+#define SYS_PARAM4 GET_PARAM4(state)
+#define SYS_PARAM5 GET_PARAM5(state)
 
 #define KCHECK(pred, code) if ((pred) == 0) { return code; }
 
@@ -128,6 +136,20 @@ static _Noreturn void yield_syscall(PerCPU* cpu, uintptr_t cr3, CPUState* state,
     do_context_switch(state, new_cr3);
 }
 
+void transfer_time(PerCPU* cpu, Thread* curr, Thread* next, CPUState* state) {
+    // save out state
+    curr->state = *state;
+
+    next->start_time = curr->start_time;
+    next->exec_time = curr->exec_time;
+    next->max_exec_time = curr->max_exec_time;
+    next->wait_obj = NULL;
+    next->calling_thread = curr;
+
+    // replace curr thread in scheduler state
+    cpu->current_thread = next;
+}
+
 ////////////////////////////////
 // Syscall table
 ////////////////////////////////
@@ -147,13 +169,7 @@ SYS_FN(sched_time) {
     u64* arr = (u64*) SYS_PARAM0;
     FOR_N(i, 0, boot_info->core_count) {
         PerCPU* some_cpu = &boot_info->cores[i];
-        if (cpu != some_cpu) {
-            spin_lock(&cpu->sched->lock);
-            arr[i] = sched_total_exec_time(some_cpu, now_time);
-            spin_unlock(&cpu->sched->lock);
-        } else {
-            arr[i] = sched_total_exec_time(some_cpu, now_time);
-        }
+        arr[i] = sched_total_exec_time(some_cpu, now_time);
     }
     return now_time;
 }
@@ -354,9 +370,7 @@ SYS_FN(event_wait) {
     KCHECK(event, RESULT_NO_HANDLE);
     KCHECK(event->super.tag == KOBJECT_EVENT, RESULT_WRONG_HANDLE);
 
-    spin_lock(&cpu->sched->lock);
     event_wait(event, cpu->current_thread);
-    spin_unlock(&cpu->sched->lock);
 
     // Pick a new task
     state->interrupt_num = 32;
@@ -366,6 +380,15 @@ SYS_FN(event_wait) {
 
 SYS_FN(event_signal) {
     ON_DEBUG(SYSCALL)(kprintf("SYS_event_signal(%p)\n", SYS_PARAM0));
+
+    Env* env = cpu->current_thread->parent;
+    KObject_Event* event = env_get_handle(env, SYS_PARAM0, NULL);
+    KCHECK(event, RESULT_NO_HANDLE);
+    KCHECK(event->super.tag == KOBJECT_EVENT, RESULT_WRONG_HANDLE);
+
+    Thread* next = event_signal(event);
+    next->wait_obj = NULL;
+    thread_resume(next, cpu);
     return 0;
 }
 
@@ -489,22 +512,66 @@ SYS_FN(mailbox_create) {
     return env_open_handle(env, 0, &mailbox->super);
 }
 
-void transfer_time(PerCPU* cpu, Thread* curr, Thread* next, CPUState* state) {
-    // save out state
-    curr->state = *state;
+static KHandle ingest_user_handle(uintptr_t ptr) {
+    KHandle res = 0;
+    if (ptr && ingest_usermem(&res, ptr, sizeof(KHandle))) {
+        return res;
+    }
+    return 0;
+}
 
-    next->start_time = curr->start_time;
-    next->exec_time = curr->exec_time;
-    next->max_exec_time = curr->max_exec_time;
-    next->wait_obj = NULL;
-    next->calling_thread = curr;
+static int mailbox_xfer(CPUState* state, PerCPU* cpu, Thread* curr, Thread* next, KObject_Mailbox* mailbox) {
+    // the sender thread is now blocked
+    transfer_time(cpu, curr, next, state);
 
-    // replace curr thread in scheduler state
-    cpu->current_thread = next;
+    uint64_t send_info  = SYS_PARAM1;
+    uint64_t send_msg   = SYS_PARAM4;
+    KHandle send_handle = SYS_PARAM5;
+
+    uint64_t recv_info  = GET_PARAM1(&next->state);
+    uintptr_t recv_msg  = GET_PARAM4(&next->state);
+
+    // msg length should be the min of the sender and receiver
+    size_t msg_len = send_info >> 16ull;
+    if (msg_len < (recv_info >> 16ull)) {
+        msg_len = (recv_info >> 16ull);
+    }
+    KCHECK(msg_len <= 64, RESULT_PACKET_TOO_BIG);
+    GET_RETURN(&next->state) = (msg_len << 16ull) | (send_info & 0xFFFFFFFFFFFF);
+
+    // transfer inline args
+    GET_PARAM2(&next->state) = SYS_PARAM2;
+    GET_PARAM3(&next->state) = SYS_PARAM3;
+    GET_PARAM5(&next->state) = 0;
+
+    // translate handle
+    if (send_handle) {
+        KObject* obj = env_get_handle(curr->parent, send_handle, NULL);
+        KCHECK(obj, RESULT_NO_HANDLE);
+
+        KHandle recv_handle = env_open_handle(next->parent, 0, obj);
+        egest_usermem(GET_PARAM5(&next->state), &recv_handle, sizeof(KHandle));
+    }
+
+    // copy message across address space
+    char* tmp = cpu->message_buffer;
+    ingest_usermem(tmp, send_msg, msg_len);
+    arch_set_address_space(next->parent);
+    egest_usermem(recv_msg, tmp, msg_len);
+
+    if (mailbox != NULL) {
+        // Put the mailbox thread back on the wait list.
+        mailbox_recv(mailbox, curr);
+        // Notify any senders who think there's no one waiting
+        waitqueue_wake(&mailbox->tx_wait, cpu);
+    }
+
+    // actually transition now
+    do_context_switch(&next->state, 0);
 }
 
 SYS_FN(mailbox_send) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_send(mailbox=%d, len=%d, data=%p)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2));
+    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_send(mailbox=%d, info=%ld, arg0=%p, arg1=%p, body=%p, handle=%p)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2, SYS_PARAM3, SYS_PARAM4, SYS_PARAM5));
 
     Env* env = cpu->current_thread->parent;
     KObject_Mailbox* mailbox = env_get_handle(env, SYS_PARAM0, NULL);
@@ -519,65 +586,16 @@ SYS_FN(mailbox_send) {
         // when it's ready but for now we'll just yield.
         yield_syscall(cpu, cr3, state, &mailbox->tx_wait);
     }
-
-    spin_lock(&cpu->sched->lock);
-    // the sender thread is now blocked
-    transfer_time(cpu, curr, next, state);
-    curr->wait_obj = mailbox;
-    spin_unlock(&cpu->sched->lock);
-
     kassert(next->parent, "mailboxes can't live in kernel-threads");
-    arch_set_address_space(next->parent);
 
-    #ifdef __x86_64__
-    size_t msg_len = next->state.rsi;
-    uintptr_t dst_ptr = next->state.rdx;
-    u64* out_val = &next->state.rax;
-    #else
-    #error "TODO"
-    #endif
-
-    // msg length should be the min of the sender and receiver
-    if (msg_len < SYS_PARAM1) {
-        msg_len = SYS_PARAM1;
-    }
-    *out_val = msg_len;
-
-    // copy message across address spaces
-    if (!copy_across_spaces(next->parent, next->state.rdx, (const char*) SYS_PARAM2, msg_len)) {
-        // TODO(NeGate): error
-        kassert(0, "BADD!!!");
-    }
-
-    do_context_switch(&next->state, 0);
-}
-
-SYS_FN(mailbox_wait) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_wait(mailbox=%d, len=%d, data=%p)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2));
-
-    Env* env = cpu->current_thread->parent;
-    Thread* curr = cpu->current_thread;
-    KObject_Mailbox* mailbox = env_get_handle(env, SYS_PARAM0, NULL);
-    KCHECK(mailbox, RESULT_NO_HANDLE);
-    KCHECK(mailbox->super.tag == KOBJECT_MAILBOX, RESULT_WRONG_HANDLE);
-
-    // Wait on mailbox
-    spin_lock(&cpu->sched->lock);
+    // Put to wait on mailbox
     curr->wait_obj = mailbox;
-    mailbox_recv(mailbox, curr);
-    spin_unlock(&cpu->sched->lock);
-
-    // Notify any senders who think there's no one waiting
-    waitqueue_wake(&mailbox->tx_wait, cpu);
-
-    // Pick a new task
-    state->interrupt_num = 32;
-    uintptr_t new_cr3 = x86_irq_int_handler(state, cr3, cpu);
-    do_context_switch(state, new_cr3);
+    return mailbox_xfer(state, cpu, curr, next, NULL);
 }
 
 SYS_FN(mailbox_reply) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_reply(mailbox=%d, len=%d, msg=%p)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2));
+    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_reply(mailbox=%d, info=%ld, data=%p, handle=%p)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM4, SYS_PARAM5));
+
     Env* env = cpu->current_thread->parent;
     KObject_Mailbox* mailbox = env_get_handle(env, SYS_PARAM0, NULL);
     KCHECK(mailbox, RESULT_NO_HANDLE);
@@ -586,32 +604,31 @@ SYS_FN(mailbox_reply) {
     Thread* curr = cpu->current_thread;
     Thread* next = curr->calling_thread;
 
-    spin_lock(&cpu->sched->lock);
-    transfer_time(cpu, curr, next, state);
+    curr->wait_obj = mailbox;
     curr->calling_thread = NULL;
-    // Put the mailbox thread back on the wait list
+    return mailbox_xfer(state, cpu, curr, next, mailbox);
+}
+
+SYS_FN(mailbox_wait) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_wait(mailbox=%d, info=%ld, data=%p, handle=%p)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM4, SYS_PARAM5));
+
+    Env* env = cpu->current_thread->parent;
+    Thread* curr = cpu->current_thread;
+    KObject_Mailbox* mailbox = env_get_handle(env, SYS_PARAM0, NULL);
+    KCHECK(mailbox, RESULT_NO_HANDLE);
+    KCHECK(mailbox->super.tag == KOBJECT_MAILBOX, RESULT_WRONG_HANDLE);
+
+    // Wait on mailbox
     curr->wait_obj = mailbox;
     mailbox_recv(mailbox, curr);
-    spin_unlock(&cpu->sched->lock);
 
     // Notify any senders who think there's no one waiting
     waitqueue_wake(&mailbox->tx_wait, cpu);
 
-    #ifdef __x86_64__
-    uintptr_t dst_ptr = next->state.rdx;
-    size_t msg_len    = next->state.rsi;
-    #else
-    #error "TODO"
-    #endif
-
-    if (!copy_across_spaces(next->parent, next->state.rdx, (const char*) SYS_PARAM2, msg_len)) {
-        // TODO(NeGate): error
-        kassert(0, "BADD!!!");
-    }
-
-    kassert(next->parent, "mailboxes can't live in kernel-threads");
-    uintptr_t new_cr3 = kaddr2paddr(next->parent->addr_space.hw_tables);
-    do_context_switch(&next->state, new_cr3);
+    // Pick a new task
+    state->interrupt_num = 32;
+    uintptr_t new_cr3 = x86_irq_int_handler(state, cr3, cpu);
+    do_context_switch(state, new_cr3);
 }
 
 // Replace this with a routine that stays in userland

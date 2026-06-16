@@ -6,6 +6,8 @@
 #####################################
 # Graphics Processing units
 #####################################
+# Bochs VBE
+1234:1111 /bochs.so
 # Intel iGPUs
 8086:3E92 /intel_gpu.so
 
