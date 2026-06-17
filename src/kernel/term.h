@@ -88,6 +88,7 @@ static void term_scroll_down1() {
 
 void _putchar(char c) {
     io_out8(0x3f8, c);
+    #if 0
     if(c == '\n') {
         term_cur_x = 0;
         term_cur_y += 1;
@@ -107,4 +108,5 @@ void _putchar(char c) {
             }
         }
     }
+    #endif
 }

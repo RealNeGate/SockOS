@@ -47,12 +47,22 @@ static __inline long __syscall6(long n, long a1, long a2, long a3, long a4, long
     return ret;
 }
 
+static __inline long __syscall6_out1(long n, long a1, long a2, long a3, long a4, long a5, unsigned int* a6) {
+    unsigned long ret;
+    register long r10 __asm__("r10") = a4;
+    register long r8 __asm__("r8") = a5;
+    register long r9 __asm__("r9") = *a6;
+    __asm__ __volatile__ ("syscall" : "=a"(ret), "=r"(r9) : "a"(n), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9) : "rcx", "r11", "memory");
+    *a6 = r9;
+    return ret;
+}
+
 static __inline long __syscall6_out2(long n, long a1, long a2, uint64_t* a3, uint64_t* a4, long a5, unsigned int* a6) {
     unsigned long ret;
     register long r10 __asm__("r10") = *a4;
     register long r8 __asm__("r8") = a5;
     register long r9 __asm__("r9") = *a6;
-    __asm__ __volatile__ ("syscall" : "=a"(ret), "=r"(*a3), "=r"(r10), "=r"(r9) : "a"(n), "D"(a1), "S"(a2), "d"(*a3), "r"(r10), "r"(r8), "r"(r9) : "rcx", "r11", "memory");
+    __asm__ __volatile__ ("syscall" : "=a"(ret), "=d"(*a3), "=r"(r10), "=r"(r9) : "a"(n), "D"(a1), "S"(a2), "d"(*a3), "r"(r10), "r"(r8), "r"(r9) : "rcx", "r11", "memory");
     *a4 = r10;
     *a6 = r9;
     return ret;

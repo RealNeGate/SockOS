@@ -5,7 +5,7 @@ void waitqueue_wait(WaitQueue* wq, Thread* t) {
     spin_lock(&wq->lock);
     kprintf("%p: %p MUST WAIT!!!\n", wq, t);
 
-    kassert(t->wait_obj == NULL, "huh?");
+    kassert(t->wait_obj == NULL, "huh? %p", t->wait_obj);
     t->wait_obj = wq;
     t->next_in_wait = wq->thread;
     wq->thread = t;
@@ -28,11 +28,11 @@ Thread* waitqueue_wake(WaitQueue* wq, PerCPU* cpu) {
     // Advance
     wq->thread = t->next_in_wait;
     t->next_in_wait = NULL;
+    kprintf("%p: %p MUST WAKE!!!\n", wq, t);
     spin_unlock(&wq->lock);
 
     // Add to active list
     thread_resume(t, cpu);
-    kprintf("%p: %p MUST WAKE!!!\n", wq, t);
     return t;
 }
 

@@ -62,7 +62,7 @@ typedef enum {
 //
 //                0    1     2     3     4     5
 static uint64_t mailbox_send(KHandle mailbox, uint64_t info, uint64_t arg0, uint64_t arg1, void* ptr, KHandle* handle) {
-    return syscall(SYS_mailbox_send, mailbox, info, arg0, arg1, ptr, handle);
+    return __syscall6_out1(SYS_mailbox_send, mailbox, info, arg0, arg1, (long) ptr, handle);
 }
 
 static uint64_t mailbox_reply(KHandle mailbox, uint64_t info, uint64_t args[2], void* ptr, KHandle* handle) {

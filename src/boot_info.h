@@ -66,9 +66,9 @@ struct PerCPU {
     u32 physical_id, lapic_id;
 
     // Scheduler info
-    struct Thread* current_thread;
     PerCPU_Scheduler* sched;
 
+    _Alignas(64) _Atomic(struct Thread*) current_thread;
     _Alignas(64) _Atomic(struct Thread*) blocked_threads;
 
     // NBHM crap

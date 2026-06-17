@@ -57,6 +57,78 @@ void sched_init(void) {
     }
 }
 
+u64 sched_total_exec_time(PerCPU* cpu, u64 now_time) {
+    u64 exec_time = atomic_load_explicit(&cpu->sched->total_exec_time, memory_order_relaxed);
+    /* Thread* curr = cpu->current_thread;
+    if (curr != NULL) {
+        exec_time += now_time - curr->start_time;
+    } */
+    return exec_time;
+}
+
+int sched_load_balancer(void* arg) {
+    uint64_t last_exec[256];
+    uint64_t total_exec[256];
+    uint64_t usage[256];
+    uint64_t last_time = 0;
+    for (;;) {
+        sleep(1000000);
+
+        uint64_t now_time = __rdtsc() / boot_info->tsc_freq;
+        FOR_N(i, 0, boot_info->core_count) {
+            PerCPU* some_cpu = &boot_info->cores[i];
+            total_exec[i] = sched_total_exec_time(some_cpu, now_time);
+        }
+
+        uint64_t delta = now_time - last_time;
+        if (last_time == 0) {
+            FOR_N(i, 0, 4) {
+                last_exec[i] = total_exec[i];
+            }
+        } else {
+            kprintf("[");
+
+            FOR_N(i, 0, boot_info->core_count) {
+                uint64_t active = last_time ? total_exec[i] - last_exec[i] : 0;
+                last_exec[i] = total_exec[i];
+
+                uint64_t percent = (active * 1000) / delta;
+                usage[i] = percent;
+
+                kprintf(" %3lu.%1lu%%", percent / 10, percent % 10);
+            }
+
+            int lat = delta - 1000000;
+            int percent = (lat * 1000) / 1000000;
+
+            kprintf("] latency = %10luus (%3d.%.2d%%)\n", lat, percent / 10, percent % 10);
+
+            // pick highest task, move to lowest usage core
+            /*int lowest = 0, highest = 0;
+            FOR_N(i, 1, boot_info->core_count) {
+                if (usage[lowest]  > usage[i]) { lowest = i;  }
+                if (usage[highest] < usage[i]) { highest = i; }
+            }
+
+            int gap = usage[highest] - usage[lowest];
+            if (highest != lowest && gap > 10) {
+                kprintf("SHOULD MIGRATE FROM %d -> %d (gap %d)\n", highest, lowest, gap);
+
+                PerCPU* high_cpu  = &boot_info->cores[highest];
+                Thread* high_task = high_cpu->current_thread;
+
+                int exp = -1;
+                if (atomic_compare_exchange_strong(&high_task->to_be_migrated, &exp, lowest)) {
+                    kprintf("Migrating Thread-%p!!!\n", high_task);
+                } else {
+                    kprintf("Can't migrate Thread-%p!!! %d\n", high_task, exp);
+                }
+            }*/
+        }
+        last_time = now_time;
+    }
+}
+
 void sched_wait(u64 timeout) {
     PerCPU* cpu = cpu_get();
     Thread* t = cpu->current_thread;
@@ -81,20 +153,12 @@ bool sched_is_blocked(Thread* t) {
     return t->wake_time != 0 || atomic_load_explicit(&t->wait_obj, memory_order_relaxed);
 }
 
-u64 sched_total_exec_time(PerCPU* cpu, u64 now_time) {
-    u64 exec_time = atomic_load_explicit(&cpu->sched->total_exec_time, memory_order_relaxed);
-    Thread* curr = cpu->current_thread;
-    if (curr != NULL) {
-        exec_time += now_time - curr->start_time;
-    }
-    return exec_time;
-}
-
 Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
     int core_id = cpu - boot_info->cores;
     PerCPU_Scheduler* sched = cpu->sched;
 
-    // kprintf("sched_pick_next(now=%d)\n", now_time);
+    // kprintf("sched_pick_next(now=%d, %d)\n", now_time, sched->active.count);
+
     // We run this function when pre-emptions happen so we should check up on the last
     // running task.
     Thread* curr = cpu->current_thread;
@@ -102,7 +166,7 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
         u64 delta = now_time - curr->start_time;
 
         // update total_exec_time
-        atomic_fetch_add_explicit(&cpu->sched->total_exec_time, delta, memory_order_relaxed);
+        atomic_fetch_add_explicit(&sched->total_exec_time, delta, memory_order_relaxed);
 
         // update exec_time
         curr->exec_time += delta;
@@ -122,8 +186,10 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
             // if the thread has completed it's time slice, we need to re-insert
             // into the queue with the new exec_time.
             ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p has stopped (max %lu us)\n", core_id, curr, curr->max_exec_time));
+            curr->status = THREAD_STATE_READY;
             runqueue_insert(&sched->active, curr);
         } else {
+            curr->status = THREAD_STATE_BLOCKED;
             curr->exec_time -= sched->min_exec_time;
             ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p is blocked after %lu us\n", core_id, curr, curr->exec_time));
 
@@ -131,7 +197,6 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
                 wakequeue_insert(&cpu->sched->waiters, curr);
             }
         }
-        curr->status = THREAD_STATE_READY;
     }
 
     // wake up sleepy guys

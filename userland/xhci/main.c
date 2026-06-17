@@ -14,6 +14,7 @@ static KHandle log_stream;
 static char* log_buffer;
 static int log_used;
 static atomic_int log_lock;
+static KHandle root_mailbox;
 
 #define SPIN_LOCK(x)   while (!atomic_compare_exchange_strong((x), &(int){ 0 }, 1)) {}
 #define SPIN_UNLOCK(x) atomic_store((x), 0)
@@ -403,6 +404,8 @@ static void interrupt_in_try(USB_Device* dev, int pipe, char* data, size_t data_
 
 static void usb_device_thread(void* d) {
     USB_Device* dev = d;
+    mailbox_send(root_mailbox, 0, DEV_SLOT(dev), 0, NULL, &(KHandle){ dev->mailbox });
+
     USB_RequestBlock urb = {
         .dev   = dev,
         .setup = {
@@ -575,19 +578,21 @@ static void usb_device_thread(void* d) {
     uint64_t args[2], msg[4];
     uint64_t info = mailbox_wait(mailbox, sizeof(msg) << 16u, args, msg, &handle);
     for (;;) {
-        char* ptr = 0;
-        switch (msg[0]) {
+        int ret = 0;
+        switch (info & 0xFFFF) {
             case USB_CMD_CTRL_XFER: {
                 break;
             }
 
             case USB_CMD_BULK_XFER: {
+                fault_handler();
+
                 handle = dev->ipc_ring_vmo[args[0]];
                 break;
             }
         }
         // reply and wait for the next message
-        info = mailbox_reply(mailbox, info, args, ptr, &handle);
+        info = mailbox_reply(mailbox, (sizeof(msg) << 16u) | (ret & 0xFFFF), args, msg, &handle);
     }
 }
 
@@ -600,8 +605,8 @@ static void usb_endpoint_thread(void* arg) {
     IPC_Endpoint ep = ipc_endpoint(dev->ipc_ring[pipe], false);
 
     // TODO(NeGate): CACHE to avoid get_paddr calls
-    // uintptr_t last_data_paddr = 0;
-    // uintptr_t last_data = 0;
+    uintptr_t last_vaddr = (uintptr_t) ipc_slot_buffer(dev->ipc_ring[pipe]) & ~4095ull;
+    uintptr_t last_paddr = syscall(SYS_get_paddr, last_vaddr);
     do {
         // Send packet
         char* packet = ipc_write_reserve(&ep);
@@ -610,8 +615,14 @@ static void usb_endpoint_thread(void* arg) {
             HCI_Ring* ring = &dev->xfer_ring[pipe];
             assert(pipe > 0);
 
+            uintptr_t addr = ((uintptr_t) packet) & ~4095ull;
+            if (addr != last_vaddr) {
+                last_vaddr = addr;
+                last_paddr = syscall(SYS_get_paddr, last_vaddr);
+            }
+            uintptr_t data_paddr = last_paddr + (((uintptr_t) packet) & 4095ull);
+
             // Normal Packet
-            uintptr_t data_paddr = syscall(SYS_get_paddr, packet);
             cmd[0] = data_paddr & 0xFFFFFFFF;
             cmd[1] = data_paddr >> 32ull;
             cmd[2] = max_packet_size;
@@ -630,45 +641,19 @@ static void usb_endpoint_thread(void* arg) {
         for (int j = 0; j < 8; j++) {
             printf(" %02x", packet[j] & 0xFF);
         }
-        printf("\n");
-        fault_handler(); */
+        printf("\n"); */
 
-        printf("A\n");
-        fault_handler();
+        // printf("A\n");
+        // fault_handler();
 
         // Tell user about it
         ipc_write_commit(&ep, max_packet_size);
     } while (true);
 }
 
-static KHandle mailbox;
-void request_handler(void* arg) {
-    uint64_t msg[4];
-    uint64_t fn = syscall(SYS_mailbox_wait, mailbox, sizeof(msg), msg);
-    for (;;) {
-        // process message
-        syscall(SYS_test, msg[0]);
-        msg[0] += 4;
-
-        // reply and wait for the next message
-        fn = syscall(SYS_mailbox_reply, mailbox, sizeof(msg), msg);
-    }
-}
-
 #define USBSTS_CNR (1<<11)
 int _start(KHandle pci_device) {
-    #if 0
-    // create & install mailbox
-    mailbox = syscall(SYS_mailbox_create, 4);
-    for (int i = 0; i < 4; i++) {
-        syscall(SYS_thread_create, NULL, request_handler, NULL, 8192, 0);
-    }
-    // TODO(NeGate): register mailbox as endpoint
-
-    uint64_t x = 1;
-    syscall(SYS_mailbox_send, mailbox, sizeof(x), &x);
-    syscall(SYS_test, x);
-    #endif
+    root_mailbox = syscall(SYS_get_root_mailbox);
 
     size_t size;
     KHandle bar0 = syscall(SYS_pci_get_bar, pci_device, 0, &size);

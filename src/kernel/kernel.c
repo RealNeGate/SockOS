@@ -8,6 +8,7 @@
 #define NBHM_IMPL
 #include "nbhm.h"
 
+KObject_Mailbox* kernel_root_mailbox;
 BootInfo* boot_info;
 
 // murmur3 32-bit
@@ -36,7 +37,6 @@ uint32_t mur3_32(const void *key, int len, uint32_t h) {
     h = (h ^ (h >> 13))*0xc2b2ae35;
     return h ^ (h >> 16);
 }
-
 
 ////////////////////////////////
 // Mini-ELF loader
@@ -197,8 +197,10 @@ void kmain(BootInfo* restrict info) {
     thread_resume(bootstrap, NULL);
     #endif
 
-    // Thread* t = thread_create(NULL, sched_load_balancer, 0, (uintptr_t) kheap_alloc(8192), 8192);
-    // thread_resume(t);
+    kernel_root_mailbox = mailbox_create(boot_info->core_count);
+
+    // Thread* t = thread_create(NULL, sched_load_balancer, 0, (uintptr_t) kheap_alloc(16384), 16384);
+    // thread_resume(t, NULL);
 
     arch_handoff(0);
 }

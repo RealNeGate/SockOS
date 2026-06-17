@@ -275,31 +275,37 @@ int _start(KHandle bootstrap_vmo) {
 
     fault_handler();
 
-    uint64_t last_exec[256];
-    uint64_t total_exec[256];
-    uint64_t last_time = 0;
+    KHandle mailbox = syscall(SYS_get_root_mailbox);
+    static KHandle names[256];
+
+    // Process messages
+    KHandle handle;
+    uint64_t args[2], msg[4];
+    uint64_t info = mailbox_wait(mailbox, sizeof(msg) << 32u, args, msg, &handle);
     for (;;) {
-        syscall(SYS_sleep, 200000);
+        printf("AAA!\n");
+        fault_handler();
 
-        /*uint64_t now_time = syscall(SYS_sched_time, total_exec);
-        uint64_t delta = now_time - last_time;
-        if (last_time == 0) {
-            FOR_N(i, 0, 4) {
-                last_exec[i] = total_exec[i];
+        int ret = 0;
+        switch (info & 0xFFFF) {
+            // Register into names
+            case 0: {
+                names[args[0]] = handle;
+                printf("Register! %d %p\n", args[0], handle);
+                fault_handler();
+                break;
             }
-        } else {
-            printf("[");
-            FOR_N(i, 0, 4) {
-                uint64_t active = last_time ? total_exec[i] - last_exec[i] : 0;
-                last_exec[i] = total_exec[i];
 
-                uint64_t percent = (active * 1000) / delta;
-                printf(" %3lu.%1lu%%", percent / 10, percent % 10);
+            // Retrieve from names
+            case 1: {
+                handle = names[args[0]];
+                printf("Get! %d %p\n", args[0], handle);
+                fault_handler();
+                break;
             }
-            printf("] latency = %luus\n", delta - 200000);
-            fault_handler();
         }
-        last_time = now_time;*/
+        // reply and wait for the next message
+        info = mailbox_reply(mailbox, (sizeof(msg) << 32u) | (ret & 0xFFFF), args, msg, &handle);
     }
 }
 

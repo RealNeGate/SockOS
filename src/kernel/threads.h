@@ -14,6 +14,9 @@ typedef enum ThreadState {
     // waiting on a timer/mutex
     THREAD_STATE_BLOCKED,
 
+    // we're being moved across cores
+    THREAD_STATE_MIGRATE,
+
     // we're in the active list... being active
     THREAD_STATE_RUNNING,
 } ThreadState;

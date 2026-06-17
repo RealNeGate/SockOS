@@ -1,5 +1,25 @@
 #include <beans.h>
 
+#define IPC_RING_IMPL
+#include "../ipc_ring.h"
+
+void* memset(void* buffer, int c, size_t n) {
+    char* buf = (char*)buffer;
+    for (size_t i = 0; i < n; i++) {
+        buf[i] = c;
+    }
+    return buffer;
+}
+
+void* memcpy(void* dest, const void* src, size_t n) {
+    char* d = (char*)dest;
+    char* s = (char*)src;
+    for (size_t i = 0; i < n; i++) {
+        d[i] = s[i];
+    }
+    return dest;
+}
+
 // Bochs video
 enum {
     VBE_ID          = 0x0,
@@ -19,7 +39,7 @@ static struct {
     volatile uint32_t* curr_fb;
 } view;
 
-static void rect(int x, int y, int w, int h) {
+static void rect(int x, int y, int w, int h, bool inv) {
     volatile uint32_t* pixels = view.curr_fb;
 
     int x2 = x + w;
@@ -37,9 +57,21 @@ static void rect(int x, int y, int w, int h) {
     if (y  < 0)           { y  = 0; }
 
     int stride = view.stride;
-    for (size_t j = y; j < y2; j++) {
-        for (size_t i = x; i < x2; i++) {
-            pixels[i + j*stride] = 0xFFFF0000;
+    if (inv) {
+        uint32_t grad_x = (256*256) / view.width;
+        uint32_t grad_y = (256*256) / view.height;
+        for (size_t j = y; j < y2; j++) {
+            uint32_t g = (j*grad_y) >> 8u;
+            for (size_t i = x; i < x2; i++) {
+                uint32_t b = (i*grad_x) >> 8u;
+                view.curr_fb[i + j*stride] = 0xFF000000 | (g << 16) | (b << 8);
+            }
+        }
+    } else {
+        for (size_t j = y; j < y2; j++) {
+            for (size_t i = x; i < x2; i++) {
+                pixels[i + j*stride] = 0xFFFF0000;
+            }
         }
     }
 }
@@ -59,27 +91,56 @@ int _start(KHandle display_pci) {
     view.height = vbe[VBE_YRES];
     view.stride = vbe[VBE_VIRT_WIDTH];
 
+    KHandle root_mailbox = syscall(SYS_get_root_mailbox);
+
+    // Find USB mouse
+    KHandle mouse_dev = 0;
+    IPC_Endpoint int_in = { 0 };
+    for (;;) {
+        mailbox_send(root_mailbox, 1, 1, 0, NULL, &mouse_dev);
+        if (mouse_dev != 0) {
+            // Grab endpoint
+            KHandle ring_vmo = 0;
+            mailbox_send(mouse_dev, 3, 2, 0, NULL, &ring_vmo);
+
+            int_in = ipc_endpoint_from_vmo(ring_vmo, true);
+            break;
+        }
+        syscall(SYS_sleep, 100000);
+    }
+
+    int stride = view.stride;
+    uint32_t grad_x = (256*256) / view.width;
+    uint32_t grad_y = (256*256) / view.height;
+    for (int buffer = 0; buffer < 2; buffer++) {
+        view.curr_fb = &fb[buffer ? (stride * view.height) : 0];
+        rect(0, 0, view.width, view.height, true);
+    }
+
+    int cursor_pos[4] = { 0 };
+
     int buffer = 0;
     int mult = 0;
     for (;;) {
         uint64_t start = __rdtsc();
-
-        // TODO(NeGate): receive command buffers from windows on the system
-        uint64_t gradient_x = 64; // (width + 255) / 256;
-        uint64_t gradient_y = 64; // (height + 255) / 256;
-
-        int stride = view.stride;
         view.curr_fb = &fb[buffer ? (stride * view.height) : 0];
-        for (size_t j = 0; j < view.height; j++) {
-            uint32_t g = (j % gradient_y) * 4;
-            for (size_t i = 0; i < view.width; i++) {
-                uint32_t b = ((i + mult) % gradient_x) * 4;
-                view.curr_fb[i + j*stride] = 0xFF000000 | (g << 16) | (b << 8);
-            }
+        int* curr = &cursor_pos[buffer ? 2 : 0];
+        int* prev = &cursor_pos[buffer ? 0 : 2];
+
+        // invalidate cursor from frame[-2]
+        rect(curr[0], curr[1], 64, 64, true);
+        curr[0] = prev[0], curr[1] = prev[1];
+
+        size_t len;
+        char* packet = ipc_try_read(&int_in, &len);
+        if (packet) {
+            curr[0] += packet[1];
+            curr[1] += packet[2];
+            ipc_read_release(&int_in);
         }
 
-        // Draw cursor
-        rect(0, 0, 64, 64);
+        // draw cursor
+        rect(curr[0], curr[1], 64, 64, false);
         mult += 1;
 
         // swap buffers

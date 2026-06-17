@@ -128,8 +128,8 @@ static _Noreturn void yield_syscall(PerCPU* cpu, uintptr_t cr3, CPUState* state,
     #error "TODO"
     #endif
 
+    Thread* old = cpu->current_thread;
     waitqueue_wait(wq, cpu->current_thread);
-    sched_wait(SYS_PARAM0);
 
     state->interrupt_num = 32;
     uintptr_t new_cr3 = x86_irq_int_handler(state, cr3, cpu);
@@ -208,6 +208,13 @@ SYS_FN(env_create) {
     Env* parent = cpu->current_thread->parent;
     Env* env    = env_create();
     return env_open_handle(parent, 0, &env->super);
+}
+
+extern KObject_Mailbox* kernel_root_mailbox;
+SYS_FN(get_root_mailbox) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_get_root_mailbox()\n"));
+    Env* parent = cpu->current_thread->parent;
+    return env_open_handle(parent, 0, &kernel_root_mailbox->super);
 }
 
 SYS_FN(vmo_create) {
@@ -532,12 +539,12 @@ static int mailbox_xfer(CPUState* state, PerCPU* cpu, Thread* curr, Thread* next
     uintptr_t recv_msg  = GET_PARAM4(&next->state);
 
     // msg length should be the min of the sender and receiver
-    size_t msg_len = send_info >> 16ull;
-    if (msg_len < (recv_info >> 16ull)) {
-        msg_len = (recv_info >> 16ull);
+    size_t msg_len = send_info >> 32ull;
+    if (msg_len > (recv_info >> 32ull)) {
+        msg_len = (recv_info >> 32ull);
     }
     KCHECK(msg_len <= 64, RESULT_PACKET_TOO_BIG);
-    GET_RETURN(&next->state) = (msg_len << 16ull) | (send_info & 0xFFFFFFFFFFFF);
+    GET_RETURN(&next->state) = (msg_len << 32ull) | (send_info & 0xFFFFFFFF);
 
     // transfer inline args
     GET_PARAM2(&next->state) = SYS_PARAM2;
@@ -550,14 +557,18 @@ static int mailbox_xfer(CPUState* state, PerCPU* cpu, Thread* curr, Thread* next
         KCHECK(obj, RESULT_NO_HANDLE);
 
         KHandle recv_handle = env_open_handle(next->parent, 0, obj);
-        egest_usermem(GET_PARAM5(&next->state), &recv_handle, sizeof(KHandle));
+        GET_PARAM5(&next->state) = recv_handle;
     }
 
     // copy message across address space
-    char* tmp = cpu->message_buffer;
-    ingest_usermem(tmp, send_msg, msg_len);
-    arch_set_address_space(next->parent);
-    egest_usermem(recv_msg, tmp, msg_len);
+    if (msg_len > 0) {
+        char* tmp = cpu->message_buffer;
+        ingest_usermem(tmp, send_msg, msg_len);
+        arch_set_address_space(next->parent);
+        egest_usermem(recv_msg, tmp, msg_len);
+    } else {
+        arch_set_address_space(next->parent);
+    }
 
     if (mailbox != NULL) {
         // Put the mailbox thread back on the wait list.
@@ -571,7 +582,7 @@ static int mailbox_xfer(CPUState* state, PerCPU* cpu, Thread* curr, Thread* next
 }
 
 SYS_FN(mailbox_send) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_send(mailbox=%d, info=%ld, arg0=%p, arg1=%p, body=%p, handle=%p)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2, SYS_PARAM3, SYS_PARAM4, SYS_PARAM5));
+    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_send(mailbox=%d, info=%p, arg0=%p, arg1=%p, body=%p, handle=%p)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2, SYS_PARAM3, SYS_PARAM4, SYS_PARAM5));
 
     Env* env = cpu->current_thread->parent;
     KObject_Mailbox* mailbox = env_get_handle(env, SYS_PARAM0, NULL);
@@ -594,7 +605,7 @@ SYS_FN(mailbox_send) {
 }
 
 SYS_FN(mailbox_reply) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_reply(mailbox=%d, info=%ld, data=%p, handle=%p)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM4, SYS_PARAM5));
+    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_reply(mailbox=%d, info=%p, data=%p, handle=%p)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM4, SYS_PARAM5));
 
     Env* env = cpu->current_thread->parent;
     KObject_Mailbox* mailbox = env_get_handle(env, SYS_PARAM0, NULL);
@@ -610,7 +621,7 @@ SYS_FN(mailbox_reply) {
 }
 
 SYS_FN(mailbox_wait) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_wait(mailbox=%d, info=%ld, data=%p, handle=%p)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM4, SYS_PARAM5));
+    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_wait(mailbox=%d, info=%p, data=%p, handle=%p)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM4, SYS_PARAM5));
 
     Env* env = cpu->current_thread->parent;
     Thread* curr = cpu->current_thread;

@@ -1,6 +1,8 @@
 X(sleep)
 X(sched_time)
 X(test)
+// Namespace
+X(get_root_mailbox)
 // Env/Threads
 X(env_create)
 X(thread_create)
@@ -32,7 +34,6 @@ X(mailbox_wait)
 X(mailbox_reply)
 // Special case
 X(fb_grab)
-// X(ps2_interrupt)
 // x86 stuff
 X(tsc_freq)
 #undef X
