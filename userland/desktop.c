@@ -5,7 +5,6 @@ typedef uint8_t u8;
 #include "../src/boot/term_font.c"
 
 static uint64_t tsc_freq;
-static KHandle mailbox;
 static bool cursor_state;
 
 int terminal_used;
@@ -15,33 +14,7 @@ void _putchar(char ch) {
     terminal_buffer[terminal_used++] = ch;
 }
 
-void request_handler(void* arg) {
-    uint64_t msg[4];
-    uint64_t fn = syscall(SYS_mailbox_wait, mailbox, msg);
-    for (;;) {
-        //s process message
-        // syscall(SYS_test, msg[0]);
-
-        // reply and wait for the next message
-        fn = syscall(SYS_mailbox_reply, mailbox, msg, msg[0] + 1, 0);
-    }
-}
-
 #include "../src/kernel/printf.c"
-
-// Bochs video
-enum {
-    VBE_ID          = 0x0,
-    VBE_XRES        = 0x1,
-    VBE_YRES        = 0x2,
-    VBE_BPP         = 0x3,
-    VBE_ENABLE      = 0x4,
-    VBE_BANK        = 0x5,
-    VBE_VIRT_WIDTH  = 0x6,
-    VBE_VIRT_HEIGHT = 0x7,
-    VBE_X_OFFSET    = 0x8,
-    VBE_Y_OFFSET    = 0x9
-};
 
 uint8_t mult = 0;
 static void draw_char(uint32_t* pixels, int stride, int char_x, int char_y, int ch) {
@@ -91,39 +64,6 @@ void draw(int width, int height, int stride, uint32_t* pixels) {
     }
 
     pixels[(1920*1080) - 1] = mult & 1 ? 0xFFFF0000 : 0xFF00FFF0;
-}
-
-static int bochs_vbe_driver(KHandle display_pci, uint64_t freq) {
-    size_t size;
-    int fb_bar = syscall(SYS_pci_get_bar, display_pci, 0, &size);
-    uint32_t* fb = (uint32_t*) syscall(SYS_mmap, fb_bar, 0, size);
-
-    int vbe_bar = syscall(SYS_pci_get_bar, display_pci, 2, &size);
-    volatile uint16_t* display_mmio = (volatile uint16_t*) syscall(SYS_mmap, vbe_bar, 0, size);
-
-    volatile uint16_t* vbe = &display_mmio[0x280];
-    int width  = vbe[VBE_XRES], height = vbe[VBE_YRES];
-    int stride = vbe[VBE_VIRT_WIDTH];
-    int buffer = 0;
-
-    // int i = 0;
-    for (;;) {
-        uint64_t start = __rdtsc();
-
-        draw(width, height, stride, &fb[buffer ? (stride * height) : 0]);
-        mult += 1;
-
-        // swap buffers
-        vbe[VBE_Y_OFFSET] = buffer ? height : 0;
-        buffer = (buffer + 1) % 2;
-
-        uint64_t elapsed = (__rdtsc() - start) / freq;
-        if (elapsed < 16666) {
-            syscall(SYS_sleep, 16666 - elapsed);
-        }
-
-        // i = syscall(SYS_mailbox_send, mailbox, 0, i, 0, 0);
-    }
 }
 
 typedef struct {
@@ -351,33 +291,13 @@ static void intel_gpu_driver_poll(void) {
     #endif
 }
 
-int _start(KHandle bootstrap_vmo) {
+int _start(KHandle display_pci) {
     tsc_freq = syscall(SYS_tsc_freq);
     terminal_used = 0;
-
-    // create & install mailbox
-    mailbox = syscall(SYS_mailbox_create, 4);
-    for (int i = 0; i < 4; i++) {
-        syscall(SYS_thread_create, request_handler, NULL);
-    }
-
-    // BOCHS VBE display
-    static uint32_t bochs_pcids[] = { 0x12341111 };
-    KHandle display_pci = syscall(SYS_pci_claim_device, 1, bochs_pcids);
-    if (display_pci != 0) {
-        // bochs_vbe_driver(display_pci, bootstrap_channel);
-    }
 
     uint64_t info[4];
     int fb_bar = syscall(SYS_fb_grab, info);
     uint32_t* fb = (uint32_t*) syscall(SYS_mmap, fb_bar, 0, info[3]);
-
-    // Intel HD graphics
-    static uint32_t i915_pcids[] = { 0x80863E92 };
-    display_pci = syscall(SYS_pci_claim_device, 1, i915_pcids);
-    if (display_pci == 0) {
-        return 0;
-    }
 
     for (size_t j = 0; j < info[1]; j++) {
         uint32_t g = (j % 64) * 4;
@@ -395,7 +315,7 @@ int _start(KHandle bootstrap_vmo) {
         terminal_used = 0;
         intel_gpu_driver_poll();
         // intel_gpu_cursor_set((mult % 5) == 4);
-        draw(info[0], info[1], info[2], fb);
+        // draw(info[0], info[1], info[2], fb);
         mult += 1;
 
         uint64_t elapsed = (__rdtsc() - start) / tsc_freq;

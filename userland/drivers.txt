@@ -2,6 +2,7 @@
 # USB Host controllers
 #####################################
 1B36:000D /xhci.so
+8086:A36D /xhci.so
 
 #####################################
 # Graphics Processing units

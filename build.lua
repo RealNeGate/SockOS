@@ -111,12 +111,18 @@ do
     local init_rd_list = {
         "userland/drivers.txt",
         "objs/xhci.so",
+        "objs/intel_gpu.so",
         "objs/bochs.so",
     }
 
     table.insert(lines, "# INIT PROGRAM")
     build("objs/init.elf", "cc", "userland/init/main.c", {
         flags = elf_cflags.." -fuse-ld=lld -T userland/init/link.ld -fpic"
+    })
+
+    table.insert(lines, "# INTEL GPU")
+    build("objs/intel_gpu.so", "cc", "userland/intel_gpu/main.c", {
+        flags = elf_cflags.." -fuse-ld=lld -fpic"
     })
 
     table.insert(lines, "# USB")

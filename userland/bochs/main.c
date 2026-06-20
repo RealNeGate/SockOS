@@ -132,8 +132,12 @@ int _start(KHandle display_pci) {
         curr[0] = prev[0], curr[1] = prev[1];
 
         size_t len;
-        char* packet = ipc_try_read(&int_in, &len);
-        if (packet) {
+        char* packet;
+        for (;;) {
+            packet = ipc_try_read(&int_in, &len);
+            if (packet == NULL) {
+                break;
+            }
             curr[0] += packet[1];
             curr[1] += packet[2];
             ipc_read_release(&int_in);
