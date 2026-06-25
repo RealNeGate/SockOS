@@ -37,6 +37,9 @@ struct Thread {
     u64 start_time;
     u64 wake_time;
 
+    u64 weight;
+    u64 deadline;
+
     // Last core that this thread ran on
     int core_id;
 

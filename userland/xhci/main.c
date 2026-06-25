@@ -735,13 +735,8 @@ int _start(KHandle pci_device) {
 
         int poke = dev_to_refresh;
         bool advanced = false;
-        for (int i = 0; i < 4; i++) {
+        while ((ers0[trb_i+3] & 1) == ccs) {
             volatile uint32_t* trb = &ers0[trb_i];
-            if ((trb[3] & 1) != ccs) {
-                // not a new entry, we don't move ahead
-                break;
-            }
-
             uint32_t type = (trb[3] >> 10) & 0b111111;
             if (type == 0x21) { // Command completion
                 uintptr_t cmd_ptr = trb[0] | ((uintptr_t) trb[1] << 32ull);
@@ -782,7 +777,7 @@ int _start(KHandle pci_device) {
                 }
             } else if (type == 0x22) { // Port status change
                 int port = (trb[0] >> 24) - 1;
-                usb_fsm(MSG_PORT_CHANGE, port, ports[i].slot);
+                usb_fsm(MSG_PORT_CHANGE, port, ports[port].slot);
             } else if (type == 0x20) { // Transfer event
                 uintptr_t cmd_ptr = trb[0] | ((uintptr_t) trb[1] << 32ull);
                 uint32_t completition_code = trb[2] >> 24u;

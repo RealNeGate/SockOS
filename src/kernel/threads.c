@@ -60,6 +60,7 @@ Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintpt
         .parent = env,
         .wake_time = 0,
         .exec_time = 0,
+        .weight    = 1,
 
         // initial cpu state (CPU specific)
         .state = new_thread_state(entrypoint, arg, stack, stack_size, is_user)

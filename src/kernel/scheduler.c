@@ -1,7 +1,7 @@
 #include "threads.h"
 
 static int runqueue_cmp(Thread* a, Thread* b) {
-    return a->exec_time - b->exec_time;
+    return a->deadline - b->deadline;
 }
 
 static int wakequeue_cmp(Thread* a, Thread* b) {
@@ -145,12 +145,54 @@ void sched_wait(u64 timeout) {
 }
 
 enum {
-    SCHED_MIN_QUANTA =  1000,
-    SCHED_LATENCY    = 16666, // 60Hz
+    SCHED_MIN_QUANTA =  1000, // 1ms
+    SCHED_LATENCY    = 10000, // 100Hz
 };
 
 bool sched_is_blocked(Thread* t) {
     return t->wake_time != 0 || atomic_load_explicit(&t->wait_obj, memory_order_relaxed);
+}
+
+void runqueue_push2(PerCPU_Scheduler* sched, ThreadQueue* tq, Thread* curr) {
+    printf("PUSH %p %ld %ld\n", curr, curr->exec_time, curr->deadline);
+
+    // add to average
+    sched->sum_exec_time   += curr->exec_time;
+    sched->sum_exec_time_w += curr->weight;
+
+    curr->status = THREAD_STATE_READY;
+    runqueue_insert(&sched->active, curr);
+}
+
+// TODO(NeGate): replace with fast version
+Thread* runqueue_pop_with_lag(ThreadQueue* tq, u64 avg) {
+    Thread* least = NULL;
+    int least_i = 0;
+
+    printf("[");
+    FOR_N(i, 0, tq->count) {
+        Thread* t = tq->data[i];
+        printf(" %p:%ld ", t, avg - t->exec_time);
+
+        // tasks with more exec time than the average can't be scheduled
+        if (t->exec_time > avg) {
+            continue;
+        }
+
+        if (least == NULL || least->deadline > t->deadline) {
+            least = t;
+            least_i = i;
+        }
+    }
+    printf("]\n");
+
+    // remove-swap
+    if (least) {
+        tq->count -= 1;
+        tq->data[least_i] = tq->data[tq->count];
+    }
+
+    return least;
 }
 
 Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
@@ -159,8 +201,7 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
 
     // kprintf("sched_pick_next(now=%d, %d)\n", now_time, sched->active.count);
 
-    // We run this function when pre-emptions happen so we should check up on the last
-    // running task.
+    // Update current running thread
     Thread* curr = cpu->current_thread;
     if (curr != NULL) {
         u64 delta = now_time - curr->start_time;
@@ -168,27 +209,15 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
         // update total_exec_time
         atomic_fetch_add_explicit(&sched->total_exec_time, delta, memory_order_relaxed);
 
+        // remove from average
+        sched->sum_exec_time   -= curr->exec_time;
+        sched->sum_exec_time_w -= curr->weight;
+
         // update exec_time
         curr->exec_time += delta;
         curr->start_time = now_time;
 
-        ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p got %lu us (exec_time = %lu us)\n", core_id, curr, delta, curr->exec_time));
-
-        u64 exec_time = curr->exec_time - sched->min_exec_time;
-        if (!sched_is_blocked(curr)) {
-            // if the task hasn't finished it's time slice, we just keep running it
-            if (exec_time < curr->max_exec_time) {
-                // ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Keep running Thread-%p for another %f ms\n", core_id, curr, (curr->max_exec_time - exec_time) / 1000.0f));
-                *out_wake_us = now_time + (curr->max_exec_time - exec_time);
-                return curr;
-            }
-
-            // if the thread has completed it's time slice, we need to re-insert
-            // into the queue with the new exec_time.
-            ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p has stopped (max %lu us)\n", core_id, curr, curr->max_exec_time));
-            curr->status = THREAD_STATE_READY;
-            runqueue_insert(&sched->active, curr);
-        } else {
+        if (sched_is_blocked(curr)) {
             curr->status = THREAD_STATE_BLOCKED;
             curr->exec_time -= sched->min_exec_time;
             ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p is blocked after %lu us\n", core_id, curr, curr->exec_time));
@@ -196,6 +225,16 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
             if (curr->wake_time != 0) {
                 wakequeue_insert(&cpu->sched->waiters, curr);
             }
+        } else {
+            // If we exceed the deadline, we add a new one
+            if (curr->exec_time >= curr->deadline) {
+                u64 time_slice = sched->ideal_time_slice;
+                curr->deadline = curr->exec_time + time_slice;
+
+                ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p picked new slice (%lu us)\n", core_id, curr, time_slice));
+            }
+
+            runqueue_push2(sched, &sched->active, curr);
         }
     }
 
@@ -206,29 +245,37 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
             break;
         }
 
-        ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p is awake now (exec time was %d us)\n", core_id, waiter, waiter->exec_time));
+        // ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p is awake now (exec time was %d us)\n", core_id, waiter, waiter->exec_time));
         wakequeue_pop(&sched->waiters);
-        waiter->wake_time = 0;
+        waiter->wake_time  = 0;
         waiter->exec_time += sched->min_exec_time;
-        waiter->status = THREAD_STATE_READY;
-        runqueue_insert(&sched->active, waiter);
+        waiter->deadline   = waiter->exec_time + sched->ideal_time_slice;
+        runqueue_push2(sched, &sched->active, waiter);
     }
 
     // everything in this list should be ready to run, if not then we still remove it because that means it's
     // someone else's job to wake it up.
     Thread* blocked = atomic_exchange_explicit(&cpu->blocked_threads, NULL, memory_order_acq_rel);
     while (blocked) {
-        ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p is unblocked now (exec time was %d us)\n", core_id, blocked, blocked->exec_time));
+        // ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p is unblocked now (exec time was %d us)\n", core_id, blocked, blocked->exec_time));
         blocked->exec_time += sched->min_exec_time;
-        blocked->status = THREAD_STATE_READY;
-        runqueue_insert(&sched->active, blocked);
+        blocked->deadline   = blocked->exec_time + sched->ideal_time_slice;
+        runqueue_push2(sched, &sched->active, blocked);
 
         blocked = blocked->next_in_blocked;
     }
 
+    u64 avg_exec_time = 0;
+    if (sched->sum_exec_time_w >= 1) {
+        // remove current from average
+        avg_exec_time = sched->sum_exec_time;
+        avg_exec_time /= sched->sum_exec_time_w;
+    }
+    ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: AVG %lu (%lu %lu)\n", core_id, avg_exec_time, sched->sum_exec_time, sched->sum_exec_time_w));
+
     // recompute scheduling period
     if (sched->active.count == 0) {
-        sched->ideal_exec_time = 0;
+        sched->ideal_time_slice = 0;
         ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: no tasks, no slice\n", core_id));
 
         // if there's no active tasks, we just wait on the next sleeper
@@ -243,35 +290,24 @@ Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us) {
             return NULL;
         }
     } else {
-        // N is the number of active threads we can have before
-        // resorting to period stretching.
-        int N = SCHED_LATENCY / SCHED_MIN_QUANTA;
         u64 ideal = SCHED_LATENCY / sched->active.count;
-
-        sched->ideal_exec_time = ideal < SCHED_MIN_QUANTA ? SCHED_MIN_QUANTA : ideal;
-        ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: ideal slice of %lu us (%d active)\n", core_id, sched->ideal_exec_time, sched->active.count));
+        sched->ideal_time_slice = ideal < SCHED_MIN_QUANTA ? SCHED_MIN_QUANTA : ideal;
+        // ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: ideal slice of %lu us (%d active)\n", core_id, sched->ideal_time_slice, sched->active.count));
     }
 
-    // use lowest exec time thread
-    curr = runqueue_pop(&sched->active);
+    // use earliest deadline thread
+    curr = runqueue_pop_with_lag(&sched->active, avg_exec_time); // runqueue_pop(&sched->active);
     curr->core_id = core_id;
     curr->status = THREAD_STATE_RUNNING;
+    curr->start_time = now_time;
 
-    u64 exec_time = curr->exec_time - sched->min_exec_time;
-    if (sched->min_exec_time < curr->exec_time) {
+    u64 time_slice = (curr->deadline - curr->exec_time) / curr->weight;
+    if (sched->min_exec_time > curr->exec_time) {
         sched->min_exec_time = curr->exec_time;
     }
 
-    // allocate time slice
-    curr->start_time = now_time;
-    if (sched->ideal_exec_time > exec_time) {
-        curr->max_exec_time = sched->ideal_exec_time - exec_time;
-    } else {
-        curr->max_exec_time = 1;
-    }
-
-    ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p was alloted %lu us (exec time = %lu)\n", core_id, curr, curr->max_exec_time, exec_time));
-    *out_wake_us = now_time + curr->max_exec_time;
+    ON_DEBUG(SCHED)(kprintf("[sched] CPU-%d: Thread-%p was alloted %lu us\n", core_id, curr, time_slice));
+    *out_wake_us = now_time + time_slice;
     return curr;
 }
 

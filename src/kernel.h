@@ -325,8 +325,11 @@ struct PerCPU_Scheduler {
     atomic_bool idleing;
     atomic_u64 total_exec_time;
 
+    u64 sum_exec_time;
+    u64 sum_exec_time_w;
+
     // in micros
-    u64 ideal_exec_time;
+    u64 ideal_time_slice;
     u64 min_exec_time;
 
     ThreadQueue active;
