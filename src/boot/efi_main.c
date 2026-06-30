@@ -271,7 +271,7 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
         efi_println(st, L"Failed to initialize COM2 port output");
     }
 
-    ON_DEBUG(EFI)(printf("Framebuffer at %X\n", (u64) fb.pixels));
+    printf("Framebuffer at %X (%X x %X)\n", (u64) fb.pixels, fb.stride, fb.height);
 
     // Load the kernel ELF
     ELF_Module kernel_module;

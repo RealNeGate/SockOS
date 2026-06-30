@@ -1,8 +1,7 @@
 #include "threads.h"
 
-static PerCPU_Scheduler* get_sched(void) {
-    PerCPU* cpu = cpu_get();
-    return cpu->sched;
+static Server* get_sched(void) {
+    return &cpu_get()->sched;
 }
 
 // envs can have address spaces, threads merely inherit theirs.
@@ -30,6 +29,15 @@ Env* env_create(void) {
     #error "TODO"
     #endif
 
+    // userland programs need an extra stack for syscall handling
+    /* if (0) {
+        // map all kernel stacks
+        FOR_N(i, 0, boot_info->core_count) {
+            char* page = ((char*) boot_info->cores[i].kernel_stack_top) - KERNEL_STACK_SIZE;
+            memmap_view(boot_info->kernel_pml4, kaddr2paddr(page), (uintptr_t) page, KERNEL_STACK_SIZE, VMEM_PAGE_WRITE);
+        }
+    } */
+
     kprintf("[env] %p | %p | HW Tables at %p\n", env, &env->addr_space.hw_tables, env->addr_space.hw_tables);
     return env;
 }
@@ -49,6 +57,7 @@ void env_kill(Env* env) {
     spin_unlock(&env->lock);
 }
 
+static atomic_int ID_TICKER = 0;
 Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintptr_t stack, size_t stack_size) {
     bool is_user = env != NULL;
 
@@ -58,22 +67,14 @@ Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintpt
             .tag = KOBJECT_THREAD,
         },
         .parent = env,
-        .wake_time = 0,
-        .exec_time = 0,
-        .weight    = 1,
-
         // initial cpu state (CPU specific)
         .state = new_thread_state(entrypoint, arg, stack, stack_size, is_user)
     };
+    new_thread->client.id     = ++ID_TICKER;
+    new_thread->client.weight = 10;
+    new_thread->client.slice  = 1000;
 
-    // userland programs need an extra stack for syscall handling
-    if (0 && is_user) {
-        // map all kernel stacks
-        FOR_N(i, 0, boot_info->core_count) {
-            char* page = ((char*) boot_info->cores[i].kernel_stack_top) - KERNEL_STACK_SIZE;
-            memmap_view(boot_info->kernel_pml4, kaddr2paddr(page), (uintptr_t) page, KERNEL_STACK_SIZE, VMEM_PAGE_WRITE);
-        }
-    }
+    snprintf(new_thread->tag, 32, "Thread-%p", new_thread);
 
     // attach to env
     if (env != NULL) {
@@ -102,17 +103,8 @@ void thread_resume(Thread* thread, PerCPU* cpu) {
         cpu = &boot_info->cores[0];
     }
 
-    int i = cpu - boot_info->cores;
-
-    // Put to sleep on a core
-    PerCPU_Scheduler* sched = cpu->sched;
-    kassert(!sched_is_blocked(thread), "we shouldn't be blocked atm... why are you resuming us");
-    Thread* latest = atomic_load_explicit(&cpu->blocked_threads, memory_order_relaxed);
-    do {
-        thread->next_in_blocked = latest;
-    } while (!atomic_compare_exchange_strong_explicit(&cpu->blocked_threads, &latest, thread, memory_order_acq_rel, memory_order_acquire));
-
-    arch_wake_up(i);
+    sched_resume_thread(&cpu->sched, &thread->client);
+    arch_wake_up(cpu - boot_info->cores);
 }
 
 void thread_kill(Thread* thread) {

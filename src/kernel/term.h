@@ -78,17 +78,18 @@ static void term_print_char_at(int char_x, int char_y, char ch) {
 }
 
 static void term_scroll_down1() {
-    for(int y = 0; y < term_fb.height; ++y) {
+    /* for(int y = 0; y < term_fb.height; ++y) {
         for(int x = 0; x < term_fb.width; ++x) {
             term_fb.pixels[x + y * term_fb.stride] = term_color_bg;
         }
-    }
+    } */
     term_cur_y = 0;
 }
 
 void _putchar(char c) {
     io_out8(0x3f8, c);
-    #if 0
+
+    #if 1
     if(c == '\n') {
         term_cur_x = 0;
         term_cur_y += 1;

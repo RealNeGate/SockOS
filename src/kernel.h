@@ -34,7 +34,7 @@ void kprintf(const char *fmt, ...);
 void print_ring_init(void);
 
 void arch_backtrace(void);
-uint64_t get_time_ticks(void);
+uint64_t arch_get_micros(void);
 
 PerCPU* cpu_get(void);
 size_t cpu_get_index(void);
@@ -206,7 +206,10 @@ typedef struct KObject_Event KObject_Event;
 struct KObject_Event {
     KObject super; // tag = KOBJECT_EVENT
 
-    _Alignas(64) _Atomic(Thread*) waiting_thread;
+    _Alignas(64) atomic_u64 head; // the last time we waited
+
+    atomic_u64 tail; // how many times we've signalled
+    _Atomic(Thread*) waiting_thread;
 };
 
 // 10 cache lines worth of handles
@@ -316,36 +319,13 @@ void waitqueue_broadcast(WaitQueue* wq);
 ////////////////////////////////
 // Scheduler
 ////////////////////////////////
-typedef struct {
-    int count;
-    Thread* data[256];
-} ThreadQueue;
-
-struct PerCPU_Scheduler {
-    atomic_bool idleing;
-    atomic_u64 total_exec_time;
-
-    u64 sum_exec_time;
-    u64 sum_exec_time_w;
-
-    // in micros
-    u64 ideal_time_slice;
-    u64 min_exec_time;
-
-    ThreadQueue active;
-    ThreadQueue waiters;
-};
-
 void sched_init(void);
 void sched_yield(void);
 void sched_wait(u64 timeout);
 int sched_load_balancer(void*);
 
-u64 sched_total_exec_time(PerCPU* cpu, u64 now_time);
-Thread* sched_pick_next(PerCPU* cpu, u64 now_time, u64* restrict out_wake_us);
-
-void tq_insert(ThreadQueue* tq, Thread* t, bool is_waiter);
-void tq_append(ThreadQueue* tq, Thread* t);
+uint64_t sched_total_exec_time(PerCPU* cpu, uint64_t now_time);
+Thread* sched_pick_next(PerCPU* cpu, uint64_t now_time, uint64_t* restrict out_wake_us);
 
 ////////////////////////////////
 // Arch-specific

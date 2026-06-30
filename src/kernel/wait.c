@@ -3,9 +3,10 @@
 
 void waitqueue_wait(WaitQueue* wq, Thread* t) {
     spin_lock(&wq->lock);
-    kprintf("%p: %p MUST WAIT!!!\n", wq, t);
+    kprintf("%p: %s MUST WAIT!!! C%d\n", wq, t->tag, t->client.id);
 
-    kassert(t->wait_obj == NULL, "huh? %p", t->wait_obj);
+    kassert(t->wait_obj == NULL && !t->client.is_blocked, "huh? %p", t->wait_obj);
+    t->client.is_blocked = true;
     t->wait_obj = wq;
     t->next_in_wait = wq->thread;
     wq->thread = t;
@@ -24,11 +25,12 @@ Thread* waitqueue_wake(WaitQueue* wq, PerCPU* cpu) {
 
     kassert(t->wait_obj == wq, "huh?");
     t->wait_obj = NULL;
+    t->client.is_blocked = false;
 
     // Advance
     wq->thread = t->next_in_wait;
     t->next_in_wait = NULL;
-    kprintf("%p: %p MUST WAKE!!!\n", wq, t);
+    kprintf("%p: %s MUST WAKE!!! C%d\n", wq, t->tag, t->client.id);
     spin_unlock(&wq->lock);
 
     // Add to active list

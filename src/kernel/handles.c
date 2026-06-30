@@ -43,6 +43,8 @@ KObject_Event* event_create(void) {
 }
 
 Thread* event_signal(KObject_Event* restrict event) {
+    // need to be ordered like this
+    atomic_fetch_add_explicit(&event->tail, 1, memory_order_acq_rel);
     Thread* t = atomic_load_explicit(&event->waiting_thread, memory_order_acquire);
     if (t != NULL && atomic_compare_exchange_strong(&event->waiting_thread, &t, NULL)) {
         return t;
@@ -51,7 +53,15 @@ Thread* event_signal(KObject_Event* restrict event) {
 }
 
 bool event_wait(KObject_Event* restrict event, Thread* thread) {
+    u64 tail = atomic_load_explicit(&event->tail, memory_order_acquire);
+    u64 head = atomic_load_explicit(&event->head, memory_order_acquire);
+    // if tail isn't head, that means there's already a signal (or signals)
+    if (head != tail && atomic_compare_exchange_strong(&event->head, &head, tail)) {
+        return false;
+    }
+
     // we expect the scheduler locked here
+    thread->client.is_blocked = true;
     thread->wait_obj = event;
     return atomic_compare_exchange_strong(&event->waiting_thread, &(Thread*){ NULL }, thread);
 }

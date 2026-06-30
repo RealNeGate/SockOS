@@ -1,6 +1,7 @@
 #pragma once
 
 #include <common.h>
+#include "kernel/scheduler.h"
 
 // Physical address
 typedef struct { uintptr_t raw; } PAddr;
@@ -53,7 +54,6 @@ typedef struct {
 
 typedef struct Heap Heap;
 
-typedef struct PerCPU_Scheduler PerCPU_Scheduler;
 typedef struct PerCPU PerCPU;
 struct PerCPU {
     PerCPU* self;
@@ -66,8 +66,9 @@ struct PerCPU {
     u32 physical_id, lapic_id;
 
     // Scheduler info
-    PerCPU_Scheduler* sched;
+    Server sched;
 
+    _Alignas(64) _Atomic bool idleing;
     _Alignas(64) _Atomic(struct Thread*) current_thread;
     _Alignas(64) _Atomic(struct Thread*) blocked_threads;
 

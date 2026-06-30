@@ -9,6 +9,7 @@
 #include "usb.h"
 
 static volatile uint32_t* mmio;
+static int context_slot_size;
 
 static KHandle log_stream;
 static char* log_buffer;
@@ -40,6 +41,7 @@ void fault_handler(void) {
 static void assert_msg(const char* str) {
     printf("assert condition failed! %s\n", str);
     fault_handler();
+    *((volatile int*) 0) = 0;
 }
 
 void _putchar(char ch) {
@@ -84,12 +86,24 @@ static volatile uintptr_t* dcbaap;
 
 static HCI_Ring crcr;
 
+static uint32_t mmio_read32(volatile uint32_t* src) {
+    asm volatile("mfence" : : : "memory");
+    uint32_t x = *src;
+    asm volatile("mfence" : : : "memory");
+    return x;
+}
+
+// the dummy read is to force the PCI writes to actually flush
 static void ring_doorbell(USB_Device* dev, int target) {
+    asm volatile("mfence" : : : "memory");
+
     if (dev == NULL) {
         // Doorbell reg 0 is the host controller
         doorbell[0] = target;
+        uint32_t x = mmio_read32(&doorbell[0]);
     } else {
         doorbell[1 + (dev - devices)] = target;
+        mmio_read32(&doorbell[1 + (dev - devices)]);
     }
 }
 
@@ -302,7 +316,22 @@ static void usb_fsm(int msg, int port, int slot) {
             in_ctx->arr[2].data[2] = (xfer_ring->base_paddr & 0xFFFFFFF0) | 1u;
             in_ctx->arr[2].data[3] = (xfer_ring->base_paddr >> 32ull);
 
-            dcbaap[slot] = out_ctx_paddr;
+            #if 0
+            printf("PORTSC: %08x\n", *sts_ptr);
+            for (int i = 0; i < 3; i++) {
+                printf("[%d] %08x %08x %08x %08x\n",
+                    i,
+                    in_ctx->arr[i].data[0],
+                    in_ctx->arr[i].data[1],
+                    in_ctx->arr[i].data[2],
+                    in_ctx->arr[i].data[3]
+                );
+            }
+            #endif
+
+            dcbaap[1 + slot] = out_ctx_paddr;
+            asm volatile("mfence" : : : "memory");
+
             printf("[usb] Initialized Port%u with In:%p, Out:%p Transfer:%p (%zu max packet)\n", port, in_ctx_paddr, out_ctx_paddr, xfer_ring->base_paddr, max_packet);
 
             dev->in_ctx_paddr = in_ctx_paddr;
@@ -324,7 +353,10 @@ static void usb_fsm(int msg, int port, int slot) {
             dev->state = PORT_ADDRESS;
             dev->mailbox = syscall(SYS_mailbox_create, 1);
             dev->ipc_ring_evt[0] = syscall(SYS_event_create);
-            syscall(SYS_thread_create, NULL, usb_device_thread, dev, 8192, 0);
+
+            KHandle thread = syscall(SYS_thread_create, NULL, usb_device_thread, dev, 8192, 0);
+            syscall(SYS_thread_setattr, thread, 0, 10);
+            syscall(SYS_thread_setattr, thread, 1, "USB-Dev");
         } break;
     }
 }
@@ -430,16 +462,19 @@ static void usb_device_thread(void* d) {
     char* interface = NULL;
     size_t interface_size = 0;
     int usb_type = USB_DRIVER_NONE;
-    if (dev->desc.dev_class == 0 && dev->desc.dev_sub_class == 0) {
-        #if 0
-        printf(" FOUND HID-DEVICES!!! %#02x:%#02x, %d\n", dev->desc.dev_class, dev->desc.dev_sub_class, dev->desc.num_configs);
-        char* buf = (char*) &dev->desc;
-        for (int j = 0; j < desc_len; j++) {
-            printf(" %02x", buf[j]);
-        }
-        printf("\n");
-        #endif
 
+    #if 1
+    printf(" FOUND DEVICE!!! %#02x:%#02x, %d\n", dev->desc.dev_class, dev->desc.dev_sub_class, dev->desc.num_configs);
+    char* buf = (char*) &dev->desc;
+    for (int j = 0; j < desc_len; j++) {
+        printf(" %02x", buf[j]);
+    }
+    printf("\n");
+    #endif
+
+    fault_handler();
+
+    if (dev->desc.dev_class == 0 && dev->desc.dev_sub_class == 0) {
         int selected_config = 0;
         int selected_interface = 0;
         for (int i = 0; i < dev->desc.num_configs; i++) {
@@ -451,6 +486,9 @@ static void usb_device_thread(void* d) {
             usb_submit_urb_sync(&urb);
 
             read_string(dev, scratch[6], dev->name, 32);
+            printf("FOUND %s\n", dev->name);
+            fault_handler();
+
             /* printf("CONFIG %zu.%d '%-24s' (total=%d):", DEV_SLOT(dev), i, str, scratch[0]);
             for (int j = 0; j < 9; j++) {
                 printf(" %02x", scratch[j] & 0xFF);
@@ -566,7 +604,9 @@ static void usb_device_thread(void* d) {
                 int i       = (index - 1)*2 + (dir_in ? 4 : 3);
 
                 uintptr_t val = (i - 2) | (DEV_SLOT(dev) << 32u);
-                syscall(SYS_thread_create, NULL, usb_endpoint_thread, (void*) val, 8192, 0);
+                KHandle thread = syscall(SYS_thread_create, NULL, usb_endpoint_thread, (void*) val, 8192, 0);
+                syscall(SYS_thread_setattr, thread, 0, 10);
+                syscall(SYS_thread_setattr, thread, 1, "USB-EP");
             }
         }
     }
@@ -604,7 +644,7 @@ static void usb_endpoint_thread(void* arg) {
     uint32_t max_packet_size = dev->in_ctx->arr[2 + pipe].data[1] >> 16u;
     IPC_Endpoint ep = ipc_endpoint(dev->ipc_ring[pipe], false);
 
-    // TODO(NeGate): CACHE to avoid get_paddr calls
+    // CACHE to avoid get_paddr calls
     uintptr_t last_vaddr = (uintptr_t) ipc_slot_buffer(dev->ipc_ring[pipe]) & ~4095ull;
     uintptr_t last_paddr = syscall(SYS_get_paddr, last_vaddr);
     do {
@@ -635,6 +675,8 @@ static void usb_endpoint_thread(void* arg) {
         }
 
         // Wait for packet
+        fault_handler();
+
         syscall(SYS_event_wait, dev->ipc_ring_evt[pipe]);
 
         /* printf("REPORT %d.%d: ", DEV_SLOT(dev), pipe);
@@ -644,7 +686,6 @@ static void usb_endpoint_thread(void* arg) {
         printf("\n"); */
 
         // printf("A\n");
-        // fault_handler();
 
         // Tell user about it
         ipc_write_commit(&ep, max_packet_size);
@@ -673,15 +714,15 @@ int _start(KHandle pci_device) {
     // ERS0 has 4K worth of TRB entries
     erst[0] = ers0_paddr & 0xFFFFFFFF;
     erst[1] = ers0_paddr >> 32ull;
-    erst[2] = 1024 / 16;
+    erst[2] = 256;
     erst[3] = 0;
 
     volatile uint32_t* rt_regs = &mmio[mmio[6] >> 2];
     op_base  = &mmio[(mmio[0] & 0xFF) >> 2];
     doorbell = &mmio[mmio[5] >> 2];
 
-    int slot_size = (mmio[4] >> 2) & 1 ? 64 : 32;
-    printf("[usb] Slot size: %zu\n", slot_size);
+    context_slot_size = (mmio[4] >> 2) & 1 ? 64 : 32;
+    printf("[usb] Slot size: %zu\n", context_slot_size);
 
     uint32_t max_ports = mmio[1] >> 24u;
     uint32_t max_slots = mmio[1] & 0xFF;
@@ -711,10 +752,13 @@ int _start(KHandle pci_device) {
         // set ERSTBA
         interrupt[4] = erst_paddr & 0xFFFFFFFF;
         interrupt[5] = (erst_paddr >> 32ull);
+
+        printf("[usb] ERS! %p %p\n", ers0_paddr, erst_paddr);
     }
     //   5. Enable interrupts (TODO)
     //   6. Turn host controller on
     op_base[0] |= 1; // (USBCMD @ 00h)
+    asm volatile("mfence" : : : "memory");
 
     printf("[usb] Detected %u root hub ports (%d max slots)\n", max_ports, max_slots);
     FOR_N(i, 0, max_ports) {
@@ -729,15 +773,20 @@ int _start(KHandle pci_device) {
     fault_handler();
 
     bool ccs = true;
+    uintptr_t trb_i = 0;
     for (;;) {
-        uintptr_t erdp_phys = (interrupt[6] & ~15) | ((uintptr_t) interrupt[7] << 32ull);
-        uintptr_t trb_i = (erdp_phys - ers0_paddr) / sizeof(uint32_t);
+        assert(trb_i < 1024);
 
         int poke = dev_to_refresh;
         bool advanced = false;
         while ((ers0[trb_i+3] & 1) == ccs) {
+            asm volatile("mfence" : : : "memory");
+
             volatile uint32_t* trb = &ers0[trb_i];
             uint32_t type = (trb[3] >> 10) & 0b111111;
+
+            uintptr_t trb_phys = ers0_paddr + trb_i*sizeof(uint32_t);
+
             if (type == 0x21) { // Command completion
                 uintptr_t cmd_ptr = trb[0] | ((uintptr_t) trb[1] << 32ull);
                 volatile uint32_t* cmd = ring_cmd_at(&crcr, cmd_ptr);
@@ -745,7 +794,9 @@ int _start(KHandle pci_device) {
                 uint32_t completed_type = (cmd[3] >> 10) & 0b111111;
                 uint32_t completition_code = trb[2] >> 24u;
 
-                // printf("%d : Completed Event%p %#x (type=%d, cc=%#x)\n", trb[2] >> 24u, cmd_ptr, trb[3], completed_type, completition_code);
+                printf("%d : Completed Event%p %#x (type=%d, cc=%#x)\n", trb[2] >> 24u, cmd_ptr, trb[3], completed_type, completition_code);
+                fault_handler();
+
                 if (completed_type == 12) {
                     // configure endpoint
                     //   allow others to use it now
@@ -789,7 +840,7 @@ int _start(KHandle pci_device) {
             fault_handler();
 
             trb_i += 4;
-            if (trb_i == 0x100) {
+            if (trb_i*4 == 0x1000) {
                 // wrap around
                 trb_i = 0;
                 ccs = !ccs;
@@ -806,7 +857,8 @@ int _start(KHandle pci_device) {
 
         if (advanced) {
             // update ERDP
-            erdp_phys = ers0_paddr + trb_i*sizeof(uint32_t);
+            uintptr_t erdp_phys = ers0_paddr + trb_i*sizeof(uint32_t);
+
             interrupt[7] = (erdp_phys >> 32ull);
             interrupt[6] = erdp_phys & 0xFFFFFFFF;
         }

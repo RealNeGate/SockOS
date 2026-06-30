@@ -6,6 +6,7 @@ X(get_root_mailbox)
 // Env/Threads
 X(env_create)
 X(thread_create)
+X(thread_setattr)
 // Tracing/Debug
 X(debug_log)
 // Event

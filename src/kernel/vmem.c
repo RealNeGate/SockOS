@@ -30,24 +30,33 @@ bool vmem_addrhm_cmp(const void* a, const void* b) {
 #define NBHM_FN(n) vmem_addrhm_ ## n
 #include <nbhm.h>
 
-static size_t vmem_node_bin_search(VMem_Node* node, uint32_t key, int start_i) {
-    bool is_leaf = node->is_leaf;
-    size_t left = start_i, right = node->key_count;
-    while (left != right) {
-        size_t i = (left + right) / 2;
-        uintptr_t key_at_idx = node->keys[i];
-
-        // kprintf("  STEP %p %p %d %d\n", key_at_idx, key, i, node->key_count);
-        if (key_at_idx >= key) {
-            if (is_leaf && key_at_idx == key) { return i; }
-            right = i;
-        } else {
-            left = i + 1;
+static size_t vmem_node_bin_search(VMem_Node* node, uint32_t key) {
+    size_t left = 0, right = node->key_count;
+    if (node->is_leaf) {
+        while (left != right) {
+            size_t i = (left + right) / 2;
+            uint64_t key_at_idx = node->keys[i];
+            if (key_at_idx == key) {
+                return i;
+            } else if (key_at_idx > key) {
+                right = i;
+            } else {
+                left = i + 1;
+            }
         }
+        return left - 1;
+    } else {
+        while (left != right) {
+            size_t i = (left + right) / 2;
+            uint64_t key_at_idx = node->keys[i];
+            if (key_at_idx > key) {
+                right = i;
+            } else {
+                left = i + 1;
+            }
+        }
+        return left;
     }
-
-    // kprintf("  A %d %d\n", right - is_leaf, is_leaf);
-    return right - is_leaf;
 }
 
 VMem_Cursor vmem_cursor_first(Env* env) {
@@ -84,19 +93,16 @@ VMem_Cursor vmem_node_lookup(Env* env, uintptr_t key) {
 
     // layers of binary search
     for (;;) {
-        int index = vmem_node_bin_search(node, key, 0);
+        int index = vmem_node_bin_search(node, key);
         if (node->is_leaf) {
             if (index < 0) {
-                // kprintf("  LEAF %p %d (NO MATCH)\n", node->keys[index], index);
                 return (VMem_Cursor){ 0 };
             }
 
-            // kprintf("  LEAF %p %d\n", node->keys[index], index);
             return (VMem_Cursor){ node, index };
         } else {
             kassert(index <= node->key_count, "OOB %d <= %d", index, node->key_count);
             kassert(node->kids[index] != NULL, "bad B+ tree, %d", index);
-            // kprintf("  INTR %p %d\n", node->keys[index], index);
             node = node->kids[index];
         }
     }
@@ -201,7 +207,7 @@ VMem_PageDesc* vmem_node_insert(Env* env, uintptr_t key) {
             env->addr_space.root = new_node;
         }
 
-        int left = vmem_node_bin_search(node, key, 0);
+        int left = vmem_node_bin_search(node, key);
         while (!node->is_leaf) {
             VMem_Node* kid = node->kids[left];
             kassert(kid, "Bad node, %p[%d] = %p (%p)", node, left, kid, key);
@@ -219,7 +225,7 @@ VMem_PageDesc* vmem_node_insert(Env* env, uintptr_t key) {
             }
 
             node = kid;
-            left = vmem_node_bin_search(node, key, 0);
+            left = vmem_node_bin_search(node, key);
         }
 
         kassert(node->key_count > 0, "shouldn't have empty leaf nodes");
@@ -388,6 +394,8 @@ uintptr_t vmem_map(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_t
     if (flags & VMEM_PAGE_PINNED) {
         // commit all the pages now
         char* kaddr = kheap_alloc(size);
+        kassert(((uintptr_t) kaddr & (PAGE_SIZE - 1)) == 0, "BAD ALIGN! %p", kaddr);
+
         memset(kaddr, 0, size);
 
         FOR_N(i, 0, size / PAGE_SIZE) {

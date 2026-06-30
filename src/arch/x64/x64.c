@@ -99,7 +99,7 @@ void arch_init(int id) {
         cpu->gdt[TSS/8 +1] = (tss_ptr >> 32ull);
 
         // disable I/O map base
-        ((u16*) cpu->tss)[0x102 / 4] = 0xDFFF;
+        cpu->tss[0x64 / 4] = 0xDFFF0000;
 
         // set IST1, when an interrupt happens we'll be using this as the kernel
         // stack.
@@ -197,6 +197,10 @@ static inline void x86_hlt(void) {
 
 void sched_yield(void) {
     asm volatile ("int 32");
+}
+
+uint64_t arch_get_micros(void) {
+    return __rdtsc() / boot_info->tsc_freq;
 }
 
 uint64_t get_time_ticks(void) {

@@ -28,7 +28,7 @@ void x86_send_ipi(u64 lapic_id, u64 val) {
 void arch_wake_up(int core_id) {
     if (cpu_get_index() != core_id) {
         u32 lapic_id = boot_info->cores[core_id].lapic_id;
-        if (atomic_compare_exchange_strong(&boot_info->cores[core_id].sched->idleing, &(bool){ true }, false)) {
+        if (atomic_compare_exchange_strong(&boot_info->cores[core_id].idleing, &(bool){ true }, false)) {
             // sending an IPI which triggers int#32 (Timer)
             x86_send_ipi(lapic_id, 0x20);
             ON_DEBUG(IRQ)(kprintf("[irq] wake up CPU-%d\n", lapic_id));

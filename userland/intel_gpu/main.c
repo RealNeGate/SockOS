@@ -63,7 +63,7 @@ static void allocate_buffers(void) {
         igpu_mmio_write(addr + 0x9C, igpu_mmio_read(addr + 0x9C));
     }
 
-    syscall(SYS_sleep, 16666);
+    syscall(SYS_sleep, 20000);
 
     // igpu_mmio_write(0x7017C, buf_config(0, 32));  // CUR_BUF_CFG_A
     // igpu_mmio_write(0x7027C, buf_config(32, 160)); // PLANE_BUF_CFG_1_A
@@ -71,8 +71,8 @@ static void allocate_buffers(void) {
     igpu_mmio_write(0x7017C, buf_config(0, 32));  // CUR_BUF_CFG_A
     igpu_mmio_write(0x7027C, buf_config(32, 160)); // PLANE_BUF_CFG_1_A
 
-    igpu_mmio_write(0x70140, 0x00000000 | 32);
-    igpu_mmio_write(0x70240, 0x00000000 | 160);
+    igpu_mmio_write(0x70140, 0x00000000 | 32);  // CUR_WM_A_0
+    igpu_mmio_write(0x70240, 0x00000000 | 160); // CUR_WM_TRANS_A
 
     // Disable all transition watermarks
     igpu_mmio_write(0x70168, 0);
@@ -91,13 +91,12 @@ static void allocate_buffers(void) {
         igpu_mmio_write(addr + 0x9C, igpu_mmio_read(addr + 0x9C));
     }
 
-    syscall(SYS_sleep, 16666);
-
     igpu_mmio_write(0x70080, 0b100111);   // CUR_CONTROL
     igpu_mmio_write(0x70088, 0x00100010); // CUR_POS
     igpu_mmio_write(0x70084, gpu.cursor_gpu_addr); // CUR_BASE_A
 }
 
+static int WIDTH = 1720, STRIDE = 1728, HEIGHT = 1440;
 static void intel_gpu_driver_init(KHandle display_pci) {
     // BDSM_0_2_0_PCI - Mirror of Base Data of Stolen Memory
     gpu.base_dsm = syscall(SYS_pci_read_config_32, display_pci, 0x5C) & 0xFFFFFu;
@@ -106,7 +105,6 @@ static void intel_gpu_driver_init(KHandle display_pci) {
     size_t size;
     gpu.bar0 = syscall(SYS_pci_get_bar, display_pci, 0, &size);
     gpu.mmio = mmap(0, gpu.bar0, 0, size, PROT_READ | PROT_WRITE, 0);
-    syscall(SYS_test, gpu.mmio);
     gpu.ggtt = (volatile uint64_t*) ((uint8_t*) gpu.mmio + 0x800000);
 
     // GMADR, 4GiB region for main memory
@@ -141,9 +139,14 @@ static void intel_gpu_driver_init(KHandle display_pci) {
     uintptr_t scratch_paddr;
     syscall(SYS_mpin, 0, 0, 4096, &scratch_paddr);
 
+    uint32_t plane_size = igpu_mmio_read(0x70190);
+    WIDTH  = (plane_size & 0xFFFFu); + 1;
+    HEIGHT = (plane_size >> 16u) + 1;
+    STRIDE = igpu_mmio_read(0x70188) * 64;
+
     // Initialize GTT
     {
-        size_t gtt_start = ((1920*1080*4) + 4095) / 4096;
+        size_t gtt_start = ((STRIDE*HEIGHT*4) + 4095) / 4096;
         size_t gtt_end   = gpu.ggtt_size / sizeof(uint64_t);
 
         // Carve out 16KiB for the cursor
@@ -229,9 +232,6 @@ static void intel_gpu_driver_poll(void) {
     }
     #endif
 
-    igpu_mmio_write(0x70088, (cursor_x << 16u) | cursor_y); // CUR_POS
-    igpu_mmio_write(0x70084, gpu.cursor_gpu_addr); // CUR_BASE_A
-
     #if 0
     size_t gtt_start = ((1920*1080*4) + 4095) / 4096;
     size_t gtt_end   = gpu.ggtt_size / 4096;
@@ -251,7 +251,7 @@ int _start(KHandle display_pci) {
     KHandle root_mailbox = syscall(SYS_get_root_mailbox);
 
     // Find USB mouse
-    KHandle mouse_dev = 0;
+    /* KHandle mouse_dev = 0;
     IPC_Endpoint int_in = { 0 };
     for (;;) {
         mailbox_send(root_mailbox, 1, 1, 0, NULL, &mouse_dev);
@@ -264,12 +264,13 @@ int _start(KHandle display_pci) {
             break;
         }
         syscall(SYS_sleep, 100000);
-    }
+    } */
 
+    int mult = 0;
     for (;;) {
         uint64_t start = __rdtsc();
 
-        size_t len;
+        /* size_t len;
         char* packet;
         for (;;) {
             packet = ipc_try_read(&int_in, &len);
@@ -280,7 +281,20 @@ int _start(KHandle display_pci) {
             cursor_y += packet[2];
             ipc_read_release(&int_in);
         }
-        intel_gpu_driver_poll();
+        intel_gpu_driver_poll(); */
+
+        cursor_y += 1;
+
+        /* uint32_t color = ((cursor_y % 60) > 30) ? 0xFFFFFFFF : 0xFF000000;
+        uint32_t* pixels = (uint32_t*) gpu.main_mem;
+        for (int j = 0; j < 150; j++) {
+            for (int i = 0; i < 150; i++) {
+                pixels[j*WIDTH + i] = color;
+            }
+        } */
+
+        igpu_mmio_write(0x70088, (cursor_y << 16u) | cursor_x); // CUR_POS
+        // igpu_mmio_write(0x70084, gpu.cursor_gpu_addr); // CUR_BASE_A
 
         uint64_t elapsed = (__rdtsc() - start) / tsc_freq;
         if (elapsed < 16666) {

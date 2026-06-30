@@ -229,6 +229,7 @@ static bool exec(FileEntry* file, KHandle arg) {
 
     // Spin up the main thread
     KHandle thread = syscall(SYS_thread_create, child_env, elf_vmap + (elf_header->e_entry - lo), arg, 2*1024*1024, 1);
+    syscall(SYS_thread_setattr, thread, 1, file->path);
     return true;
 }
 
@@ -283,7 +284,6 @@ int _start(KHandle bootstrap_vmo) {
     uint64_t args[2], msg[4];
     uint64_t info = mailbox_wait(mailbox, sizeof(msg) << 32u, args, msg, &handle);
     for (;;) {
-        printf("AAA!\n");
         fault_handler();
 
         int ret = 0;

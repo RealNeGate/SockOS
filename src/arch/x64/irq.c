@@ -236,10 +236,10 @@ uintptr_t timer_interrupt(CPUState* state, uintptr_t cr3, PerCPU* cpu, u64 now) 
         apic_timer_status = APIC_CALIBRATED;
     }
 
-    cpu->sched->idleing = false;
-    u64 now_micros = now / boot_info->tsc_freq;
+    atomic_store_explicit(&cpu->idleing, false, memory_order_release);
+    uint64_t now_micros = now / boot_info->tsc_freq;
 
-    u64 next_wake;
+    uint64_t next_wake;
     Thread* next = sched_pick_next(cpu, now_micros, &next_wake);
 
     PageTable* old_address_space = paddr2kaddr(cr3);
@@ -254,7 +254,7 @@ uintptr_t timer_interrupt(CPUState* state, uintptr_t cr3, PerCPU* cpu, u64 now) 
 
     // don't arm the timer again if we're gonna sleep forever
     uint64_t new_now_time = (__rdtsc() / boot_info->tsc_freq);
-    if (next_wake != UINT64_MAX) {
+    if (next_wake != INT64_MAX) {
         uint64_t until_wake = next_wake > new_now_time ? next_wake - new_now_time : 1;
         uint64_t armed_t = micros_to_apic_time(until_wake);
         if (armed_t == 0) {
@@ -272,7 +272,7 @@ uintptr_t timer_interrupt(CPUState* state, uintptr_t cr3, PerCPU* cpu, u64 now) 
         }
         #endif
     } else {
-        cpu->sched->idleing = true;
+        atomic_store_explicit(&cpu->idleing, true, memory_order_release);
 
         #if DEBUG_SCHED
         if (cpu->current_thread != next) {
@@ -327,7 +327,7 @@ static void dump_page_fault(CPUState* state, uintptr_t cr3, PerCPU* cpu, Env* en
     // just throw error
     kprintf("CPU-%d: Page Fault: error=%#x, env=%p\n", cpu - boot_info->cores, state->error, env);
     kprintf("  cr3=%p\n",   cr3);
-    kprintf("  rsp=%p\n\n", state->rsp);
+    kprintf("  flags=%x\n", state->flags);
 
     // print memory access address
     u64 translated;
@@ -397,10 +397,15 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
                 bool is_write = state->error & 2;
                 bool success = vmem_segfault(env, access_addr, is_write);
                 if (!success) {
-                    kprintf("CPU-%d: %s (%d): cr3=%p error=0x%x\n", id, interrupt_names[state->interrupt_num], state->interrupt_num, cr3, state->error);
-                    kprintf("  rip=%x:%p rsp=%x:%p flags=%x\n", state->cs, state->rip, state->ss, state->rsp, state->flags);
+                    kprintf("CPU-%d: %s (%d): cr3=%p error=0x%x, thread=%s\n", id, interrupt_names[state->interrupt_num], state->interrupt_num, cr3, state->error, curr->tag);
                     dump_page_fault(state, cr3, cpu, env, access_addr);
-                    x86_halt();
+
+                    kassert(curr->client.wake_time == 0, "just in case");
+                    curr->client.is_dead = true;
+                    rwlock_unlock_shared(&env->addr_space.lock);
+
+                    // run other processes, this one's dead
+                    cr3 = timer_interrupt(state, cr3, cpu, now);
                 }
 
                 rwlock_unlock_shared(&env->addr_space.lock);

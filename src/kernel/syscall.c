@@ -136,20 +136,6 @@ static _Noreturn void yield_syscall(PerCPU* cpu, uintptr_t cr3, CPUState* state,
     do_context_switch(state, new_cr3);
 }
 
-void transfer_time(PerCPU* cpu, Thread* curr, Thread* next, CPUState* state) {
-    // save out state
-    curr->state = *state;
-
-    next->start_time = curr->start_time;
-    next->exec_time = curr->exec_time;
-    next->max_exec_time = curr->max_exec_time;
-    next->wait_obj = NULL;
-    next->calling_thread = curr;
-
-    // replace curr thread in scheduler state
-    cpu->current_thread = next;
-}
-
 ////////////////////////////////
 // Syscall table
 ////////////////////////////////
@@ -199,7 +185,6 @@ SYS_FN(debug_log) {
             _putchar(page[j]);
         }
     }
-
     return 0;
 }
 
@@ -260,6 +245,8 @@ SYS_FN(mmap) {
         KObject_VMO* vmo = env_get_handle(cpu->current_thread->parent, SYS_PARAM1, NULL);
         KCHECK(vmo, RESULT_NO_HANDLE);
         KCHECK(vmo->super.tag == KOBJECT_VMO, RESULT_WRONG_HANDLE);
+
+        flags |= vmo->flags;
 
         if (env != cpu->current_thread->parent) {
             vmo_handle = env_open_handle(env, 0, &vmo->super);
@@ -359,7 +346,31 @@ SYS_FN(thread_create) {
 
     // make an accessible handle for the thread
     thread_resume(thread, NULL);
-    return env_open_handle(env, 0, &thread->super);
+    return env_open_handle(cpu->current_thread->parent, 0, &thread->super);
+}
+
+SYS_FN(thread_setattr) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_thread_setattr(%p, %d, %d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2));
+    Env* env = cpu->current_thread->parent;
+
+    Thread* thread = env_get_handle(env, SYS_PARAM0, NULL);
+    KCHECK(thread, RESULT_NO_HANDLE);
+    KCHECK(thread->super.tag == KOBJECT_THREAD, RESULT_WRONG_HANDLE);
+
+    if (SYS_PARAM1 == 0) {
+        // thread->client.weight = 20;
+    } else if (SYS_PARAM1 == 1) {
+        // TODO(NeGate): make this safe
+        int i = 0;
+        const char* str = (const char*) SYS_PARAM2;
+        for (; i < 31 && str[i]; i++) {
+            thread->tag[i] = str[i];
+        }
+        thread->tag[i] = 0;
+        // kprintf("SET NAME '%s'\n", thread->tag);
+    }
+
+    return 0;
 }
 
 SYS_FN(event_create) {
@@ -377,7 +388,11 @@ SYS_FN(event_wait) {
     KCHECK(event, RESULT_NO_HANDLE);
     KCHECK(event->super.tag == KOBJECT_EVENT, RESULT_WRONG_HANDLE);
 
-    event_wait(event, cpu->current_thread);
+    bool res = event_wait(event, cpu->current_thread);
+    if (!res) {
+        // Continue running, we signalled already
+        return 0;
+    }
 
     // Pick a new task
     state->interrupt_num = 32;
@@ -394,13 +409,23 @@ SYS_FN(event_signal) {
     KCHECK(event->super.tag == KOBJECT_EVENT, RESULT_WRONG_HANDLE);
 
     Thread* next = event_signal(event);
-    next->wait_obj = NULL;
-    thread_resume(next, cpu);
+    if (next != NULL) {
+        next->client.is_blocked = false;
+        next->wait_obj = NULL;
+        thread_resume(next, cpu);
+    }
     return 0;
 }
 
 SYS_FN(test) {
     kprintf("SYS_test(%p)\n", SYS_PARAM0);
+
+    for (size_t j = 0; j < 50; j++) {
+        for (size_t i = 0; i < 50; i++) {
+            boot_info->fb.pixels[i + (j * boot_info->fb.stride)] = SYS_PARAM0;
+        }
+    }
+
     return 0;
 }
 
@@ -465,8 +490,8 @@ SYS_FN(pci_get_bar) {
     }
 
     egest_usermem(SYS_PARAM2, &size, sizeof(size));
-
     bool prefetch = (bar->value >> 3) & 1;
+
     KObject_VMO* vmo_ptr = vmo_create_physical(addr, size, prefetch ? VMEM_PAGE_WRITETHRU : VMEM_PAGE_UNCACHED);
     return env_open_handle(env, 0, &vmo_ptr->super);
 }
@@ -525,6 +550,22 @@ static KHandle ingest_user_handle(uintptr_t ptr) {
         return res;
     }
     return 0;
+}
+
+void transfer_time(PerCPU* cpu, Thread* curr, Thread* next, CPUState* state) {
+    // save out state
+    curr->state = *state;
+
+    next->client.start_time = curr->client.start_time;
+    next->client.v_time     = curr->client.v_time;
+    next->client.v_deadline = curr->client.v_deadline;
+    next->client.is_blocked = false;
+    next->wait_obj = NULL;
+    next->calling_thread = curr;
+
+    // replace curr thread in scheduler state
+    cpu->current_thread = next;
+    kprintf("XFER C%d -> C%d\n", curr->client.id, next->client.id);
 }
 
 static int mailbox_xfer(CPUState* state, PerCPU* cpu, Thread* curr, Thread* next, KObject_Mailbox* mailbox) {
@@ -600,6 +641,7 @@ SYS_FN(mailbox_send) {
     kassert(next->parent, "mailboxes can't live in kernel-threads");
 
     // Put to wait on mailbox
+    curr->client.is_blocked = true;
     curr->wait_obj = mailbox;
     return mailbox_xfer(state, cpu, curr, next, NULL);
 }
@@ -615,6 +657,7 @@ SYS_FN(mailbox_reply) {
     Thread* curr = cpu->current_thread;
     Thread* next = curr->calling_thread;
 
+    curr->client.is_blocked = true;
     curr->wait_obj = mailbox;
     curr->calling_thread = NULL;
     return mailbox_xfer(state, cpu, curr, next, mailbox);
@@ -630,6 +673,7 @@ SYS_FN(mailbox_wait) {
     KCHECK(mailbox->super.tag == KOBJECT_MAILBOX, RESULT_WRONG_HANDLE);
 
     // Wait on mailbox
+    curr->client.is_blocked = true;
     curr->wait_obj = mailbox;
     mailbox_recv(mailbox, curr);
 
