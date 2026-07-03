@@ -34,7 +34,7 @@ struct StoreLog {
 
 struct ObjectStore {
     // compacted logs
-    _Atomic(StoreLog*) c2;
+    // _Atomic(StoreLog*) c2;
 
     // uncompacted logs
     _Atomic(StoreLog*) c1;
@@ -44,31 +44,19 @@ struct ObjectStore {
 };
 
 static atomic_u64 OBJ_ID_CNT = 0;
-static KObject STORE_LOG_PRIME;
-
 static ObjectStore global_store;
 
 static uint32_t min_u32(uint32_t a, uint32_t b) { return a < b ? a : b; }
 
-// because FAA(reserve) happens before the writes to K and V, it's
-// in theory possible for us to reach this point without having written
-// either. Since the writes are ordered, we can simply check if the final
-// write (V) is NULL to see if it went through correctly.
-//
-// We use a CAS to fight any potential writer thread on this, that way they
-// know to retry or not.
-static KObjectID freeze_log_entry(StoreLog* log, uint32_t i, KObject** out_v) {
+static KObjectID get_log_entry(StoreLog* log, uint32_t i, KObject** out_v) {
     KObject*  v = atomic_ldacq(&log->entries[i].v);
     KObjectID k = atomic_ldacq(&log->entries[i].k);
-    if (v == NULL && atomic_cas_acq_rel(&log->entries[i].v, &(KObject*){ NULL }, &STORE_LOG_PRIME)) {
-        *out_v = NULL;
-        return UINT64_MAX;
-    } else {
-        *out_v = v;
-        return k;
-    }
+
+    *out_v = v;
+    return k;
 }
 
+#if 0
 // Concurrent Cooperative Compaction (CCC!!!)
 void store_coop(ObjectStore* store) {
     StoreLog* a = atomic_ldacq(&store->c1);
@@ -86,8 +74,8 @@ void store_coop(ObjectStore* store) {
     uint32_t ai = 0, bi = 0, cnt = 0;
     while (cnt < min) {
         KObject *av, *bv;
-        KObjectID ak = freeze_log_entry(a, ai, &av);
-        KObjectID bk = freeze_log_entry(b, bi, &bv);
+        KObjectID ak = get_log_entry(a, ai, &av);
+        KObjectID bk = get_log_entry(b, bi, &bv);
         if (ak != UINT64_MAX && bk != UINT64_MAX) {
             if (ak < bk) {
                 atomic_store_explicit(&dst->entries[cnt].k, ak, memory_order_relaxed);
@@ -104,19 +92,19 @@ void store_coop(ObjectStore* store) {
 
     while (ai < a_cnt) {
         KObject* av;
-        KObjectID ak = freeze_log_entry(a, ai, &av);
+        KObjectID ak = get_log_entry(a, ai, &av);
 
-        atomic_store_explicit(&dst->entries[cnt].k, ak, memory_order_relaxed);
-        atomic_store_explicit(&dst->entries[cnt].v, av, memory_order_relaxed);
+        atomic_strlx(&dst->entries[cnt].k, ak);
+        atomic_strlx(&dst->entries[cnt].v, av);
         cnt += 1, ai += 1;
     }
 
     while (bi < b_cnt) {
         KObject* bv;
-        KObjectID bk = freeze_log_entry(b, bi, &bv);
+        KObjectID bk = get_log_entry(b, bi, &bv);
 
-        atomic_store_explicit(&dst->entries[cnt].k, bk, memory_order_relaxed);
-        atomic_store_explicit(&dst->entries[cnt].v, bv, memory_order_relaxed);
+        atomic_strlx(&dst->entries[cnt].k, bk);
+        atomic_strlx(&dst->entries[cnt].v, bv);
         cnt += 1, bi += 1;
     }
     dst->reserve = dst->commit = cnt;
@@ -127,18 +115,25 @@ void store_coop(ObjectStore* store) {
     store->c2 = dst;
 
     // Advance C1 to skip A & B
-    StoreLog* log = atomic_ldacq(&b->next);
-    if (atomic_cas_acq_rel(&store->c2, a, c)) {
+    StoreLog* c = atomic_ldacq(&b->next);
+    if (atomic_cas_acq_rel(&store->c1, &a, c)) {
 
     }
 }
+#endif
+
+enum {
+    STORE_INIT_CAP = 1024
+};
 
 void store_alloc(void) {
-    StoreLog* new_log = kheap_zalloc(sizeof(StoreLog) + STORE_INIT_CAP*sizeof(StoreEntry));
-    atomic_strel(&global_store, new_log);
+    FOR_N(i, 0, boot_info->core_count) {
+        StoreLog* new_log = kheap_zalloc(sizeof(StoreLog) + STORE_INIT_CAP*sizeof(StoreEntry));
+        atomic_strel(&global_store->c0[i], new_log);
+    }
 }
 
-KObjectID store_put(ObjectStore* store, KObject* obj) {
+KObjectID store_put(KObject* obj) {
     KObjectID id = obj->id = ++OBJ_ID_CNT;
 
     int core_id = cpu_get_index();
@@ -147,14 +142,9 @@ KObjectID store_put(ObjectStore* store, KObject* obj) {
 
     // Insertion
     for (;;) {
-        // reserve, write K, write V, commit.
-        //   note that the number of committed items doesn't necessarily
-        //   denote their ordering, it's possible that an earlier event
-        //   hasn't finished being committed while a later one has, when
-        //   merging happens it'll simply skip over these and they'll have
-        //   to retry.
+        // C0 is all core-local writes but it can be snooped by other cores.
         int idx = atomic_add_acq_rel(&log->reserve, 1);
-        if (atomic_ldacq(&log->next) == NULL) {
+        if (atomic_ldacq(&log->next) == NULL && idx >= log->cap) {
             StoreLog* fresh = kheap_zalloc(sizeof(StoreLog) + log->cap*sizeof(StoreEntry));
 
             // move our stale log from C0 -> C1
@@ -167,13 +157,12 @@ KObjectID store_put(ObjectStore* store, KObject* obj) {
             log = fresh;
             continue;
         }
+        // If another core sees K but V is NULL, then the object will be treated
+        // as if it doesn't exist because it means we haven't completed the
+        // store_put on the function where it has been exposed to the outside
+        // world.
         atomic_strel(&log->entries[id].k, id);
-        // when a merge thread has acknowledged an incomplete write, it'll
-        // CAS in a PRIME. if we see PRIME, then it means we need to retry
-        if (!atomic_cas_acq_rel(&log->entries[id].v, &(KObject*){ NULL }, obj)) {
-            log = atomic_ldacq(&log->next, &log);
-            continue;
-        }
+        atomic_strel(&log->entries[id].v, obj);
         atomic_add_acq_rel(&log->commit, 1);
         break;
     }
@@ -181,44 +170,70 @@ KObjectID store_put(ObjectStore* store, KObject* obj) {
     return id;
 }
 
-KObject* store_get(KObjectID id) {
-    #if 0
+static KObject* snoop_log(StoreLog* log, KObjectID key) {
+    size_t left = 0, right = atomic_ldacq(&log->reserve, 1);
     while (left != right) {
         size_t i = (left + right) / 2;
-        uint64_t key_at_idx = node->keys[i];
+        KObjectID key_at_idx = atomic_ldacq(&log->entries[i].k);
         if (key_at_idx == key) {
-            return i;
+            return atomic_ldacq(&log->entries[i].v);
         } else if (key_at_idx > key) {
             right = i;
         } else {
             left = i + 1;
         }
     }
-    return left - 1;
+    return NULL;
+}
 
-    spin_lock(&MUH_LOCK);
-    int count = store_event_count;
-    spin_unlock(&MUH_LOCK);
+KObject* store_get(KObjectID id) {
+    int core_id = cpu_get_index();
 
-    FOR_N(i, 0, count) {
-        if (id == store_events[i].k) {
-            return store_events[i].v;
-        }
+    // Snoop C0, starting with own core
+    StoreLog* log = atomic_ldacq(&store->c0[core_id]);
+    KObject* obj = snoop_log(log, id);
+    if (obj != NULL) { return obj; }
+
+    // Snoop C0 on other cores, we should prioritize some ordering
+    // based on NUMA... maybe.
+    FOR_N(i, 0, boot_info->core_count) if (i != core_id) {
+        log = atomic_ldacq(&store->c0[i]);
+        obj = snoop_log(log, id);
+        if (obj != NULL) { return obj; }
     }
-    #endif
+
+    // Snoop C1 chain
+    log = atomic_ldacq(&store->c1);
+    while (log != NULL) {
+        obj = snoop_log(log, id);
+        if (obj != NULL) { return obj; }
+        log = atomic_ldacq(&log->next);
+    }
 
     return NULL;
 }
 
+// TODO(NeGate): we want this data sorted...
 void store_iter(void fn(KObjectID id, KObject* obj)) {
+    int core_id = cpu_get_index();
 
+    // Iter C0
+    FOR_N(i, 0, boot_info->core_count) {
+        log = atomic_ldacq(&store->c0[i]);
+        obj = snoop_log(log, id);
+        if (obj != NULL) { return obj; }
+    }
+
+    // Snoop C1 chain
+    log = atomic_ldacq(&store->c1);
+    while (log != NULL) {
+        obj = snoop_log(log, id);
+        if (obj != NULL) { return obj; }
+        log = atomic_ldacq(&log->next);
+    }
 }
 
 void store_dump_all(void) {
-    spin_lock(&MUH_LOCK);
-    int count = store_event_count;
-    spin_unlock(&MUH_LOCK);
-
     kprintf("=== OBJECTS ===\n");
     kprintf("%-14s %-16s %-16s  %-14s %-10s\n", "ID", "Type", "Rawptr", "Parent", "Status");
     FOR_N(i, 0, count) {

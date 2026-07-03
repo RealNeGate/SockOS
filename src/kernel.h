@@ -263,6 +263,8 @@ const char* kobject_name(KObject* obj);
 // just tracks all objects everywhere, it's useful
 typedef struct ObjectStore ObjectStore;
 
+void store_alloc(void);
+
 #define STORE_PUT(x) store_put(&(x)->super)
 KObjectID store_put(KObject* obj);
 

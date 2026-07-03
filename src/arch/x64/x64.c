@@ -73,6 +73,7 @@ void arch_init(int id) {
         kprintf("Found %d cores | TSC freq %d MHz\n", boot_info->core_count, boot_info->tsc_freq);
 
         kheap_multicore(boot_info->core_count);
+        store_alloc();
         pci_init();
         sched_init();
 

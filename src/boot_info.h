@@ -15,7 +15,7 @@ typedef struct {
 enum {
     PAGE_SIZE = 4096,
 
-    KERNEL_STACK_SIZE   = 16384,
+    KERNEL_STACK_SIZE   = 32768,
     KERNEL_STACK_COOKIE = 0xABCDABCD,
 
     MAX_CORES = 256,
