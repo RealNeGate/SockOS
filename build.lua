@@ -73,7 +73,7 @@ function filename(file)
     return file:match("^.+/(.+)%..+")
 end
 
-local cflags     = " -std=gnu23 -g -Wall -I include -masm=intel -nostdlib -mno-red-zone -fno-stack-protector -fno-finite-loops -Wno-unused"
+local cflags     = " -std=gnu23 -g -Wall -I ext -I include -masm=intel -nostdlib -mno-red-zone -fno-stack-protector -fno-finite-loops -Wno-unused"
 local elf_cflags = "-target x86_64-linux-gnu -ffreestanding "..cflags
 local efi_cflags = "-target x86_64-pc-win32-coff -fno-PIC -fshort-wchar "..cflags
 
@@ -136,7 +136,7 @@ do
     })
 
     table.insert(lines, "# INITRD")
-    build("objs/bake_initrd"..host_exe, "cc", "userland/bake_initrd.c", { flags = "" })
+    build("objs/bake_initrd"..host_exe, "cc", "userland/bake_initrd.c", { flags = " -I ext" })
     command("objs/initrd", init_rd_list, "objs/bake_initrd"..host_exe.." $out $in", "objs/bake_initrd"..host_exe)
     table.insert(lines, "")
 end
@@ -144,7 +144,7 @@ end
 -- Kernel
 do
     table.insert(lines, "# KERNEL")
-    table.insert(lines, "flags = -c -fPIC -fno-omit-frame-pointer -I src -DKERNEL_LAND "..elf_cflags)
+    table.insert(lines, "flags = -c -fPIC -fno-omit-frame-pointer -I ext -I src -DKERNEL_LAND "..elf_cflags)
 
     local objs = {}
     local asm_files = list_files("src/arch/x64/", "*.s")
@@ -195,4 +195,5 @@ ninja:close()
 local _0, _1, res = os.execute("ninja")
 if res and res ~= 0 then os.exit(res) end
 
+-- os.execute("sudo cp bin/efi/boot/bootx64.efi /var/ftp/bootx64.efi")
 -- os.execute("cp bin/efi/boot/bootx64.efi C:/Users/yasse/OneDrive/Escritorio/PXE")

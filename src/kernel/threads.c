@@ -29,15 +29,7 @@ Env* env_create(void) {
     #error "TODO"
     #endif
 
-    // userland programs need an extra stack for syscall handling
-    /* if (0) {
-        // map all kernel stacks
-        FOR_N(i, 0, boot_info->core_count) {
-            char* page = ((char*) boot_info->cores[i].kernel_stack_top) - KERNEL_STACK_SIZE;
-            memmap_view(boot_info->kernel_pml4, kaddr2paddr(page), (uintptr_t) page, KERNEL_STACK_SIZE, VMEM_PAGE_WRITE);
-        }
-    } */
-
+    STORE_PUT(env);
     kprintf("[env] %p | %p | HW Tables at %p\n", env, &env->addr_space.hw_tables, env->addr_space.hw_tables);
     return env;
 }
@@ -75,6 +67,7 @@ Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintpt
     new_thread->client.slice  = 1000;
 
     snprintf(new_thread->tag, 32, "Thread-%p", new_thread);
+    STORE_PUT(new_thread);
 
     // attach to env
     if (env != NULL) {

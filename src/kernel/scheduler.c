@@ -9,31 +9,9 @@ enum {
     SCHED_LATENCY    = 10000, // 100Hz
 };
 
-void sleep(u64 timeout) {
+void thread_sleep(u64 timeout) {
     sched_wait(timeout);
     sched_yield();
-}
-
-static int distance_to_core(int a, int b) {
-    if (a == b) {
-        return 0;
-    }
-    return 32 - __builtin_clz(a ^ b);
-}
-
-static int* sched_weight_matrix;
-void sched_init(void) {
-    /* if (0 && cpu == &boot_info->cores[0]) {
-        kprintf("Init weight matrix!!!\n");
-        FOR_N(j, 0, boot_info->core_count) {
-            printf("[");
-            FOR_N(i, 0, boot_info->core_count) {
-                int dist = distance_to_core(i, j);
-                printf(" %d", dist);
-            }
-            printf(" ]\n");
-        }
-    } */
 }
 
 uint64_t sched_total_exec_time(PerCPU* cpu, uint64_t now_time) {
@@ -46,7 +24,7 @@ int sched_load_balancer(void* arg) {
     uint64_t usage[256];
     uint64_t last_time = 0;
     for (;;) {
-        sleep(1000000);
+        thread_sleep(1000000);
 
         uint64_t now_time = __rdtsc() / boot_info->tsc_freq;
         FOR_N(i, 0, boot_info->core_count) {

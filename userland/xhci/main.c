@@ -1,6 +1,7 @@
 #include <beans.h>
 #include <common.h>
 #include <stdatomic.h>
+#include <emmintrin.h>
 #include "../src/kernel/printf.c"
 
 #define IPC_RING_IMPL
@@ -137,13 +138,15 @@ static atomic_int dev_to_refresh;
 
 static void mark_pending_urb(uintptr_t paddr, USB_Device* dev, int pipe) {
     SPIN_LOCK(&pending_urb_lock);
+    printf("PENDING %p\n", paddr);
+    fault_handler();
     pending_urbs[pending_urb_count++] = (PendingURB){
         paddr, dev, pipe
     };
     SPIN_UNLOCK(&pending_urb_lock);
 }
 
-static void signal_pending_urb(uintptr_t paddr, int cc) {
+static void signal_pending_urb(uintptr_t paddr, int cc, int trb_len) {
     SPIN_LOCK(&pending_urb_lock);
     PendingURB pending = { 0};
     for (int i = 0; i < pending_urb_count; i++) {
@@ -178,28 +181,33 @@ enum {
 };
 
 static uintptr_t submit_urb(USB_RequestBlock* urb) {
+    USB_Device* dev = urb->dev;
+    uint32_t max_packet_size = dev->in_ctx->arr[urb->pipe + 2].data[1] >> 16u;
+
     uint32_t cmd[4];
     int trt = urb->data_len ? (urb->setup.request_type & USB_DEV2HOST ? 3 : 2) : 0;
-    USB_Device* dev = urb->dev;
     HCI_Ring* ring = &dev->xfer_ring[urb->pipe];
+
+    uint32_t* start = ring->dequeue;
 
     // Setup Stage Packet
     memcpy(cmd, &urb->setup, sizeof(struct URB_Setup));
     cmd[2] = 8u; // TRB Transfer length is fixed at 8
     cmd[3] = (trt << 16u) | (1u << 6u);
-    ring_submit_cmd(ring, TRB_SETUP, cmd);
+    ring_submit_cmd2(ring, TRB_SETUP, cmd);
 
     // Data Stage Packet (optional)
     bool status_in = urb->setup.request_type & USB_DEV2HOST;
     uintptr_t data_paddr = 0;
     if (urb->data_len) {
-        data_paddr = syscall(SYS_get_paddr, urb->data);
+        uintptr_t paddr = syscall(SYS_get_paddr, urb->data);
+        assert(paddr/4096ull == (paddr+urb->data_len)/4096ull);
 
-        cmd[0] = data_paddr & 0xFFFFFFFF;
-        cmd[1] = data_paddr >> 32ull;
+        cmd[0] = paddr & 0xFFFFFFFF;
+        cmd[1] = paddr >> 32ull;
         cmd[2] = urb->data_len;
         cmd[3] = status_in << 16u;
-        ring_submit_cmd(ring, TRB_DATA, cmd);
+        ring_submit_cmd2(ring, TRB_DATA, cmd);
 
         // printf("DATA: %s\n", status_in ? "IN" : "OUT");
         status_in = !status_in;
@@ -215,7 +223,14 @@ static uintptr_t submit_urb(USB_RequestBlock* urb) {
     cmd[3] = (1u << 5u) | (status_in << 16u);
     uintptr_t paddr = ring->dequeue_paddr;
     mark_pending_urb(paddr, dev, urb->pipe);
-    ring_submit_cmd(ring, TRB_STATUS, cmd);
+    ring_submit_cmd2(ring, TRB_STATUS, cmd);
+
+    // toggle all cycle bits together
+    while (start != ring->dequeue) {
+        start[3] ^= 1, start += 4;
+        asm volatile("mfence" : : : "memory");
+    }
+
     return paddr;
 }
 
@@ -228,7 +243,7 @@ enum {
 
 static void usb_submit_urb_sync(USB_RequestBlock* urb) {
     USB_Device* dev = urb->dev;
-    submit_urb(urb);
+    uintptr_t paddr = submit_urb(urb);
     ring_doorbell(dev, urb->pipe + 1);
 
     // Wait for URB
@@ -292,13 +307,13 @@ static void usb_fsm(int msg, int port, int slot) {
             ring_alloc(xfer_ring, 256);
 
             uint32_t speed = (*sts_ptr >> 10u) & 0xF;
-            uint32_t max_packet = 8;
+            uint32_t max_packet = 8; // FULL could be 8,16,32,64
             switch (speed) {
                 case USB_SPEED_SUPER:
                 max_packet = 512;
                 break;
 
-                case USB_SPEED_FULL: case USB_SPEED_HIGH:
+                case USB_SPEED_HIGH:
                 max_packet = 64;
                 break;
             }
@@ -334,6 +349,7 @@ static void usb_fsm(int msg, int port, int slot) {
 
             printf("[usb] Initialized Port%u with In:%p, Out:%p Transfer:%p (%zu max packet)\n", port, in_ctx_paddr, out_ctx_paddr, xfer_ring->base_paddr, max_packet);
 
+            dev->speed = speed;
             dev->in_ctx_paddr = in_ctx_paddr;
             dev->out_ctx_paddr = out_ctx_paddr;
             dev->in_ctx  = in_ctx;
@@ -362,7 +378,7 @@ static void usb_fsm(int msg, int port, int slot) {
 }
 
 // see 4.8.2.4
-static void usb_set_endpoint(USB_Device* dev, USB_EndpointDesc* ep, int ring_cap) {
+static void usb_set_endpoint(USB_Device* dev, USB_EndpointDesc* ep, int interval) {
     bool dir_in = ep->addr >> 7;
     int ep_type = dir_in ? 7 : 3;
     int index   = ep->addr & 0xF;
@@ -370,9 +386,9 @@ static void usb_set_endpoint(USB_Device* dev, USB_EndpointDesc* ep, int ring_cap
 
     assert(i - 2 < MAX_ENDPOINTS);
     HCI_Ring* ring = &dev->xfer_ring[i - 2];
-    ring_alloc(ring, ring_cap);
+    ring_alloc(ring, 256);
 
-    dev->ipc_ring[i - 2] = ipc_ring_alloc(ep->max_packet_size, 16, &dev->ipc_ring_vmo[i - 2]);
+    dev->ipc_ring[i - 2] = ipc_ring_alloc2(ep->max_packet_size, 4096, &dev->ipc_ring_vmo[i - 2]);
     dev->ipc_ring_evt[i - 2] = syscall(SYS_event_create);
 
     InputContext* in_ctx = dev->in_ctx;
@@ -386,7 +402,6 @@ static void usb_set_endpoint(USB_Device* dev, USB_EndpointDesc* ep, int ring_cap
     }
 
     //                        Interval
-    int interval = 8;
     in_ctx->arr[i].data[0] = (interval << 16);
     //                        CErr        EP Type           Max Packet Size                Max Burst
     in_ctx->arr[i].data[1] = (3 << 1u) | (ep_type << 3u) | (ep->max_packet_size << 16u) | (0 << 8u);
@@ -438,6 +453,9 @@ static void usb_device_thread(void* d) {
     USB_Device* dev = d;
     mailbox_send(root_mailbox, 0, DEV_SLOT(dev), 0, NULL, &(KHandle){ dev->mailbox });
 
+    printf("AAA!\n");
+    fault_handler();
+
     USB_RequestBlock urb = {
         .dev   = dev,
         .setup = {
@@ -451,7 +469,8 @@ static void usb_device_thread(void* d) {
     };
     usb_submit_urb_sync(&urb);
 
-    size_t desc_len  = dev->desc.length;
+    size_t desc_len = dev->desc.length;
+    char* buf = (char*) &dev->desc;
     urb.setup.length = urb.data_len = desc_len;
     usb_submit_urb_sync(&urb);
 
@@ -464,10 +483,9 @@ static void usb_device_thread(void* d) {
     int usb_type = USB_DRIVER_NONE;
 
     #if 1
-    printf(" FOUND DEVICE!!! %#02x:%#02x, %d\n", dev->desc.dev_class, dev->desc.dev_sub_class, dev->desc.num_configs);
-    char* buf = (char*) &dev->desc;
+    printf(" FOUND DEVICE!!! %02x:%02x, %d\n", dev->desc.dev_class, dev->desc.dev_sub_class, dev->desc.num_configs);
     for (int j = 0; j < desc_len; j++) {
-        printf(" %02x", buf[j]);
+        printf(" %02x", buf[j] & 0xFF);
     }
     printf("\n");
     #endif
@@ -486,14 +504,6 @@ static void usb_device_thread(void* d) {
             usb_submit_urb_sync(&urb);
 
             read_string(dev, scratch[6], dev->name, 32);
-            printf("FOUND %s\n", dev->name);
-            fault_handler();
-
-            /* printf("CONFIG %zu.%d '%-24s' (total=%d):", DEV_SLOT(dev), i, str, scratch[0]);
-            for (int j = 0; j < 9; j++) {
-                printf(" %02x", scratch[j] & 0xFF);
-            }
-            printf("\n"); */
 
             urb.setup.length = urb.data_len = scratch[2] | (scratch[3] << 8);
             usb_submit_urb_sync(&urb);
@@ -570,8 +580,27 @@ static void usb_device_thread(void* d) {
                 case 3: type_str = "Int";  break;
             }
 
+            int ep_interval = 0;
+            if ((ep->attrs & 3) == 3) {
+                // frames are 1ms on low/full, 125us for high
+                int interval_micros = ep->interval * 125;
+                if (dev->speed == USB_SPEED_LOW || dev->speed == USB_SPEED_FULL) {
+                    interval_micros *= 8;
+                }
+
+                // endpoint interval represent a period:
+                //   period = 125us * 2^interval
+                //
+                // so interval=1 means 125us but 4 means 2ms.
+                // we pick a valid interval that's at least as
+                // big as the interval_micros.
+                while (interval_micros > 125*(1<<ep_interval)) {
+                    ep_interval++;
+                }
+            }
+
             printf("[usb] dev%d: endpoint%d: num=%d, dir=%-3s, type=%s, rate=%d, max_packet=%d\n", slot, j, ep->addr & 0xF, dir_in ? "IN" : "OUT", type_str, ep->interval, ep->max_packet_size);
-            usb_set_endpoint(dev, ep, 256);
+            usb_set_endpoint(dev, ep, ep_interval);
         }
         fault_handler();
 
@@ -641,12 +670,12 @@ static void usb_endpoint_thread(void* arg) {
     USB_Device* dev = &devices[a >> 32u];
     int pipe        = a & 0xFFFFFFFF;
 
-    uint32_t max_packet_size = dev->in_ctx->arr[2 + pipe].data[1] >> 16u;
+    uint32_t max_packet_size = dev->in_ctx->arr[pipe + 2].data[1] >> 16u;
     IPC_Endpoint ep = ipc_endpoint(dev->ipc_ring[pipe], false);
 
     // CACHE to avoid get_paddr calls
-    uintptr_t last_vaddr = (uintptr_t) ipc_slot_buffer(dev->ipc_ring[pipe]) & ~4095ull;
-    uintptr_t last_paddr = syscall(SYS_get_paddr, last_vaddr);
+    uintptr_t last_vaddr = 0;
+    uintptr_t last_paddr = 0;
     do {
         // Send packet
         char* packet = ipc_write_reserve(&ep);
@@ -679,13 +708,12 @@ static void usb_endpoint_thread(void* arg) {
 
         syscall(SYS_event_wait, dev->ipc_ring_evt[pipe]);
 
-        /* printf("REPORT %d.%d: ", DEV_SLOT(dev), pipe);
+        printf("REPORT %d.%d: ", DEV_SLOT(dev), pipe);
         for (int j = 0; j < 8; j++) {
             printf(" %02x", packet[j] & 0xFF);
         }
-        printf("\n"); */
-
-        // printf("A\n");
+        printf("\n");
+        fault_handler();
 
         // Tell user about it
         ipc_write_commit(&ep, max_packet_size);
@@ -786,6 +814,7 @@ int _start(KHandle pci_device) {
             uint32_t type = (trb[3] >> 10) & 0b111111;
 
             uintptr_t trb_phys = ers0_paddr + trb_i*sizeof(uint32_t);
+            ring_dump_cmd(trb_phys, trb);
 
             if (type == 0x21) { // Command completion
                 uintptr_t cmd_ptr = trb[0] | ((uintptr_t) trb[1] << 32ull);
@@ -794,8 +823,10 @@ int _start(KHandle pci_device) {
                 uint32_t completed_type = (cmd[3] >> 10) & 0b111111;
                 uint32_t completition_code = trb[2] >> 24u;
 
-                printf("%d : Completed Event%p %#x (type=%d, cc=%#x)\n", trb[2] >> 24u, cmd_ptr, trb[3], completed_type, completition_code);
-                fault_handler();
+                if (completed_type != 1) {
+                    printf("%d : Completed Event%p %#x (type=%d, cc=%#x)\n", trb[2] >> 24u, cmd_ptr, trb[3], completed_type, completition_code);
+                    fault_handler();
+                }
 
                 if (completed_type == 12) {
                     // configure endpoint
@@ -832,7 +863,7 @@ int _start(KHandle pci_device) {
             } else if (type == 0x20) { // Transfer event
                 uintptr_t cmd_ptr = trb[0] | ((uintptr_t) trb[1] << 32ull);
                 uint32_t completition_code = trb[2] >> 24u;
-                signal_pending_urb(cmd_ptr, completition_code);
+                signal_pending_urb(cmd_ptr, completition_code, trb[2] & 0xFFFFFF);
             } else {
                 printf("Unsupported event %d\n", type);
             }

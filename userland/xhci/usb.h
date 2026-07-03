@@ -149,6 +149,8 @@ typedef struct {
         PORT_CONFIGURED,
     } state;
 
+    int speed;
+
     // USB_GET_DESCRIPTOR(DT_DEVICE, 0)
     USB_DevDesc desc;
     char name[32];

@@ -53,6 +53,7 @@ typedef struct {
 } MemMap;
 
 typedef struct Heap Heap;
+typedef struct StoreLog StoreLog;
 
 typedef struct PerCPU PerCPU;
 struct PerCPU {
@@ -108,7 +109,7 @@ typedef struct {
     u64 apic_tick_in_tsc;
 
     i32 core_count;
-    PerCPU cores[256];
+    PerCPU cores[MAX_CORES];
 
     u64 rsdp_addr;
     MemMap mem_map;

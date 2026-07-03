@@ -81,8 +81,6 @@ void arch_init(int id) {
         x86_irq_startup(id);
         x86_boot_cores();
     } else {
-        // kprintf("Booting core %d...\n", id);
-
         sched_init();
         x86_irq_startup(id);
     }

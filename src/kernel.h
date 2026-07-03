@@ -159,6 +159,9 @@ typedef enum {
     KACCESS_,
 } KAccessRights;
 
+// these IDs are global and aren't shared with users
+typedef uint64_t KObjectID;
+
 // these exist beyond environments (and can be shared across them), this is
 // the header for all of them.
 struct KObject {
@@ -169,12 +172,12 @@ struct KObject {
         // memory
         KOBJECT_VMO,
         // IPC
-        KOBJECT_PIPE,
         KOBJECT_MAILBOX,
         KOBJECT_EVENT,
         // Devices
         KOBJECT_DEV_PCI,
     } tag;
+    KObjectID id;
 };
 
 // chunk of virtual memory which can be shared across environments
@@ -251,6 +254,23 @@ bool mailbox_recv(KObject_Mailbox* mailbox, Thread* thread);
 KObject_Event* event_create(void);
 Thread* event_signal(KObject_Event* restrict event);
 bool event_wait(KObject_Event* restrict event, Thread* thread);
+
+const char* kobject_name(KObject* obj);
+
+////////////////////////////////
+// Object Store
+////////////////////////////////
+// just tracks all objects everywhere, it's useful
+typedef struct ObjectStore ObjectStore;
+
+#define STORE_PUT(x) store_put(&(x)->super)
+KObjectID store_put(KObject* obj);
+
+#define STORE_GET(x) store_get(&(x)->super)
+KObject* store_get(KObjectID id);
+
+void store_iter(void fn(KObjectID id, KObject* obj));
+void store_dump_all(void);
 
 ////////////////////////////////
 // Environment (memory + resources accessible bound to some set of threads)

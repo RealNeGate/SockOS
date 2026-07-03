@@ -216,7 +216,7 @@ void arch_handoff(int id) {
             asm volatile ("pause");
         }
 
-        kprintf("CPU-%d is now ready to work!\n", id);
+        // kprintf("CPU-%d is now ready to work!\n", id);
         spall_begin_event("main", id);
 
         asm volatile ("sti");
@@ -402,6 +402,7 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
 
                     kassert(curr->client.wake_time == 0, "just in case");
                     curr->client.is_dead = true;
+                    store_dump_all();
                     rwlock_unlock_shared(&env->addr_space.lock);
 
                     // run other processes, this one's dead

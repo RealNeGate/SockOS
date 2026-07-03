@@ -3,8 +3,48 @@
 #include <elf.h>
 #include "../src/kernel/printf.c"
 
+void* memset(void* buffer, int c, size_t n) {
+    u8* buf = (u8*)buffer;
+    for (size_t i = 0; i < n; i++) {
+        buf[i] = c;
+    }
+    return buffer;
+}
+
+void* memcpy(void* dest, const void* src, size_t n) {
+    u8* d = (u8*)dest;
+    u8* s = (u8*)src;
+    for (size_t i = 0; i < n; i++) {
+        d[i] = s[i];
+    }
+    return dest;
+}
+
+void* memmove(void* dest, const void* src, size_t n) {
+    u8* d = (u8*)dest;
+    u8* s = (u8*)src;
+    if (s+n >= d) {
+        for (size_t i = n; i--;) {
+            d[i] = s[i];
+        }
+    } else {
+        for (size_t i = 0; i < n; i++) {
+            d[i] = s[i];
+        }
+    }
+    return dest;
+}
+
+// Just build it as part of the bigger unit
+#define LZ4_memset(dst, src, n) memset(dst, src, n)
+#define LZ4_memcpy(dst, src, n) memcpy(dst, src, n)
+#define LZ4_memmove(dst, src, n) memmove(dst, src, n)
+#define LZ4_FREESTANDING 1
+#include <lz4.c>
+
 typedef struct {
     uint32_t data_len;
+    uint32_t unpacked_len;
     char path[24];
     char data[];
 } FileEntry;
@@ -21,21 +61,11 @@ static KHandle log_stream;
 static char* log_buffer;
 static int log_used;
 
-void* memset(void* buffer, int c, size_t n) {
-    u8* buf = (u8*)buffer;
-    for (size_t i = 0; i < n; i++) {
-        buf[i] = c;
+int strcmp(const char* a, const char* b) {
+    while (*a && *b && *a == *b) {
+        a++, b++;
     }
-    return buffer;
-}
-
-void* memcpy(void* dest, const void* src, size_t n) {
-    u8* d = (u8*)dest;
-    u8* s = (u8*)src;
-    for (size_t i = 0; i < n; i++) {
-        d[i] = s[i];
-    }
-    return dest;
+    return *a - *b;
 }
 
 void fault_handler(void) {
@@ -143,13 +173,6 @@ static void parse_driver_list(const char* src) {
     }
 }
 
-static int strcmp(const char* a, const char* b) {
-    while (*a && *b && *a == *b) {
-        a++, b++;
-    }
-    return *a - *b;
-}
-
 static bool string_match(const char* a, const char* b, size_t n) {
     while (*a && *b && n--) {
         if (*a != *b) { return false; }
@@ -171,21 +194,27 @@ static FileEntry* find_file(FileEntry* initrd, size_t path_len, const char* path
 }
 
 static bool exec(FileEntry* file, KHandle arg) {
-    if (file->data_len < sizeof(Elf64_Ehdr)) {
+    if (file->unpacked_len < sizeof(Elf64_Ehdr)) {
         return false;
     }
 
-    Elf64_Ehdr* elf_header = (Elf64_Ehdr*) file->data;
+    char* contents = mmap(0, 0, 0, file->unpacked_len, PROT_READ | PROT_WRITE, 0);
+    int res = LZ4_decompress_safe(file->data, contents, file->data_len, file->unpacked_len);
+    if (file->unpacked_len != res) {
+        return false;
+    }
+
+    Elf64_Ehdr* elf_header = (Elf64_Ehdr*) contents;
     size_t segment_size = elf_header->e_phentsize;
     size_t segment_header_bounds = elf_header->e_phoff + elf_header->e_phnum*segment_size;
-    if (segment_header_bounds >= file->data_len) {
+    if (segment_header_bounds >= file->unpacked_len) {
         printf("[init] error: segments do not fit into file\n");
         return false;
     }
 
     uintptr_t lo = 0, hi = 0;
     size_t page_size = 4096;
-    const char* segments = file->data + elf_header->e_phoff;
+    const char* segments = contents + elf_header->e_phoff;
     for (size_t i = 0; i < elf_header->e_phnum; i++) {
         Elf64_Phdr* segment = (Elf64_Phdr*) (segments + i*segment_size);
         if (segment->p_type != PT_LOAD) {
@@ -220,7 +249,7 @@ static bool exec(FileEntry* file, KHandle arg) {
         KHandle section_vmo = syscall(SYS_vmo_create, 0, memsz);
         char* dst = mmap(0, section_vmo, 0, memsz, PROT_READ | PROT_WRITE, 0);
         if (segment->p_filesz > 0) {
-            memcpy(dst + offset, &file->data[segment->p_offset], segment->p_filesz);
+            memcpy(dst + offset, &contents[segment->p_offset], segment->p_filesz);
         }
 
         // Map into child environment

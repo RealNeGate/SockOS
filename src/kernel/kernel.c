@@ -185,7 +185,6 @@ void kmain(BootInfo* restrict info) {
     vmem_node_lookup(env, 0);
     vmem_node_lookup(env, 0x11002);
     vmem_node_lookup(env, 0x13002);
-
     #else
     static _Alignas(4096) const uint8_t init_elf[] = {
         #embed "../../objs/init.elf"

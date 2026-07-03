@@ -10,6 +10,11 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include <sys/stat.h>
+
+// Just build it as part of the bigger unit
+#include <lz4.c>
+
 #ifdef _WIN32
 #define fileno _fileno
 #define fstat _fstat64
@@ -18,10 +23,12 @@
 
 typedef struct {
     uint32_t data_len;
+    uint32_t unpacked_len;
     char path[24];
     char data[];
 } FileEntry;
 
+static const char ZEROES[16];
 int main(int argc, char** argv) {
     if (argc <= 1) {
         fprintf(stderr, "error: there's no output path, much less an input");
@@ -35,6 +42,7 @@ int main(int argc, char** argv) {
     }
 
     size_t file_len = 0;
+    size_t unpacked_len = 0;
     for (int i = 2; i < argc; i++) {
         const char* name = strrchr(argv[i], '/');
         if (name == NULL) { name = argv[i]; }
@@ -54,25 +62,35 @@ int main(int argc, char** argv) {
         }
 
         size_t len = file_stats.st_size;
-        size_t cap = (len + 16) & -16ull; // round_up(len + 1, 16)
-        char* data = malloc(cap);
+        char* input = malloc(len);
 
         fseek(file, 0, SEEK_SET);
-        fread(data, 1, len, file);
-        memset(&data[len], 0, cap - len);
+        fread(input, 1, len, file);
         fclose(file);
 
-        FileEntry header = { .data_len = len };
+        // LZ4 compress
+        char* data = malloc(len);
+        int packed_len = LZ4_compress_default(input, data, len, len);
+        if (packed_len == 0) {
+            printf("Failed to compress!!! %s\n", name);
+            continue;
+        }
+        size_t cap = (packed_len + 16) & -16ull; // round_up(len + 1, 16)
+
+        FileEntry header = { .data_len = packed_len, .unpacked_len = len };
         header.path[0] = '/';
         strncpy(header.path+1, name, 23);
 
         fwrite(&header, sizeof(FileEntry), 1, out_fp);
-        fwrite(data, cap, 1, out_fp);
+        fwrite(data, packed_len, 1, out_fp);
+        fwrite(data, cap - len, 1, out_fp);
         free(data);
 
         file_len += sizeof(FileEntry) + cap;
-        printf("Added '%s' (%zu bytes)\n", name, len);
+        unpacked_len += sizeof(FileEntry) + ((len + 16) & -16ull);
+        printf("Added '%s' (%zu => %d bytes)\n", name, len, packed_len);
     }
+    printf("Reduction %zu => %zu bytes (%.2f%%)\n", unpacked_len, file_len, (file_len / (double) unpacked_len) * 100.0);
 
     // NULL file
     FileEntry header = { .data_len = 0 };

@@ -66,5 +66,9 @@ void* memcpy(void* dest, const void* src, size_t n);
 int memcmp(const void* a, const void* b, size_t n);
 bool memeq(const void* a, const void* b, size_t n);
 
+#define atomic_ldacq(ptr) atomic_load_explicit(ptr, memory_order_acquire)
+#define atomic_strel(ptr) atomic_store_explicit(ptr, val, memory_order_release)
+#define atomic_add_acq_rel(addr, src) atomic_fetch_add_explicit(addr, src, memory_order_acq_rel)
+
 #define atomic_cas_acq_rel(addr, old, new) atomic_compare_exchange_strong_explicit(addr, old, new, memory_order_acq_rel, memory_order_acquire)
 

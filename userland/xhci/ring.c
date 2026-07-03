@@ -75,12 +75,23 @@ static void ring_advance(HCI_Ring* ring) {
     }
 }
 
+static void ring_submit_cmd2(HCI_Ring* ring, int type, uint32_t cmd[4]) {
+    uint32_t* dst = ring->dequeue;
+
+    // copy command (except control field)
+    FOR_N(i, 0, 3) { dst[i] = cmd[i]; }
+    // don't toggle cycle bit just yet
+    dst[3] = cmd[3] | ((type & 0x3F) << 10u) | !ring->cycle_bit;
+
+    // printf("SUBMIT[%p] %08x %08x %08x %08x\n", ring->dequeue_paddr, dst[0], dst[1], dst[2], dst[3]);
+    ring_advance(ring);
+}
+
 static void ring_submit_cmd(HCI_Ring* ring, int type, uint32_t cmd[4]) {
     uint32_t* dst = ring->dequeue;
 
     // copy command (except control field)
     FOR_N(i, 0, 3) { dst[i] = cmd[i]; }
-
     // write out, last word in the command must be written last since
     // it holds the control field and the producer cycle bit.
     dst[3] = cmd[3] | ((type & 0x3F) << 10u) | ring->cycle_bit;

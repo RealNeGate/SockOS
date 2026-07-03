@@ -29,6 +29,7 @@ typedef struct {
 } IPC_Endpoint;
 
 IPC_Ring* ipc_ring_alloc(size_t block_size, size_t cap, KHandle* out_vmo);
+IPC_Ring* ipc_ring_alloc2(size_t block_size, size_t target_size, KHandle* out_vmo);
 IPC_Endpoint ipc_endpoint(IPC_Ring* ring, bool is_consumer);
 IPC_Endpoint ipc_endpoint_from_vmo(KHandle vmo, bool is_consumer);
 char* ipc_try_read(IPC_Endpoint* restrict ep, uint64_t* out_len);
@@ -51,7 +52,6 @@ IPC_Ring* ipc_ring_alloc(size_t block_size, size_t cap, KHandle* out_vmo) {
     size += cap*block_size;
     // round to page
     size = (size + 4095ull) & ~4095ull;
-    syscall(SYS_test, size);
 
     KHandle ring_vmo = syscall(SYS_vmo_create, 0, size);
     IPC_Ring* ring = mmap(0, ring_vmo, 0, size, PROT_READ | PROT_WRITE, 0);
@@ -60,6 +60,12 @@ IPC_Ring* ipc_ring_alloc(size_t block_size, size_t cap, KHandle* out_vmo) {
 
     if (out_vmo) { *out_vmo = ring_vmo; }
     return ring;
+}
+
+IPC_Ring* ipc_ring_alloc2(size_t block_size, size_t target_size, KHandle* out_vmo) {
+    // TODO(NeGate): probably should check for overflow
+    size_t cap = (target_size - sizeof(IPC_Ring)) / (sizeof(uint64_t) + block_size);
+    return ipc_ring_alloc(block_size, cap, out_vmo);
 }
 
 IPC_Endpoint ipc_endpoint_from_vmo(KHandle ring_vmo, bool is_consumer) {

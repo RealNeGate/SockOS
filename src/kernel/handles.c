@@ -2,6 +2,18 @@
 #include <kernel.h>
 #include "threads.h"
 
+const char* kobject_name(KObject* obj) {
+    switch (obj->tag) {
+        case KOBJECT_ENV:     return "ENV";
+        case KOBJECT_THREAD:  return "THREAD";
+        case KOBJECT_VMO:     return "VMO";
+        case KOBJECT_MAILBOX: return "MAILBOX";
+        case KOBJECT_EVENT:   return "EVENT";
+        case KOBJECT_DEV_PCI: return "DEV_PCI";
+        default: return "???";
+    }
+}
+
 KObject_VMO* vmo_create_physical(uintptr_t addr, size_t size, VMem_Flags flags) {
     kassert((addr & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", addr);
 
@@ -17,6 +29,7 @@ KObject_VMO* vmo_create_physical(uintptr_t addr, size_t size, VMem_Flags flags) 
 
         obj->pages = nbhm_alloc(init_pages);
     }
+    STORE_PUT(obj);
     return obj;
 }
 
@@ -29,6 +42,7 @@ KObject_Mailbox* mailbox_create(size_t max_requests) {
         },
         .cap_log2 = log2
     };
+    STORE_PUT(obj);
     return obj;
 }
 
@@ -39,14 +53,17 @@ KObject_Event* event_create(void) {
             .tag = KOBJECT_EVENT,
         },
     };
+    STORE_PUT(obj);
     return obj;
 }
 
 Thread* event_signal(KObject_Event* restrict event) {
     // need to be ordered like this
-    atomic_fetch_add_explicit(&event->tail, 1, memory_order_acq_rel);
+    u64 tail  = atomic_fetch_add_explicit(&event->tail, 1, memory_order_acq_rel);
     Thread* t = atomic_load_explicit(&event->waiting_thread, memory_order_acquire);
     if (t != NULL && atomic_compare_exchange_strong(&event->waiting_thread, &t, NULL)) {
+        // wake up acknowledged however many signals came before it
+        atomic_store_explicit(&event->head, tail + 1, memory_order_release);
         return t;
     }
     return NULL;
