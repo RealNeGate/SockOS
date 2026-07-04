@@ -8,27 +8,34 @@
 #include <stddef.h>
 #include <stdatomic.h>
 
+// Used by both data structures for tracking frozen values
+#define EBR_PRIME_BIT (1ull << 63ull)
+
 #define EBR_VIRTUAL_ALLOC(size)     memset(kheap_alloc(size), 0, size)
 #define EBR_VIRTUAL_FREE(ptr, size) kheap_free(ptr, size)
 
+// traditional heap ops
+#ifndef EBR_REALLOC
+#define EBR_REALLOC(ptr, size) realloc(ptr, size)
+#endif // EBR_REALLOC
+
+#define EBR_DEBOOGING 0
+
+#if EBR_DEBOOGING
+#define EBR__BEGIN(name)      spall_begin_event(name, -1)
+#define EBR__END()            spall_end_event()
+#else
+#define EBR__BEGIN(name)
+#define EBR__END()
+#endif
+
 void ebr_init(void);
-void ebr_deinit(void);
 
 // Annotates the critical sections in the mutators
 void ebr_enter_cs(void);
 void ebr_exit_cs(void);
 
 void ebr_free(void* ptr, size_t size);
-
-#define EBR_DEBOOGING 1
-
-#if EBR_DEBOOGING
-#define EBR__BEGIN(name)      spall_begin_event(name, cpu_get_index())
-#define EBR__END()            spall_end_event(cpu_get_index())
-#else
-#define EBR__BEGIN(name)
-#define EBR__END()
-#endif
 
 #endif // EBR_H
 
@@ -37,15 +44,6 @@ void ebr_free(void* ptr, size_t size);
 
 // for the time in the ebr entry
 #define EBR_PINNED_BIT (1ull << 63ull)
-
-#ifdef _WIN32
-#include <tlhelp32.h>
-#endif
-
-static struct {
-    _Alignas(64) _Atomic(uint64_t) time;
-    _Alignas(64) _Atomic(uint64_t) checkpoint_t;
-} cores[MAX_CORES];
 
 typedef struct EBR_FreeNode EBR_FreeNode;
 struct EBR_FreeNode {
@@ -58,51 +56,47 @@ struct EBR_FreeNode {
 // concurrent free-list
 static _Atomic(EBR_FreeNode*) ebr_free_list;
 
-void ebr_deinit(void) {
-}
-
-extern void x86_sti(void);
 static int ebr_thread_fn(void* arg) {
     EBR_FreeNode* last_free_list = NULL;
-    for (;;) {
-        #if EBR_DEBOOGING
-        spall_begin_event("Cycle", -1);
-        #endif
 
+    #if EBR_DEBOOGING
+    spall_auto_thread_init(37373737, SPALL_DEFAULT_BUFFER_SIZE);
+    #endif
+
+    for (;;) {
         // clear the free list, then we wait for the checkpoint before
         // freeing the memory.
         EBR_FreeNode* free_list = atomic_exchange(&ebr_free_list, NULL);
         if (free_list != NULL) {
-            #if EBR_DEBOOGING
-            spall_begin_event("Checkpoint", -1);
-            #endif
-
+            EBR__BEGIN("Checkpoint");
             // wait for the critical sections to advance, once
             // that happens we can choose to free things.
             for (int i = 0; i < boot_info->core_count; i++) {
-                uint64_t before_t = atomic_load_explicit(&boot_info->cores[i].ebr_checkpoint, memory_order_acquire);
+                uint64_t time = atomic_ldacq(&boot_info->cores[i].ebr_time);
+                atomic_strel(&boot_info->cores[i].ebr_checkpoint, time);
+            }
+
+            for (int i = 0; i < boot_info->core_count; i++) {
+                uint64_t before_t = atomic_ldacq(&boot_info->cores[i].ebr_checkpoint);
                 if (before_t & EBR_PINNED_BIT) {
                     uint64_t now_t, tries = 0;
                     do {
                         // once we're at this a bunch of times, we start to yield
-                        if (tries > 4) {
-                            // thrd_yield();
+                        if (tries > 30) {
+                            thread_sleep(20000);
                         }
 
                         // idk, maybe this should be a better spinlock
-                        now_t = atomic_load_explicit(&boot_info->cores[i].ebr_time, memory_order_acquire);
+                        now_t = atomic_ldacq(&boot_info->cores[i].ebr_time);
                         tries++;
                     } while (before_t == now_t);
 
-                    atomic_store_explicit(&boot_info->cores[i].ebr_checkpoint, now_t, memory_order_release);
+                    atomic_strel(&boot_info->cores[i].ebr_checkpoint, now_t);
                 }
             }
+            EBR__END();
 
-            #if EBR_DEBOOGING
-            spall_end_event(-1);
-            spall_begin_event("Reclaim memory", -1);
-            #endif
-
+            EBR__BEGIN("Reclaim memory");
             if (last_free_list) {
                 EBR_FreeNode* list = last_free_list;
                 while (list) {
@@ -117,28 +111,23 @@ static int ebr_thread_fn(void* arg) {
             // so we can't free it until the next iteration.
             for (; free_list; free_list = free_list->next) {
                 EBR_VIRTUAL_FREE(free_list->ptr, free_list->size);
+                // printf("FREE %p %zu\n", free_list->ptr, free_list->size);
             }
             last_free_list = free_list;
-
-            #if EBR_DEBOOGING
-            spall_end_event(-1);
-            #endif
+            EBR__END();
         }
 
-        #if EBR_DEBOOGING
-        spall_end_event(-1);
-        #endif
-
         // Sleep for a while
-        sleep(1000000);
+        thread_sleep(500000);
     }
-
-    return 0;
 }
 
+static _Atomic bool init;
 void ebr_init(void) {
-    Thread* t = thread_create(NULL, ebr_thread_fn, 0, (uintptr_t) kheap_alloc(KERNEL_STACK_SIZE), KERNEL_STACK_SIZE);
-    thread_resume(t, NULL);
+    if (atomic_cas_acq_rel(&init, &(bool){ false }, true)) {
+        Thread* t = thread_create(NULL, ebr_thread_fn, 0, (uintptr_t) kheap_alloc(KERNEL_STACK_SIZE), KERNEL_STACK_SIZE);
+        thread_resume(t, NULL);
+    }
 }
 
 void ebr_free(void* ptr, size_t size) {
@@ -150,6 +139,8 @@ void ebr_free(void* ptr, size_t size) {
     do {
         node->next = list;
     } while (!atomic_compare_exchange_strong(&ebr_free_list, &list, node));
+
+    // printf("FREE @ %p %#zx %p\n", ebr_thread_entry, ebr_thread_entry->time, ptr);
 }
 
 void ebr_enter_cs(void) {

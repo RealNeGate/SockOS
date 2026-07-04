@@ -330,8 +330,8 @@ void vmem_dump(Env* env) {
 
             if (!desc->valid) {
                 kprintf("[%p - %p] FREE\n", start_addr, end_addr);
-            } else if (desc->vmo_handle) {
-                kprintf("[%p - %p] VIEW: [%p + %zu)\n", start_addr, end_addr, desc->vmo_handle, desc->offset);
+            } else if (desc->vmo) {
+                kprintf("[%p - %p] VIEW: [OBJ-%p + %zu)\n", start_addr, end_addr, desc->vmo->super.id, desc->offset);
             } else {
                 kprintf("[%p - %p]\n", start_addr, end_addr);
             }
@@ -345,7 +345,7 @@ void vmem_dump(Env* env) {
     kprintf("\n");
 }
 
-uintptr_t vmem_map(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_t size, VMem_Flags flags, uintptr_t* out_paddr) {
+uintptr_t vmem_map(Env* env, KObject_VMO* vmo, uintptr_t vaddr, size_t offset, size_t size, VMem_Flags flags, uintptr_t* out_paddr) {
     kassert((size & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", size);
 
     // walk all regions until we find a gap big enough (SLOW!!!)
@@ -389,7 +389,7 @@ uintptr_t vmem_map(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_t
     ON_DEBUG(VMEM)(kprintf("[vmem] map(%p, %#zx) = %p\n", env, size, vaddr));
 
     VMem_PageDesc* desc = vmem_node_insert(env, vaddr);
-    *desc = (VMem_PageDesc){ .valid = 1, .flags = flags, .vmo_handle = vmo, .offset = offset, .size = size };
+    *desc = (VMem_PageDesc){ .valid = 1, .flags = flags, .vmo = vmo, .offset = offset, .size = size };
 
     if (flags & VMEM_PAGE_PINNED) {
         // commit all the pages now
@@ -416,20 +416,14 @@ void vmem_commit_page(Env* env, uintptr_t vaddr, void* kaddr) {
     vmem_addrhm_put(&env->addr_space.working_set, (void*) (vaddr + VMEM_WORKING_SET_OFFSET), (void*) kaddr2paddr(kaddr));
 }
 
-void vmem_add_range(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_t vsize, VMem_Flags flags) {
+void vmem_add_range(Env* env, KObject_VMO* vmo, uintptr_t vaddr, size_t offset, size_t vsize, VMem_Flags flags) {
     kassert((vaddr & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", vaddr);
     kassert((vsize & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", vsize);
 
     vmem_unmap(env, vaddr, vsize);
 
     VMem_PageDesc* desc = vmem_node_insert(env, vaddr);
-    *desc = (VMem_PageDesc){ .valid = 1, .flags = flags, .offset = offset, .size = vsize };
-
-    if (vmo != 0) {
-        KObject_VMO* vmo_ptr = env_get_handle(env, vmo, NULL);
-        kassert(vmo_ptr->super.tag == KOBJECT_VMO, "expected object to be a VMO");
-        desc->vmo_handle = vmo;
-    }
+    *desc = (VMem_PageDesc){ .valid = 1, .flags = flags, .vmo = vmo, .offset = offset, .size = vsize };
 }
 
 uintptr_t vmem_translate(VMem_WorkingSet* ws, uintptr_t vaddr) {
@@ -440,29 +434,24 @@ uintptr_t vmem_try_commit(Env* env, VMem_PageDesc* desc, uintptr_t access_addr, 
     // Find the page's working set
     VMem_WorkingSet* ws = &env->addr_space.working_set;
     uintptr_t in_space_addr = access_addr;
-    if (desc->vmo_handle != 0) {
+    if (desc->vmo != 0) {
         // Translate address into VMO space
         size_t offset = (access_addr & -PAGE_SIZE) - start_addr;
         in_space_addr = desc->offset + offset;
 
-        KObject_VMO* vmo_ptr = env_get_handle(env, desc->vmo_handle, NULL);
-        if (vmo_ptr == NULL) {
-            kprintf("[vmem] touched page with invalid VMO %p (%p => VMO:%p)\n", desc->vmo_handle, access_addr, in_space_addr);
-            return 0;
-        }
+        KObject_VMO* vmo = desc->vmo;
+        ON_DEBUG(VMEM)(kprintf("[vmem] first touch on OBJ-%d (%p => VMO:%p)\n", vmo->super.id, access_addr, in_space_addr));
 
-        ON_DEBUG(VMEM)(kprintf("[vmem] first touch on VMO %p (%p => VMO:%p)\n", vmo_ptr, access_addr, in_space_addr));
-
-        if (vmo_ptr->paddr) {
+        if (vmo->paddr) {
             // physical addresses don't get cached in the working set, we're
             // better off just not putting entries into a hash map.
-            uintptr_t new_page = vmo_ptr->paddr + in_space_addr;
+            uintptr_t new_page = vmo->paddr + in_space_addr;
             arch_pte_update(env, access_addr & -PAGE_SIZE, new_page, desc->flags);
             return 0;
         }
 
         // TODO(NeGate): implement pager behavior
-        ws = &vmo_ptr->pages;
+        ws = &vmo->pages;
     } else {
         ON_DEBUG(VMEM)(kprintf("[vmem] first touch on private page (%p)\n", access_addr));
     }

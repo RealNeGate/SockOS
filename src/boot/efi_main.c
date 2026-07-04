@@ -237,6 +237,10 @@ static _Alignas(4096) const uint8_t kernel_so[] = {
     #embed "../../objs/kernel.so"
 };
 
+static _Alignas(4096) char kernel_map[] = {
+    #embed "../../objs/kernel.map"
+};
+
 static _Alignas(4096) uint8_t initrd[] = {
     #embed "../../objs/initrd"
 };
@@ -333,6 +337,9 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
     if (sizeof(initrd) > 0) {
         mem_map_mark(&mem_map, (u64) initrd, PAGE_4K(sizeof(initrd)), MEM_REGION_KERNEL);
     }
+    if (sizeof(kernel_map) > 0) {
+        mem_map_mark(&mem_map, (u64) kernel_map, PAGE_4K(sizeof(kernel_map)), MEM_REGION_KERNEL);
+    }
     mem_map_merge_contiguous_ranges(&mem_map);
     if(!mem_map_verify(&mem_map)) {
         panic("MemMap contains overlapping ranges");
@@ -350,6 +357,8 @@ EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {
 
     kernel_boot_info.initrd_size = sizeof(initrd);
     kernel_boot_info.initrd = initrd;
+    kernel_boot_info.map_file_size = sizeof(kernel_map);
+    kernel_boot_info.map_file = kernel_map;
     kernel_boot_info.identity_map_ptr = (kernel_module.virt_base + kernel_module.size + 0x40000000 - 1) & -0x40000000;
 
     // ON_DEBUG(EFI)(printf("Identity map @ %X\n", kernel_boot_info.identity_map_ptr));

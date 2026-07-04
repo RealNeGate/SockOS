@@ -5,9 +5,6 @@
 #define EBR_IMPL
 #include "ebr.h"
 
-#define NBHM_IMPL
-#include "nbhm.h"
-
 KObject_Mailbox* kernel_root_mailbox;
 BootInfo* boot_info;
 
@@ -48,7 +45,7 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
     Elf64_Ehdr* elf_header = (Elf64_Ehdr*) program;
 
     KObject_VMO* vmo_ptr = vmo_create_physical(kaddr2paddr((void*) program), program_size, VMEM_PAGE_WRITE | VMEM_PAGE_EXEC);
-    KHandle elf_vmo = env_open_handle(env, 0, &vmo_ptr->super);
+    env_grant_rights(env, KACCESS_WRITE, &vmo_ptr->super);
 
     ////////////////////////////////
     // map segments
@@ -78,26 +75,45 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
         ON_DEBUG(ENV)(kprintf("[elf] segment: %p (%d) => ... (%d)\n", segment->p_vaddr, segment->p_memsz, segment->p_filesz));
 
         if (file_size > 0) {
-            vmem_add_range(env, elf_vmo, vaddr, offset, file_size, VMEM_PAGE_WRITE);
+            vmem_add_range(env, vmo_ptr, vaddr, offset, file_size, VMEM_PAGE_WRITE);
         }
 
         if (mem_size > file_size) {
             // zero pages
-            vmem_add_range(env, 0, vaddr + file_size, 0, mem_size - file_size, VMEM_PAGE_WRITE);
+            vmem_add_range(env, NULL, vaddr + file_size, 0, mem_size - file_size, VMEM_PAGE_WRITE);
         }
     }
 
     // tiny i know
     size_t stack_size = 2*1024*1024;
-    uintptr_t stack_ptr = vmem_map(env, 0, 0, 0, stack_size, VMEM_PAGE_WRITE, NULL);
+    uintptr_t stack_ptr = vmem_map(env, NULL, 0, 0, stack_size, VMEM_PAGE_WRITE, NULL);
 
     ON_DEBUG(ENV)(kprintf("[elf] entry=%p\n", elf_header->e_entry));
     ON_DEBUG(ENV)(kprintf("[elf] stack=%p\n", stack_ptr));
 
     KObject_VMO* initrd_vmo = vmo_create_physical(kaddr2paddr(boot_info->initrd), boot_info->initrd_size, VMEM_PAGE_WRITE);
-    KHandle initrd_handle = env_open_handle(env, 0, &initrd_vmo->super);
+    KObjectID initrd_handle = env_grant_rights(env, KACCESS_WRITE, &initrd_vmo->super);
 
     return thread_create(env, (ThreadEntryFn*) elf_header->e_entry, initrd_handle, stack_ptr, stack_size);
+}
+
+size_t map_entry_count;
+MapFileEntry* map_entries;
+
+MapFileEntry* map_entry_get(uint32_t rva) {
+    size_t left = 0;
+    size_t right = map_entry_count;
+    while (left < right) {
+        size_t middle = (left + right) / 2;
+        if (map_entries[middle].rva > rva) {
+            right = middle;
+        } else {
+            left = middle + 1;
+        }
+    }
+
+    kassert(right - 1 < map_entry_count, "OOB %#x", rva);
+    return &map_entries[right - 1];
 }
 
 void _putchar(char ch);
@@ -107,6 +123,7 @@ void kmain(BootInfo* restrict info) {
     boot_info->cores[0].irq_stack_top = paddr2kaddr((uintptr_t) boot_info->cores[0].irq_stack_top);
 
     // convert pointers into kernel addresses
+    boot_info->map_file = paddr2kaddr((uintptr_t) boot_info->map_file);
     boot_info->initrd = paddr2kaddr((uintptr_t) boot_info->initrd);
     boot_info->kernel_pml4 = paddr2kaddr((uintptr_t) boot_info->kernel_pml4);
     boot_info->mem_map.regions = paddr2kaddr((uintptr_t) boot_info->mem_map.regions);
@@ -126,8 +143,7 @@ void kmain(BootInfo* restrict info) {
     arch_init(0);
     ebr_init();
 
-    #if 0
-    if (0) {
+    if (1) {
         char* stream = boot_info->map_file;
         char* end = stream + boot_info->map_file_size;
 
@@ -136,6 +152,13 @@ void kmain(BootInfo* restrict info) {
             stream++;
         }
 
+        // Count lines
+        int line_count = 0;
+        for (const char* curr = stream; *curr; curr++) {
+            line_count += *curr == '\n';
+        }
+
+        map_entries = kheap_alloc(line_count * sizeof(MapFileEntry));
         while (stream != end) {
             stream += 1;
 
@@ -147,6 +170,7 @@ void kmain(BootInfo* restrict info) {
             while (*stream && *stream != '\n') {
                 bool in_word = *stream != ' ' && *stream != '\n';
                 if (in_word && !prev_word) {
+                    kassert(cnt < 10, "Too many columns!");
                     row[cnt++] = stream;
                 }
 
@@ -157,17 +181,42 @@ void kmain(BootInfo* restrict info) {
             }
             stream[0] = 0;
 
-            printf("ROW %d ", cnt);
+            #if 0
+            kprintf("ROW %d ", cnt);
             FOR_N(i, 0, cnt) {
-                printf("'%s' ", row[i]);
+                kprintf("'%s' ", row[i]);
             }
-            printf("\n");
+            kprintf("\n");
+            #endif
+
+            // parse VMA
+            uint32_t vma = 0;
+            for (const char* str = row[0]; *str; str++) {
+                int ch = *str - '0';
+                if (*str >= 'A' && *str <= 'F') { ch = (*str - 'A') + 0xA; }
+                else if (*str >= 'a' && *str <= 'f') { ch = (*str - 'a') + 0xA; }
+
+                vma = vma*16 + ch;
+            }
+
+            // skip section
+            bool skip = false;
+            for (const char* str = row[4]; *str; str++) {
+                if (*str == '.') { skip = true; break; }
+            }
+
+            if (!skip) {
+                // kprintf("VMA %#x %s\n", vma, row[4]);
+
+                kassert(map_entry_count == 0 || map_entries[map_entry_count - 1].rva <= vma, "Not sorted?");
+                map_entries[map_entry_count++] = (MapFileEntry){ vma, row[4] };
+            }
+
             if (cnt == 0) {
                 break;
             }
         }
     }
-    #endif
 
     #if 0
     Env* env = env_create();

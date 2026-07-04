@@ -29,13 +29,6 @@ int memcmp(const void* a, const void* b, size_t n) {
 }
 
 bool memeq(const void* a, const void* b, size_t n) {
-    u8* aa = (u8*)a;
-    u8* bb = (u8*)b;
-
-    for (size_t i = 0; i < n; i++) {
-        if (aa[i] != bb[i]) return false;
-    }
-
-    return true;
+    return memcmp(a, b, n) == 0;
 }
 

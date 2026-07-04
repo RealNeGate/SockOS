@@ -135,7 +135,13 @@ static DriverEntry* get_driver(uint32_t key) {
     return NULL;
 }
 
-static void parse_driver_list(const char* src) {
+static bool parse_driver_list(FileEntry* file) {
+    char* src = mmap(0, 0, 0, file->unpacked_len, PROT_READ | PROT_WRITE, 0);
+    int res = LZ4_decompress_safe(file->data, src, file->data_len, file->unpacked_len);
+    if (file->unpacked_len != res) {
+        return false;
+    }
+
     int state = 0;
     while (*src) {
         // skip whitespace
@@ -171,6 +177,7 @@ static void parse_driver_list(const char* src) {
         printf("[init] register driver: %#x %.*s\n", key, (int) (src - name), name);
         put_driver((DriverEntry){ key, src - name, name });
     }
+    return true;
 }
 
 static bool string_match(const char* a, const char* b, size_t n) {
@@ -267,11 +274,15 @@ int _start(KHandle bootstrap_vmo) {
     FileEntry* initrd  = mmap(0, bootstrap_vmo, 0, initrd_size, PROT_READ | PROT_WRITE, 0);
 
     // Scan the drivers.txt, construct hashmap for driver mappings
-    printf("InitRD:\n", initrd->path);
+    printf("InitRD:\n");
+    fault_handler();
+
     for (FileEntry* file = initrd; file->path[0];) {
         printf("[init] found file '%s' (%zu bytes)\n", file->path, file->data_len);
+        fault_handler();
+
         if (strcmp(file->path, "/drivers.txt") == 0) {
-            parse_driver_list(file->data);
+            parse_driver_list(file);
         }
 
         // Advance files

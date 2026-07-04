@@ -14,8 +14,7 @@ typedef struct CPUState CPUState;
 
 typedef struct KObject_VMO KObject_VMO;
 typedef struct KObject KObject;
-
-typedef unsigned int KHandle;
+typedef uint64_t KObjectID;
 
 // Kernel Array Bounds Check
 #define kabc(i, arr) kassert(i < ELEM_COUNT(arr), "Out of bounds access of %s[%d]", #arr, i)
@@ -38,7 +37,20 @@ uint64_t arch_get_micros(void);
 
 PerCPU* cpu_get(void);
 size_t cpu_get_index(void);
-void sleep(u64 timeout);
+void thread_sleep(u64 timeout);
+
+////////////////////////////////
+// Map files
+////////////////////////////////
+typedef struct {
+    uint32_t rva;
+    const char* name;
+} MapFileEntry;
+
+extern size_t map_entry_count;
+extern MapFileEntry* map_entries;
+
+MapFileEntry* map_entry_get(uint32_t rva);
 
 ////////////////////////////////
 // Kernel heap
@@ -101,7 +113,8 @@ enum {
 typedef struct {
     uint64_t valid : 1;
     uint64_t flags : 7;
-    uint64_t vmo_handle : 32;
+
+    KObject_VMO* vmo;
 
     // range
     size_t offset, size;
@@ -129,8 +142,8 @@ typedef struct {
 // virtual addresses -> committed pages
 typedef NBHM VMem_WorkingSet;
 
-uintptr_t vmem_map(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_t size, VMem_Flags flags, uintptr_t* out_paddr);
-void vmem_add_range(Env* env, KHandle vmo, uintptr_t vaddr, size_t offset, size_t vsize, VMem_Flags flags);
+uintptr_t vmem_map(Env* env, KObject_VMO* vmo, uintptr_t vaddr, size_t offset, size_t size, VMem_Flags flags, uintptr_t* out_paddr);
+void vmem_add_range(Env* env, KObject_VMO* vmo, uintptr_t vaddr, size_t offset, size_t vsize, VMem_Flags flags);
 VMem_Cursor vmem_node_lookup(Env* env, uintptr_t key);
 
 // maps a kernel page to a virtual address.
@@ -156,16 +169,18 @@ typedef struct {
 } WaitQueue;
 
 typedef enum {
-    KACCESS_,
-} KAccessRights;
+    // generic rights
+    KACCESS_READ  = 1,
+    KACCESS_WRITE = 2,
 
-// these IDs are global and aren't shared with users
-typedef uint64_t KObjectID;
+    KACCESS_MASK = 0xFFFF,
+} KAccessRights;
 
 // these exist beyond environments (and can be shared across them), this is
 // the header for all of them.
 struct KObject {
     enum {
+        KOBJECT_UNKNOWN,
         // processes
         KOBJECT_ENV,
         KOBJECT_THREAD,
@@ -213,28 +228,6 @@ struct KObject_Event {
 
     atomic_u64 tail; // how many times we've signalled
     _Atomic(Thread*) waiting_thread;
-};
-
-// 10 cache lines worth of handles
-typedef struct {
-    // each bit (except MSB) represents whether or not one of the handles is alive.
-    // MSB represents the bitfield can no longer be written to because it has been
-    // moved.
-    _Atomic(u64) open;
-
-    // each ptr is tagged on the top 16bits
-    _Atomic(u64) objects[63];
-} KHandleEntry;
-
-typedef struct KHandleTable KHandleTable;
-struct KHandleTable {
-    _Atomic(KHandleTable*) prev;
-
-    // item migration work
-    _Atomic(size_t) claimed, done;
-
-    size_t capacity;
-    KHandleEntry entries[];
 };
 
 typedef struct PCI_Device PCI_Device;
@@ -313,17 +306,16 @@ struct Env {
         _Alignas(64) atomic_u32 checkpoint_done;
     } addr_space;
 
-    // Handle table
-    _Atomic(KHandleTable*) handles;
+    NBHM access_rights;
 };
 
 Env* env_create(void);
 void env_kill(Env* env);
 Thread* env_load_elf(Env* env, const u8* program, size_t program_size);
 
-void* env_get_handle(Env* env, KHandle handle, KAccessRights* rights);
-KHandle env_open_handle(Env* env, KAccessRights rights, KObject* obj);
-bool env_close_handle(Env* env, KHandle handle);
+void* env_get_handle(Env* env, KObjectID id, KAccessRights* rights);
+KObjectID env_grant_rights(Env* env, KAccessRights rights, KObject* obj);
+void env_ungrant_rights(Env* env, KObject* obj);
 
 ////////////////////////////////
 // Threads

@@ -40,6 +40,9 @@ enum {
 
     // Mailbox errors
     RESULT_PACKET_TOO_BIG = -7,
+
+    // permission errors
+    RESULT_BAD_PERMISSION = -8,
 };
 
 typedef enum {

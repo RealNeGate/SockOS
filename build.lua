@@ -172,14 +172,14 @@ do
         table.insert(objs, obj_out)
     end
 
-    build("objs/kernel.so", "ld", table.concat(objs, " ").." | src/kernel/link.ld", { flags="-T src/kernel/link.ld -nostdlib -pie" })
+    build("objs/kernel.so | objs/kernel.map", "ld", table.concat(objs, " ").." | src/kernel/link.ld", { flags="-T src/kernel/link.ld -Map=objs/kernel.map -nostdlib -pie" })
     table.insert(lines, "")
 end
 
 -- EFI Bootloader
 do
     table.insert(lines, "# EFI BOOTLOADER")
-    build("objs/efi.o", "cc", "src/boot/efi_main.c | objs/kernel.so objs/initrd", {
+    build("objs/efi.o", "cc", "src/boot/efi_main.c | objs/kernel.so objs/kernel.map objs/initrd", {
         flags = efi_cflags.." -c"
     })
     build("bin/efi/boot/bootx64.efi", "link", "objs/efi.o", {

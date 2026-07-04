@@ -780,8 +780,6 @@ int _start(KHandle pci_device) {
         // set ERSTBA
         interrupt[4] = erst_paddr & 0xFFFFFFFF;
         interrupt[5] = (erst_paddr >> 32ull);
-
-        printf("[usb] ERS! %p %p\n", ers0_paddr, erst_paddr);
     }
     //   5. Enable interrupts (TODO)
     //   6. Turn host controller on
@@ -814,7 +812,7 @@ int _start(KHandle pci_device) {
             uint32_t type = (trb[3] >> 10) & 0b111111;
 
             uintptr_t trb_phys = ers0_paddr + trb_i*sizeof(uint32_t);
-            ring_dump_cmd(trb_phys, trb);
+            ring_dump_cmd(trb_phys, (uint32_t*) trb);
 
             if (type == 0x21) { // Command completion
                 uintptr_t cmd_ptr = trb[0] | ((uintptr_t) trb[1] << 32ull);

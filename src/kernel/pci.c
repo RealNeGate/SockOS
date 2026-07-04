@@ -37,91 +37,14 @@ X(PCI_CLASS_UNASSIGNED,          0xFF,  "Unassigned")
 static const char *pci_class_names[] = {
     #define X(tag, id, name) [id] = name,
     PCI_CLASS
-        #undef X
+    #undef X
 };
+
 typedef enum {
     #define X(tag, id, name) tag = id,
     PCI_CLASS
-        #undef X
+    #undef X
 } PCI_Class;
-
-#define PCI_SUBCLASS_BR                                                 \
-X(PCI_SUBCLASS_BR_HOST,        0x0,  "Host Bridge")                     \
-X(PCI_SUBCLASS_BR_ISA,         0x1,  "ISA Bridge")                      \
-X(PCI_SUBCLASS_BR_EISA,        0x2,  "EISA Bridge")                     \
-X(PCI_SUBCLASS_BR_MCA,         0x3,  "MCA Bridge")                      \
-X(PCI_SUBCLASS_BR_PCI2PCI,     0x4,  "PCI-to-PCI Bridge")               \
-X(PCI_SUBCLASS_BR_PCMCIA,      0x5,  "PCMCIA Bridge")                   \
-X(PCI_SUBCLASS_BR_NUBUS,       0x6,  "NuBus Bridge")                    \
-X(PCI_SUBCLASS_BR_CARDBUS,     0x7,  "CardBus Bridge")                  \
-X(PCI_SUBCLASS_BR_RACEWAY,     0x8,  "RACEway Bridge")                  \
-X(PCI_SUBCLASS_BR_PCI2PCI2,    0x9,  "PCI-to-PCI Bridge")               \
-X(PCI_SUBCLASS_BR_INFINBAND2PCI, 0xA,  "Infiniband-to-PCI Host Bridge")
-
-static const char *pci_subclass_bridge_names[] = {
-    #define X(tag, id, name) [id] = name,
-    PCI_SUBCLASS_BR
-        #undef X
-};
-typedef enum {
-    #define X(tag, id, name) tag = id,
-    PCI_SUBCLASS_BR
-        #undef X
-} PCI_Subclass_Bridge;
-
-#define PCI_SUBCLASS_NET                                                       \
-X(PCI_SUBCLASS_NET_ETH,         0x0,  "Ethernet Controller")                   \
-X(PCI_SUBCLASS_NET_TOKEN_RING,  0x1,  "Token Ring Controller")                 \
-X(PCI_SUBCLASS_NET_FDDI,        0x2,  "FDDI Controller")                       \
-X(PCI_SUBCLASS_NET_ATM,         0x3,  "ATM Controller")                        \
-X(PCI_SUBCLASS_NET_ISDN,        0x4,  "ISDN Controller")                       \
-X(PCI_SUBCLASS_NET_WORLDFIP,    0x5,  "WorldFip Controller")                   \
-X(PCI_SUBCLASS_NET_PICMG,       0x6,  "PICMG 2.14 Multi Computing Controller") \
-X(PCI_SUBCLASS_NET_INFINIBAND,  0x7,  "Infiniband Controller")                 \
-X(PCI_SUBCLASS_NET_FABRIC,      0x8,  "Fabric Controller")
-
-static const char *pci_subclass_net_names[] = {
-    #define X(tag, id, name) [id] = name,
-    PCI_SUBCLASS_NET
-    #undef X
-};
-typedef enum {
-    #define X(tag, id, name) tag = id,
-    PCI_SUBCLASS_NET
-    #undef X
-} PCI_Subclass_Network;
-
-#define PCI_SUBCLASS_DISP                        \
-X(PCI_SUBCLASS_DISP_VGA, 0x0,  "VGA Controller") \
-X(PCI_SUBCLASS_DISP_XGA, 0x1,  "XGA Controller") \
-X(PCI_SUBCLASS_DISP_3D,  0x2,  "3D Controller")
-
-static const char *pci_subclass_display_names[] = {
-    #define X(tag, id, name) [id] = name,
-    PCI_SUBCLASS_DISP
-    #undef X
-};
-typedef enum {
-    #define X(tag, id, name) tag = id,
-    PCI_SUBCLASS_DISP
-    #undef X
-} PCI_Subclass_Display;
-
-#define PCI_SUBCLASS_STR                        \
-X(PCI_SUBCLASS_STR_SCSI,    0x0,  "SCSI Bus Controller") \
-X(PCI_SUBCLASS_STR_IDE,     0x1,  "IDE Controller") \
-X(PCI_SUBCLASS_STR_FLOPPY,  0x2,  "Floppy Disk Controller")
-
-static const char *pci_subclass_storage_names[] = {
-    #define X(tag, id, name) [id] = name,
-    PCI_SUBCLASS_STR
-    #undef X
-};
-typedef enum {
-    #define X(tag, id, name) tag = id,
-    PCI_SUBCLASS_STR
-    #undef X
-} PCI_Subclass_Storage;
 
 PCI_SegmentGroup* pci_segment_group;
 static u8* pcie_base;
@@ -161,43 +84,12 @@ void pci_print_device(PCI_Device *dev) {
     if (dev->subclass == 0x80) {
         subclass_tag = "Other";
     } else {
-        /*&switch (dev->class) {
-            case PCI_CLASS_BRIDGE: {
-                kabc(dev->subclass, pci_subclass_bridge_names);
-                subclass_tag = pci_subclass_bridge_names[dev->subclass];
-            } break;
-            case PCI_CLASS_NETWORK_CTL: {
-                kabc(dev->subclass, pci_subclass_net_names);
-                subclass_tag = (char *)pci_subclass_net_names[dev->subclass];
-            } break;
-            case PCI_CLASS_DISPLAY_CTL: {
-                kabc(dev->subclass, pci_subclass_display_names);
-                subclass_tag = (char *)pci_subclass_display_names[dev->subclass];
-            } break;
-            case PCI_CLASS_STORAGE_CTL: {
-                kabc(dev->subclass, pci_subclass_storage_names);
-                subclass_tag = (char *)pci_subclass_storage_names[dev->subclass];
-            } break;
-            default: {
-                subclass_tag = "Unknown";
-            } break;
-        }*/
         switch (dev->class) {
-            case PCI_CLASS_BRIDGE: {
-                subclass_tag = "Bridge";
-            } break;
-            case PCI_CLASS_NETWORK_CTL: {
-                subclass_tag = "Network";
-            } break;
-            case PCI_CLASS_DISPLAY_CTL: {
-                subclass_tag = "Display";
-            } break;
-            case PCI_CLASS_STORAGE_CTL: {
-                subclass_tag = "Storage";
-            } break;
-            default: {
-                subclass_tag = "Unknown";
-            } break;
+            case PCI_CLASS_BRIDGE:      subclass_tag = "Bridge"; break;
+            case PCI_CLASS_NETWORK_CTL: subclass_tag = "Network"; break;
+            case PCI_CLASS_DISPLAY_CTL: subclass_tag = "Display"; break;
+            case PCI_CLASS_STORAGE_CTL: subclass_tag = "Storage"; break;
+            default:                    subclass_tag = "Unknown"; break;
         }
     }
 
@@ -417,14 +309,19 @@ void pci_init(void) {
         // 32 devices, 8 functions means each bus entry is 1MiB
         size_t bus_count = (pci_segment_group->end_bus - pci_segment_group->start_bus) + 1;
         size_t map_size = bus_count * 1048576;
-        pcie_base = memmap_view(boot_info->kernel_pml4, pci_segment_group->address, (u64) paddr2kaddr(pci_segment_group->address), map_size, VMEM_PAGE_WRITE | VMEM_PAGE_KERNEL);
+        pcie_base = memmap_view(
+            boot_info->kernel_pml4, pci_segment_group->address,
+            (u64) paddr2kaddr(pci_segment_group->address), map_size,
+            VMEM_PAGE_WRITE | VMEM_PAGE_KERNEL
+        );
 
-        kprintf("PCIe Base mapped to %p\n", pcie_base);
+        ON_DEBUG(PCI)(kprintf("PCIe Base mapped to %p\n", pcie_base));
 
         // allocate kernel objects for each of the PCI devices
         FOR_N(bus, 0, bus_count) FOR_N(device, 0, 32) FOR_N(func, 0, 8) {
             if (pci_check_device(dev, bus, device, func)) {
                 ON_DEBUG(PCI)(pci_print_device(dev));
+                STORE_PUT(dev);
 
                 pci_devs[pci_dev_count++] = dev;
                 if (pci_dev_count >= PCI_MAX_DEVICES) {
@@ -442,6 +339,7 @@ void pci_init(void) {
         FOR_N(bus, 0, 256) FOR_N(device, 0, 32) FOR_N(func, 0, 8) {
             if (pci_check_device(dev, bus, device, func)) {
                 ON_DEBUG(PCI)(pci_print_device(dev));
+                STORE_PUT(dev);
 
                 pci_devs[pci_dev_count++] = dev;
                 if (pci_dev_count >= PCI_MAX_DEVICES) {

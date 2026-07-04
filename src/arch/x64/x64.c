@@ -75,14 +75,12 @@ void arch_init(int id) {
         kheap_multicore(boot_info->core_count);
         store_alloc();
         pci_init();
-        sched_init();
 
         kernel_idle_state = new_thread_state(kernel_idle, 0, 0, 0, false);
 
         x86_irq_startup(id);
         x86_boot_cores();
     } else {
-        sched_init();
         x86_irq_startup(id);
     }
 
@@ -127,14 +125,18 @@ void arch_backtrace(void) {
     kprintf("CPU-%d: BACKTRACE:\n", cpu_get_index());
     StackFrame_x64* frame = __builtin_frame_address(0);
     while (frame) {
-        kprintf("  %p\n", frame->rip);
+        uintptr_t rip = (uintptr_t) frame->rip;
+        if (rip >= boot_info->elf_virtual_ptr) {
+            uint32_t rva = rip - boot_info->elf_virtual_ptr;
+            MapFileEntry* entry = map_entry_get(rva);
+
+            kprintf("  %p %s+%d\n", frame->rip, entry->name, rva - entry->rva);
+        } else {
+            kprintf("  %p\n", frame->rip);
+        }
         frame = frame->rbp;
     }
 }
-
-/* void _putchar(char ch) {
-    io_out8(0x3f8, ch);
-} */
 
 void arch_set_address_space(Env* env) {
     uintptr_t new_cr3 = kaddr2paddr(env->addr_space.hw_tables);

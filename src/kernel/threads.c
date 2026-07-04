@@ -12,10 +12,7 @@ Env* env_create(void) {
     Env* env = kheap_zalloc(sizeof(Env));
     env->super.tag = KOBJECT_ENV;
     env->addr_space.working_set = nbhm_alloc(100);
-
-    env->handles = kheap_zalloc(sizeof(KHandleTable) + sizeof(KHandleEntry));
-    env->handles->capacity = 1;
-    env->handles->entries[0].open = 1;
+    env->access_rights = nbhm_alloc(500);
 
     #ifdef __x86_64__
     // copy over the kernel's higher half pages bar for bar.

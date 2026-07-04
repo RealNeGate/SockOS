@@ -33,8 +33,6 @@ X(mailbox_create)
 X(mailbox_send)
 X(mailbox_wait)
 X(mailbox_reply)
-// Special case
-X(fb_grab)
-// x86 stuff
+// x86 stuff (TODO move to VDSO)
 X(tsc_freq)
 #undef X

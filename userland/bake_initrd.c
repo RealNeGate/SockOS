@@ -83,7 +83,7 @@ int main(int argc, char** argv) {
 
         fwrite(&header, sizeof(FileEntry), 1, out_fp);
         fwrite(data, packed_len, 1, out_fp);
-        fwrite(data, cap - len, 1, out_fp);
+        fwrite(data, cap - packed_len, 1, out_fp);
         free(data);
 
         file_len += sizeof(FileEntry) + cap;

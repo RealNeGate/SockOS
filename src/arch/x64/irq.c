@@ -321,28 +321,27 @@ uintptr_t timer_interrupt(CPUState* state, uintptr_t cr3, PerCPU* cpu, u64 now) 
     return kaddr2paddr(next_pml4);
 }
 
-static void dump_page_fault(CPUState* state, uintptr_t cr3, PerCPU* cpu, Env* env, u64 access_addr) {
+static void dump_page_fault(CPUState* state, uintptr_t cr3, PerCPU* cpu, Env* env, Thread* curr, u64 access_addr) {
     PageTable* old_address_space = paddr2kaddr(cr3);
 
     // just throw error
-    kprintf("CPU-%d: Page Fault: error=%#x, env=%p\n", cpu - boot_info->cores, state->error, env);
-    kprintf("  cr3=%p\n",   cr3);
-    kprintf("  flags=%x\n", state->flags);
+    kprintf("CPU-%d: Page fault (%d): cr3=%p, error=0x%x\n", cpu - boot_info->cores, state->interrupt_num, cr3, state->error);
+    kprintf("  env    = OBJ-%lu, thread = OBJ-%lu\n", env->super.id, curr->super.id);
+    kprintf("  flags  = %x\n", state->flags);
 
     // print memory access address
     u64 translated;
     if (memmap_translate(old_address_space, access_addr, &translated)) {
-        kprintf("  access: %d:%p (translated: %p)\n", state->ss, access_addr, translated);
+        kprintf("  access = %#x:%p (translated: %p)\n", state->ss, access_addr, translated);
     } else {
-        kprintf("  access: %d:%p (NOT PRESENT)\n", state->ss, access_addr);
+        kprintf("  access = %#x:%p (NOT PRESENT)\n", state->ss, access_addr);
     }
 
     // dissassemble code
     if (memmap_translate(old_address_space, state->rip, &translated)) {
-        kprintf("  code:   %d:%p (translated: %p, %#x)\n\n", state->cs, state->rip, translated, *(u8*) paddr2kaddr(translated));
-        // x86_print_disasm((uint8_t*) translated, 16);
+        kprintf("  code   = %#x:%p (translated: %p, %#x)\n\n", state->cs, state->rip, translated, *(u8*) paddr2kaddr(translated));
     } else {
-        kprintf("  code:   %d:%p (NOT PRESENT)\n", state->cs, state->rip);
+        kprintf("  code   = %#x:%p (NOT PRESENT)\n", state->cs, state->rip);
     }
 }
 
@@ -397,8 +396,7 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
                 bool is_write = state->error & 2;
                 bool success = vmem_segfault(env, access_addr, is_write);
                 if (!success) {
-                    kprintf("CPU-%d: %s (%d): cr3=%p error=0x%x, thread=%s\n", id, interrupt_names[state->interrupt_num], state->interrupt_num, cr3, state->error, curr->tag);
-                    dump_page_fault(state, cr3, cpu, env, access_addr);
+                    dump_page_fault(state, cr3, cpu, env, curr, access_addr);
 
                     kassert(curr->client.wake_time == 0, "just in case");
                     curr->client.is_dead = true;

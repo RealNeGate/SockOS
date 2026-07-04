@@ -40,6 +40,7 @@ size_t syscall_table_count = SYS_MAX;
 #define SYS_PARAM5 GET_PARAM5(state)
 
 #define KCHECK(pred, code) if ((pred) == 0) { return code; }
+#define KVALIDATE(pred) if (res = (pred), res < 0) { return res; }
 
 // copies from userland (and only userland), returns false if it can't
 static bool ingest_usermem(void* dst, uintptr_t src, size_t size) {
@@ -74,24 +75,19 @@ static uintptr_t translate_vaddr(Env* env, uintptr_t vaddr) {
 
     VMem_WorkingSet* ws = &env->addr_space.working_set;
     uintptr_t in_space_addr = page_aligned;
-    if (desc->vmo_handle != 0) {
+    if (desc->vmo != 0) {
         // Translate address into VMO space
         size_t offset = page_aligned - start_addr;
         in_space_addr = desc->offset + offset;
 
-        KObject_VMO* vmo_ptr = env_get_handle(env, desc->vmo_handle, NULL);
-        if (vmo_ptr == NULL) {
-            return 0;
-        }
-
-        if (vmo_ptr->paddr) {
+        if (desc->vmo->paddr) {
             // physical addresses don't get cached in the working set, we're
             // better off just not putting entries into a hash map.
-            return vmo_ptr->paddr + in_space_addr + page_offset;
+            return desc->vmo->paddr + in_space_addr + page_offset;
         }
 
         // TODO(NeGate): implement pager behavior
-        ws = &vmo_ptr->pages;
+        ws = &desc->vmo->pages;
     }
 
     uintptr_t paddr = vmem_translate(ws, in_space_addr);
@@ -119,7 +115,6 @@ static bool copy_across_spaces(Env* dst, uintptr_t dst_vaddr, const char* src_va
 
 static _Noreturn void yield_syscall(PerCPU* cpu, uintptr_t cr3, CPUState* state, WaitQueue* wq) {
     const uint8_t* code = (const uint8_t*) state->rip;
-    printf("YIELD SYSCALL!!!\n");
 
     #ifdef __x86_64__
     kassert(code[-2] == 0x0F && code[-1] == 0x05, "not a syscall? huh?");
@@ -135,6 +130,19 @@ static _Noreturn void yield_syscall(PerCPU* cpu, uintptr_t cr3, CPUState* state,
     uintptr_t new_cr3 = x86_irq_int_handler(state, cr3, cpu);
     do_context_switch(state, new_cr3);
 }
+
+static int get_obj_with_rights(Env* env, KObjectID id, int tag, KAccessRights exp, KObject** out_obj) {
+    exp |= KACCESS_READ;
+
+    KAccessRights rights;
+    KObject* obj = env_get_handle(env, id, &rights);
+    KCHECK(obj, RESULT_NO_HANDLE);
+    KCHECK(obj->tag == tag, RESULT_WRONG_HANDLE);
+    KCHECK((rights & exp) == exp, RESULT_BAD_PERMISSION);
+    *out_obj = obj;
+    return 0;
+}
+#define GET_OBJ_WITH_RIGHTS(env, id, tag, exp, out_obj) get_obj_with_rights(env, id, tag, exp, (KObject**) out_obj)
 
 ////////////////////////////////
 // Syscall table
@@ -192,21 +200,21 @@ SYS_FN(env_create) {
     ON_DEBUG(SYSCALL)(kprintf("SYS_env_create()\n"));
     Env* parent = cpu->current_thread->parent;
     Env* env    = env_create();
-    return env_open_handle(parent, 0, &env->super);
+    return env_grant_rights(parent, KACCESS_WRITE, &env->super);
 }
 
 extern KObject_Mailbox* kernel_root_mailbox;
 SYS_FN(get_root_mailbox) {
     ON_DEBUG(SYSCALL)(kprintf("SYS_get_root_mailbox()\n"));
     Env* parent = cpu->current_thread->parent;
-    return env_open_handle(parent, 0, &kernel_root_mailbox->super);
+    return env_grant_rights(parent, KACCESS_WRITE, &kernel_root_mailbox->super);
 }
 
 SYS_FN(vmo_create) {
     ON_DEBUG(SYSCALL)(kprintf("SYS_vmo_create(paddr=%p, size=%d)\n", SYS_PARAM0, SYS_PARAM1));
     Env* env = cpu->current_thread->parent;
     KObject_VMO* vmo_ptr = vmo_create_physical(SYS_PARAM0, SYS_PARAM1, VMEM_PAGE_WRITE);
-    return env_open_handle(env, 0, &vmo_ptr->super);
+    return env_grant_rights(env, KACCESS_WRITE, &vmo_ptr->super);
 }
 
 SYS_FN(vmo_get_size) {
@@ -216,7 +224,6 @@ SYS_FN(vmo_get_size) {
     KObject_VMO* vmo = env_get_handle(env, SYS_PARAM0, NULL);
     KCHECK(vmo, RESULT_NO_HANDLE);
     KCHECK(vmo->super.tag == KOBJECT_VMO, RESULT_WRONG_HANDLE);
-
     return vmo->size;
 }
 
@@ -234,26 +241,25 @@ SYS_FN(mmap) {
     KCHECK(page_aligned_size, 0);
 
     Env* env = cpu->current_thread->parent;
+
+    int res;
+    Env* map_env = env;
     if (SYS_PARAM0) {
-        env = env_get_handle(env, SYS_PARAM0, NULL);
-        KCHECK(env, RESULT_NO_HANDLE);
-        KCHECK(env->super.tag == KOBJECT_ENV, RESULT_WRONG_HANDLE);
+        KVALIDATE(GET_OBJ_WITH_RIGHTS(env, SYS_PARAM0, KOBJECT_ENV, KACCESS_WRITE, &map_env));
     }
 
-    KHandle vmo_handle = SYS_PARAM1;
+    KObject_VMO* vmo = NULL;
     if (SYS_PARAM1) {
-        KObject_VMO* vmo = env_get_handle(cpu->current_thread->parent, SYS_PARAM1, NULL);
-        KCHECK(vmo, RESULT_NO_HANDLE);
-        KCHECK(vmo->super.tag == KOBJECT_VMO, RESULT_WRONG_HANDLE);
-
+        // TODO(NeGate): validate permissions correctly when mapping VMOs
+        KVALIDATE(GET_OBJ_WITH_RIGHTS(env, SYS_PARAM1, KOBJECT_VMO, 0, &vmo));
         flags |= vmo->flags;
 
-        if (env != cpu->current_thread->parent) {
-            vmo_handle = env_open_handle(env, 0, &vmo->super);
+        if (map_env != env) {
+            env_grant_rights(map_env, 0, &vmo->super);
         }
     }
 
-    return vmem_map(env, vmo_handle, SYS_PARAM2, offset, page_aligned_size, flags, NULL);
+    return vmem_map(map_env, vmo, SYS_PARAM2, offset, page_aligned_size, flags, NULL);
 }
 
 SYS_FN(mdump) {
@@ -285,14 +291,15 @@ SYS_FN(mpin) {
     KCHECK(page_aligned_size, 0);
 
     Env* env = cpu->current_thread->parent;
+    KObject_VMO* vmo = NULL;
     if (SYS_PARAM0) {
-        KObject_VMO* vmo = env_get_handle(env, SYS_PARAM0, NULL);
+        vmo = env_get_handle(env, SYS_PARAM0, NULL);
         KCHECK(vmo, RESULT_NO_HANDLE);
         KCHECK(vmo->super.tag == KOBJECT_VMO, RESULT_WRONG_HANDLE);
     }
 
     uintptr_t paddr;
-    uintptr_t mapped = vmem_map(env, SYS_PARAM0, 0, SYS_PARAM1, page_aligned_size, VMEM_PAGE_WRITE | VMEM_PAGE_PINNED, &paddr);
+    uintptr_t mapped = vmem_map(env, vmo, 0, SYS_PARAM1, page_aligned_size, VMEM_PAGE_WRITE | VMEM_PAGE_PINNED, &paddr);
 
     egest_usermem(SYS_PARAM3, &paddr, sizeof(uintptr_t));
     return mapped;
@@ -319,11 +326,12 @@ SYS_FN(munmap) {
 SYS_FN(thread_create) {
     ON_DEBUG(SYSCALL)(kprintf("SYS_thread_create(env=%p, fn=%p, arg=%p, stack_size=%d, flags=%d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2, SYS_PARAM3, SYS_PARAM4));
 
+    int res;
     Env* env = cpu->current_thread->parent;
+
+    Env* t_env = env;
     if (SYS_PARAM0) {
-        env = env_get_handle(env, SYS_PARAM0, NULL);
-        KCHECK(env, RESULT_NO_HANDLE);
-        KCHECK(env->super.tag == KOBJECT_ENV, RESULT_WRONG_HANDLE);
+        KVALIDATE(GET_OBJ_WITH_RIGHTS(env, SYS_PARAM0, KOBJECT_ENV, KACCESS_WRITE, &t_env));
     }
 
     ThreadEntryFn* fn = (ThreadEntryFn*) SYS_PARAM1;
@@ -331,22 +339,23 @@ SYS_FN(thread_create) {
     size_t stack_size = SYS_PARAM3;
 
     if (SYS_PARAM4 & 1) {
-        KObject* obj = env_get_handle(cpu->current_thread->parent, arg, NULL);
-        KCHECK(obj, RESULT_NO_HANDLE);
+        KAccessRights rights;
+        KObject* obj = env_get_handle(env, arg, &rights);
+        KCHECK(obj, RESULT_BAD_PERMISSION);
 
         // import argument as handle
-        arg = env_open_handle(env, 0, obj);
+        env_grant_rights(t_env, KACCESS_WRITE, obj);
     }
 
-    uintptr_t stack_ptr = vmem_map(env, 0, 0, 0, stack_size, VMEM_PAGE_WRITE, NULL);
+    uintptr_t stack_ptr = vmem_map(t_env, 0, 0, 0, stack_size, VMEM_PAGE_WRITE, NULL);
     KCHECK(stack_ptr, RESULT_NO_MEM);
 
-    Thread* thread = thread_create(env, fn, arg, stack_ptr, stack_size);
+    Thread* thread = thread_create(t_env, fn, arg, stack_ptr, stack_size);
     KCHECK(thread, RESULT_NO_MEM);
 
     // make an accessible handle for the thread
     thread_resume(thread, NULL);
-    return env_open_handle(cpu->current_thread->parent, 0, &thread->super);
+    return env_grant_rights(env, KACCESS_WRITE, &thread->super);
 }
 
 SYS_FN(thread_setattr) {
@@ -377,7 +386,7 @@ SYS_FN(event_create) {
     ON_DEBUG(SYSCALL)(kprintf("SYS_event_create()\n"));
     Env* parent = cpu->current_thread->parent;
     KObject_Event* event = event_create();
-    return env_open_handle(parent, 0, &event->super);
+    return env_grant_rights(parent, 0, &event->super);
 }
 
 SYS_FN(event_wait) {
@@ -446,7 +455,7 @@ SYS_FN(pci_claim_device) {
         u32 key = (dev->vendor_id << 16ull) | dev->device_id;
 
         egest_usermem(SYS_PARAM1, &key, sizeof(u32));
-        return env_open_handle(env, 0, &dev->super);
+        return env_grant_rights(env, KACCESS_WRITE, &dev->super);
     }
 
     return 0;
@@ -493,21 +502,7 @@ SYS_FN(pci_get_bar) {
     bool prefetch = (bar->value >> 3) & 1;
 
     KObject_VMO* vmo_ptr = vmo_create_physical(addr, size, prefetch ? VMEM_PAGE_WRITETHRU : VMEM_PAGE_UNCACHED);
-    return env_open_handle(env, 0, &vmo_ptr->super);
-}
-
-SYS_FN(fb_grab) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_fb_grab(%p)\n", SYS_PARAM0));
-
-    Env* env = cpu->current_thread->parent;
-    uint64_t* info = (uint64_t*) SYS_PARAM0;
-    info[0] = boot_info->fb.width;
-    info[1] = boot_info->fb.height;
-    info[2] = boot_info->fb.stride;
-    info[3] = boot_info->fb.stride * 4 * boot_info->fb.height;
-
-    KObject_VMO* vmo_ptr = vmo_create_physical(kaddr2paddr(boot_info->fb.pixels), info[3], VMEM_PAGE_WRITETHRU);
-    return env_open_handle(env, 0, &vmo_ptr->super);
+    return env_grant_rights(env, 0, &vmo_ptr->super);
 }
 
 SYS_FN(pci_read_config_32) {
@@ -541,7 +536,7 @@ SYS_FN(mailbox_create) {
     if (mailbox == NULL) {
         return 0;
     }
-    return env_open_handle(env, 0, &mailbox->super);
+    return env_grant_rights(env, 0, &mailbox->super);
 }
 
 static KHandle ingest_user_handle(uintptr_t ptr) {
@@ -565,16 +560,16 @@ void transfer_time(PerCPU* cpu, Thread* curr, Thread* next, CPUState* state) {
 
     // replace curr thread in scheduler state
     cpu->current_thread = next;
-    kprintf("XFER C%d -> C%d\n", curr->client.id, next->client.id);
+    // kprintf("XFER C%d -> C%d\n", curr->client.id, next->client.id);
 }
 
 static int mailbox_xfer(CPUState* state, PerCPU* cpu, Thread* curr, Thread* next, KObject_Mailbox* mailbox) {
     // the sender thread is now blocked
     transfer_time(cpu, curr, next, state);
 
-    uint64_t send_info  = SYS_PARAM1;
-    uint64_t send_msg   = SYS_PARAM4;
-    KHandle send_handle = SYS_PARAM5;
+    uint64_t  send_info   = SYS_PARAM1;
+    uint64_t  send_msg    = SYS_PARAM4;
+    KObjectID send_handle = SYS_PARAM5;
 
     uint64_t recv_info  = GET_PARAM1(&next->state);
     uintptr_t recv_msg  = GET_PARAM4(&next->state);
@@ -596,9 +591,7 @@ static int mailbox_xfer(CPUState* state, PerCPU* cpu, Thread* curr, Thread* next
     if (send_handle) {
         KObject* obj = env_get_handle(curr->parent, send_handle, NULL);
         KCHECK(obj, RESULT_NO_HANDLE);
-
-        KHandle recv_handle = env_open_handle(next->parent, 0, obj);
-        GET_PARAM5(&next->state) = recv_handle;
+        env_grant_rights(next->parent, 0, obj);
     }
 
     // copy message across address space

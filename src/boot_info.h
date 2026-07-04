@@ -120,6 +120,9 @@ typedef struct {
 
     Framebuffer fb;
 
+    size_t map_file_size;
+    char* map_file;
+
     size_t initrd_size;
     uint8_t* initrd;
 
