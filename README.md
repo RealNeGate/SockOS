@@ -1,4 +1,4 @@
-# SockOS
+# Beans (Formerly SockOS)
 ============
 
 *Lunk was a 0-dependency EFI bootloader and kernel*
@@ -8,4 +8,4 @@ it's now a WIP OS thingy
 
 Build:
 
-  python3 build.py
+  lua build.lua

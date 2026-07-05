@@ -1,1 +1,0 @@
-\EFI\BOOT\boot.efi

@@ -1,0 +1,146 @@
+#pragma once
+
+#include <common.h>
+#include "scheduler.h"
+
+// Physical address
+typedef struct { uintptr_t raw; } PAddr;
+
+typedef struct {
+    u32  width, height;
+    u32  stride; // in pixels
+    u32* pixels;
+} Framebuffer;
+
+enum {
+    PAGE_SIZE = 4096,
+
+    KERNEL_STACK_SIZE   = 32768,
+    KERNEL_STACK_COOKIE = 0xABCDABCD,
+
+    MAX_CORES = 256,
+};
+
+typedef struct {
+    _Atomic(u64) entries[512];
+} PageTable;
+
+typedef enum {
+    MEM_REGION_USABLE,
+    MEM_REGION_RESERVED,
+    MEM_REGION_BOOT,
+    MEM_REGION_KSTACK,
+    MEM_REGION_KERNEL,
+    MEM_REGION_FRAMEBUFFER,
+    MEM_REGION_UEFI_BOOT,
+    MEM_REGION_UEFI_RUNTIME,
+    MEM_REGION_ACPI,
+    MEM_REGION_ACPI_NVS,
+    MEM_REGION_IO,
+    MEM_REGION_IO_PORTS,
+} MemRegionType;
+
+typedef struct {
+    u64 type;
+    u64 base;
+    u64 pages;
+} MemRegion;
+
+typedef struct {
+    size_t nregions;
+    size_t cap;
+    MemRegion* regions;
+} MemMap;
+
+typedef struct Heap Heap;
+typedef struct StoreLog StoreLog;
+
+typedef struct PerCPU PerCPU;
+struct PerCPU {
+    PerCPU* self;
+
+    // used for syscalls & interrupts
+    void* kernel_stack_top;
+    void* user_stack_scratch;
+    void* irq_stack_top;
+
+    u32 physical_id, lapic_id;
+
+    // Scheduler info
+    Server sched;
+
+    _Alignas(64) _Atomic bool idleing;
+    _Alignas(64) _Atomic(struct Thread*) current_thread;
+    _Alignas(64) _Atomic(struct Thread*) blocked_threads;
+
+    // NBHM crap
+    _Alignas(64) _Atomic uint64_t ebr_time;
+    _Alignas(64) _Atomic uint64_t ebr_checkpoint;
+
+    // Logging
+    struct LogBuffer* log_buffer;
+
+    #ifdef __x86_64__
+    u64 gdt[7];
+
+    // 2 byte limit, 8 byte base
+    u16 gdt_pointer[5];
+
+    // This is initialized by the kernel but put into
+    // place by the boot EFI
+    u32 tss[26];
+    #endif
+
+    // Message passing internals
+    char message_buffer[64];
+};
+
+// This is all the crap we throw into the loader
+typedef struct {
+    PageTable* kernel_pml4;
+    uintptr_t elf_virtual_entry;
+    // identity map starts somewhere after the
+    // ELF's loaded position (aligned to 1GiB).
+    uintptr_t identity_map_ptr;
+
+    u64 lapic_base;
+    u64 ioapic_base;
+    u64 tsc_freq;
+    u64 apic_tick_in_tsc;
+
+    i32 core_count;
+    PerCPU cores[MAX_CORES];
+
+    u64 rsdp_addr;
+    MemMap mem_map;
+
+    uintptr_t elf_virtual_ptr;
+    uintptr_t elf_physical_ptr;
+    size_t elf_mapped_size;
+
+    Framebuffer fb;
+
+    size_t map_file_size;
+    char* map_file;
+
+    size_t initrd_size;
+    uint8_t* initrd;
+
+    _Alignas(64) _Atomic(u64) average_exec_time;
+} BootInfo;
+
+// loader.s & irq.s needs these to be here
+_Static_assert(offsetof(BootInfo, kernel_pml4) == 0, "the loader is sad");
+_Static_assert(offsetof(BootInfo, elf_virtual_entry) == 8, "the loader is sad");
+_Static_assert(offsetof(BootInfo, identity_map_ptr) == 16, "the loader.s & irq.s are sad");
+
+_Static_assert(offsetof(PerCPU, kernel_stack_top)   == 8,  "the irq.s & bootstrap.s is sad");
+_Static_assert(offsetof(PerCPU, user_stack_scratch) == 16, "the irq.s is sad");
+_Static_assert(offsetof(PerCPU, irq_stack_top)      == 24, "the loader.s is sad");
+
+extern BootInfo* boot_info;
+
+// our identity map is somewhere in the higher half
+static void* paddr2kaddr(uintptr_t p) { return (void*) (boot_info->identity_map_ptr + p); }
+static uintptr_t kaddr2paddr(void* p) { return (uintptr_t) p - boot_info->identity_map_ptr; }
+

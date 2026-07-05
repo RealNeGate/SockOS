@@ -1,0 +1,22 @@
+#####################################
+# USB Host controllers
+#####################################
+1B36:000D /xhci.so
+8086:A36D /xhci.so
+
+#####################################
+# Graphics Processing units
+#####################################
+# Bochs VBE
+1234:1111 /bochs.so
+# Intel iGPUs
+# 8086:3E92 /intel_gpu.so
+
+#####################################
+# Ethernet Controllers
+#####################################
+# 82540EM Gigabit Ethernet Controller
+8086:100E /e1000.so
+# RTL8111/8168/8411 PCI Express Gigabit Ethernet Controller
+# 10EC:8168 /rtl8xxx.so
+

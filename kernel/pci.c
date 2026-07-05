@@ -1,0 +1,362 @@
+#include <kernel.h>
+#include "pci.h"
+
+#define PCI_BASE_ADDR 0x80000000
+#define PCI_VALUE_PORT 0xCFC
+#define PCI_ADDR_PORT  0xCF8
+#define PCI_NONE 0xFFFF
+
+#define PCI_VENDOR_INTEL    0x8086
+
+#define PCI_BRIDGE_PCI2PCI  0x04
+
+#define PCI_CLASS                                                          \
+X(PCI_CLASS_UNCLASSIFIED,        0x0,  "Unclassified")                     \
+X(PCI_CLASS_STORAGE_CTL,         0x1,  "Storage Controller")               \
+X(PCI_CLASS_NETWORK_CTL,         0x2,  "Network Controller")               \
+X(PCI_CLASS_DISPLAY_CTL,         0x3,  "Display Controller")               \
+X(PCI_CLASS_MULTIMEDIA_CTL,      0x4,  "Multimedia Controller")            \
+X(PCI_CLASS_MEMORY_CTL,          0x5,  "Memory Controller")                \
+X(PCI_CLASS_BRIDGE,              0x6,  "Bridge")                           \
+X(PCI_CLASS_COMMUNICATION_CTL,   0x7,  "Simple Communication Controller")  \
+X(PCI_CLASS_SYS_PERIPHERAL,      0x8,  "Base System Peripheral")           \
+X(PCI_CLASS_INPUT_CTL,           0x9,  "Input Device Controller")          \
+X(PCI_CLASS_DOCKING_STATION,     0xA,  "Docking Station")                  \
+X(PCI_CLASS_PROCESSOR,           0xB,  "Processor")                        \
+X(PCI_CLASS_SERIAL_BUS_CTL,      0xC,  "Serial Bus Controller")            \
+X(PCI_CLASS_WIRELESS_CTL,        0xD,  "Wireless Controller")              \
+X(PCI_CLASS_INTELLIGENT_CTL,     0xE,  "Intelligent Controller")           \
+X(PCI_CLASS_SATELLITE_COMM_CTL,  0xF,  "Satellite Communication Controller") \
+X(PCI_CLASS_ENCRYPT_CTL,         0x10,  "Encryption Controller")            \
+X(PCI_CLASS_SIGNAL_PROC_CTL,     0x11,  "Signal Processing Controller")     \
+X(PCI_CLASS_PROCESSING_ACCEL,    0x12,  "Processing Accelerator")           \
+X(PCI_CLASS_NON_ESSENTIAL_INST,  0x13,  "Non-Essential Instrumentation")    \
+X(PCI_CLASS_COPROCESSOR,         0x40,  "Co-Processor")                     \
+X(PCI_CLASS_UNASSIGNED,          0xFF,  "Unassigned")
+
+static const char *pci_class_names[] = {
+    #define X(tag, id, name) [id] = name,
+    PCI_CLASS
+    #undef X
+};
+
+typedef enum {
+    #define X(tag, id, name) tag = id,
+    PCI_CLASS
+    #undef X
+} PCI_Class;
+
+PCI_SegmentGroup* pci_segment_group;
+static u8* pcie_base;
+
+u8* pcie_address(u32 bus, u32 device, u32 func, u32 offs) {
+    kassert(bus >= pci_segment_group->start_bus && bus <= pci_segment_group->end_bus, "Bus out of bounds (%d <= %d <= %d)", bus, pci_segment_group->start_bus, pci_segment_group->end_bus);
+    uint32_t offset = (bus*0x100000UL) | (device*0x8000) | (func*0x1000) | offs;
+    return &pcie_base[offset];
+}
+
+u32 pci_read_u32(u32 bus, u32 device, u32 func, u32 offs) {
+    if (pcie_base) {
+        u32* addr = (u32*) pcie_address(bus, device, func, offs);
+        return *addr;
+    } else {
+        u32 address = PCI_BASE_ADDR | (bus << 16) | (device << 11) | (func << 8) | (offs & 0xFC);
+        io_out32(PCI_ADDR_PORT, address);
+        return io_in32(PCI_VALUE_PORT);
+    }
+}
+
+void pci_write_u32(u32 bus, u32 device, u32 func, u32 offs, u32 value) {
+    if (pcie_base) {
+        u32* addr = (u32*) pcie_address(bus, device, func, offs);
+        *addr = value;
+    } else {
+        u32 address = PCI_BASE_ADDR | (bus << 16) | (device << 11) | (func << 8) | (offs & 0xFC);
+        io_out32(PCI_ADDR_PORT, address);
+        io_out32(PCI_VALUE_PORT, value);
+    }
+}
+
+char *pin_names[] = { "NONE", "A", "B", "C" "D" };
+
+void pci_print_device(PCI_Device *dev) {
+    const char *subclass_tag;
+    if (dev->subclass == 0x80) {
+        subclass_tag = "Other";
+    } else {
+        switch (dev->class) {
+            case PCI_CLASS_BRIDGE:      subclass_tag = "Bridge"; break;
+            case PCI_CLASS_NETWORK_CTL: subclass_tag = "Network"; break;
+            case PCI_CLASS_DISPLAY_CTL: subclass_tag = "Display"; break;
+            case PCI_CLASS_STORAGE_CTL: subclass_tag = "Storage"; break;
+            default:                    subclass_tag = "Unknown"; break;
+        }
+    }
+
+    kprintf("[pci] Found %x:%x, class: (%d) %s, subclass: (%d) %s, prog if: %d revision: %d\n",
+        dev->vendor_id,
+        dev->device_id,
+        dev->class,
+        pci_class_names[dev->class],
+        dev->subclass,
+        subclass_tag,
+        dev->prog_IF,
+        dev->revision
+    );
+    for (int i = 0; i < dev->bar_count; i++) {
+        if (dev->bar[i].value == 0) {
+            continue;
+        }
+
+        size_t size = ~(dev->bar[i].size) + 1;
+        if (dev->bar[i].value & 1) {
+            // IO
+            uintptr_t addr = (dev->bar[i].value >> 2) << 2;
+            kprintf("  - BAR%d I/O addr: %p, size: %x\n", i, addr, size);
+        } else {
+            uintptr_t addr = (dev->bar[i].value >> 4) << 4;
+            u8 type = (dev->bar[i].value >> 1) & 0x3;
+            if (type == 2) {
+                addr |= (uintptr_t) dev->bar[i+1].value << 32ull;
+            }
+            kprintf("  - BAR%d MEM addr: %p, size: %x\n", i, addr, size);
+            if (type == 2) {
+                i += 1;
+            }
+        }
+    }
+
+    if (dev->irq_line != 0xFF) {
+        kprintf("  irq: %d, pin: %s\n", dev->irq_line, pin_names[dev->irq_pin]);
+    }
+}
+
+typedef struct {
+    union {
+        struct {
+            u16 vendor_id;
+            u16 device_id;
+
+            u16 command;
+            u16 status;
+
+            u8 rev_id;
+            u8 prog_IF;
+            u8 subclass;
+            u8 class;
+
+            u8 cache_line_size;
+            u8 latency_timer;
+            u8 header_type;
+            u8 bist;
+        };
+        u32 regs[4];
+    };
+} __attribute__((packed)) PCI_Header;
+
+typedef struct {
+    union {
+        struct {
+            u32 bar[6];
+            u32 cardbus_cis_ptr;
+
+            u16 subsystem_vendor_id;
+            u16 subsystem_id;
+
+            u32 expansion_rom_base_addr;
+
+            u8  cap_ptr;
+            u8  reserved_1;
+            u16 reserved_2;
+
+            u32 reserved_3;
+
+            u8 interrupt_line;
+            u8 interrupt_pin;
+            u8 max_latency;
+            u8 min_grant;
+        };
+        u32 regs[12];
+    };
+} PCI_Header_0;
+
+typedef struct {
+    union {
+        struct {
+            u32 bar[2];
+
+            u8 secondary_latency_timer;
+            u8 subordinate_bus_number;
+            u8 secondary_bus_number;
+            u8 primary_bus_number;
+
+            u16 secondary_status;
+            u8 io_limit;
+            u8 io_base;
+
+            u16 memory_limit;
+            u16 memory_base;
+
+            u16 prefetch_memory_limit;
+            u16 prefetch_memory_base;
+
+            u32 prefetch_memory_base_upper;
+
+            u32 prefetch_memory_limit_upper;
+
+            u16 io_limit_upper;
+            u16 io_base_upper;
+
+            u16 reserved_1;
+            u8  reserved_2;
+            u8  cap_ptr;
+
+            u32 expansion_rom_base_addr;
+
+            u16 bridge_ctrl;
+            u8  interrupt_pin;
+            u8  interrupt_line;
+        };
+        u32 regs[12];
+    };
+} PCI_Header_1;
+
+static bool pci_check_device(PCI_Device *dev, u32 bus, u32 device, u8 func) {
+    PCI_Header hdr = {};
+    hdr.regs[0] = pci_read_u32(bus, device, func, 0x0);
+
+    if (hdr.vendor_id == PCI_NONE) return false;
+
+    for (int i = 1; i < ELEM_COUNT(hdr.regs); i++) {
+        hdr.regs[i] = pci_read_u32(bus, device, func, i * sizeof(u32));
+    }
+
+    dev->bus       = bus;
+    dev->device    = device;
+    dev->func      = func;
+    dev->device_id = hdr.device_id;
+    dev->vendor_id = hdr.vendor_id;
+    dev->class     = hdr.class;
+    dev->subclass  = hdr.subclass;
+    dev->prog_IF   = hdr.prog_IF;
+    dev->revision  = hdr.rev_id;
+
+    u8 hdr_type = hdr.header_type & 0b1111111;
+    switch (hdr_type) {
+        case 0: {
+            PCI_Header_0 hdr0 = {};
+            for (int i = 0; i < ELEM_COUNT(hdr0.regs); i++) {
+                hdr0.regs[i] = pci_read_u32(bus, device, func, 0x10 + (i * sizeof(u32)));
+            }
+
+            dev->bar_count = ELEM_COUNT(hdr0.bar);
+            for (int i = 0; i < dev->bar_count; i++) {
+                dev->bar[i].value = hdr0.bar[i];
+
+                if (dev->bar[i].value != 0) {
+                    u32 bar_off = 0x10 + (i * sizeof(u32));
+                    pci_write_u32(bus, device, func, bar_off, 0xFFFFFFFF);
+                    dev->bar[i].size = pci_read_u32(bus, device, func, bar_off);
+                    pci_write_u32(bus, device, func, bar_off, dev->bar[i].value);
+                }
+            }
+            dev->irq_line = hdr0.interrupt_line;
+            dev->irq_pin  = hdr0.interrupt_pin;
+
+            /* if (hdr0.status & (1u << 4u)) {
+                hdr0.cap_ptr;
+            } */
+        } break;
+        case 0x1: {
+            PCI_Header_1 hdr1 = {};
+            for (int i = 0; i < ELEM_COUNT(hdr1.regs); i++) {
+                hdr1.regs[i] = pci_read_u32(bus, device, func, 0x10 + (i * sizeof(u32)));
+            }
+
+            dev->bar_count = ELEM_COUNT(hdr1.bar);
+            for (int i = 0; i < dev->bar_count; i++) {
+                dev->bar[i].value = hdr1.bar[i];
+
+                if (dev->bar[i].value != 0) {
+                    u32 bar_off = 0x10 + (i * sizeof(u32));
+                    pci_write_u32(bus, device, func, bar_off, 0xFFFFFFFF);
+                    dev->bar[i].size = pci_read_u32(bus, device, func, bar_off);
+                    pci_write_u32(bus, device, func, bar_off, dev->bar[i].value);
+                }
+            }
+            dev->irq_line = hdr1.interrupt_line;
+            dev->irq_pin  = hdr1.interrupt_pin;
+        } break;
+        default: {
+            ON_DEBUG(PCI)(kprintf("[pci] unhandled PCI header: %d\n", hdr.header_type));
+            return false;
+        } break;
+    }
+
+    return true;
+}
+
+int pci_dev_count;
+PCI_Device* pci_devs[PCI_MAX_DEVICES];
+
+void pci_init(void) {
+    ON_DEBUG(PCI)(kprintf("[pci] Scanning for devices!\n"));
+
+    PCI_Device* dev = kheap_zalloc(sizeof(PCI_Device));
+    dev->super.tag = KOBJECT_DEV_PCI;
+
+    if (pci_segment_group) {
+        // 32 devices, 8 functions means each bus entry is 1MiB
+        size_t bus_count = (pci_segment_group->end_bus - pci_segment_group->start_bus) + 1;
+        size_t map_size = bus_count * 1048576;
+        pcie_base = memmap_view(
+            boot_info->kernel_pml4, pci_segment_group->address,
+            (u64) paddr2kaddr(pci_segment_group->address), map_size,
+            VMEM_PAGE_WRITE | VMEM_PAGE_KERNEL
+        );
+
+        ON_DEBUG(PCI)(kprintf("PCIe Base mapped to %p\n", pcie_base));
+
+        // allocate kernel objects for each of the PCI devices
+        FOR_N(bus, 0, bus_count) FOR_N(device, 0, 32) FOR_N(func, 0, 8) {
+            if (pci_check_device(dev, bus, device, func)) {
+                ON_DEBUG(PCI)(pci_print_device(dev));
+                STORE_PUT(dev);
+
+                pci_devs[pci_dev_count++] = dev;
+                if (pci_dev_count >= PCI_MAX_DEVICES) {
+                    ON_DEBUG(PCI)(kprintf("[pci] Hit max devices!\n"));
+                    goto done_scanning;
+                }
+
+                // new alloc for the next device we find
+                dev = kheap_zalloc(sizeof(PCI_Device));
+                dev->super.tag = KOBJECT_DEV_PCI;
+            }
+        }
+    } else {
+        // allocate kernel objects for each of the PCI devices
+        FOR_N(bus, 0, 256) FOR_N(device, 0, 32) FOR_N(func, 0, 8) {
+            if (pci_check_device(dev, bus, device, func)) {
+                ON_DEBUG(PCI)(pci_print_device(dev));
+                STORE_PUT(dev);
+
+                pci_devs[pci_dev_count++] = dev;
+                if (pci_dev_count >= PCI_MAX_DEVICES) {
+                    ON_DEBUG(PCI)(kprintf("[pci] Hit max devices!\n"));
+                    goto done_scanning;
+                }
+
+                // new alloc for the next device we find
+                dev = kheap_zalloc(sizeof(PCI_Device));
+                dev->super.tag = KOBJECT_DEV_PCI;
+            }
+        }
+    }
+
+    done_scanning:
+    ON_DEBUG(PCI)(kprintf("[pci] Done scanning\n"));
+
+    // last allocation was for a device which we didn't find
+    kheap_free(dev, sizeof(PCI_Device));
+}
