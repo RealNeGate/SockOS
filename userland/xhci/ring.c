@@ -97,7 +97,7 @@ static void ring_submit_cmd(HCI_Ring* ring, int type, uint32_t cmd[4]) {
     dst[3] = cmd[3] | ((type & 0x3F) << 10u) | ring->cycle_bit;
     asm volatile("mfence" : : : "memory");
 
-    printf("SUBMIT[%p] %08x %08x %08x %08x\n", ring->dequeue_paddr, dst[0], dst[1], dst[2], dst[3]);
+    // printf("SUBMIT[%p] %08x %08x %08x %08x\n", ring->dequeue_paddr, dst[0], dst[1], dst[2], dst[3]);
     ring_advance(ring);
 }
 

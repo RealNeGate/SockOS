@@ -475,7 +475,7 @@ void arch_pte_update(Env* env, uintptr_t access_addr, uintptr_t translated, VMem
                 // bits missing? add one
                 new_entry |= page_flags;
             } else {
-                new_pt = kheap_alloc(PAGE_SIZE);
+                new_pt = kheap_alloc_page();
                 memset(new_pt, 0, sizeof(PageTable));
 
                 new_entry = kaddr2paddr(new_pt) | page_flags;
@@ -486,7 +486,7 @@ void arch_pte_update(Env* env, uintptr_t access_addr, uintptr_t translated, VMem
             // physical page (so we don't spam allocations as much)
             if (atomic_compare_exchange_strong(&curr->entries[index], &entry, new_entry)) { entry = new_entry; break; }
             // throw away our new_pt
-            if (new_pt == NULL) { kheap_free(new_pt, PAGE_SIZE); }
+            if (new_pt == NULL) { kheap_free_page(new_pt); }
         }
 
         curr = paddr2kaddr(entry & ~0x1FF);

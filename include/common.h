@@ -69,6 +69,7 @@ bool memeq(const void* a, const void* b, size_t n);
 #define atomic_ldacq(ptr) atomic_load_explicit(ptr, memory_order_acquire)
 #define atomic_strel(ptr, val) atomic_store_explicit(ptr, val, memory_order_release)
 
+#define atomic_ldrlx(ptr) atomic_load_explicit(ptr, memory_order_relaxed)
 #define atomic_strlx(ptr, val) atomic_store_explicit(ptr, val, memory_order_relaxed)
 
 #define atomic_add_acq_rel(addr, src) atomic_fetch_add_explicit(addr, src, memory_order_acq_rel)

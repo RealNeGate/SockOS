@@ -12,11 +12,11 @@ Env* env_create(void) {
     Env* env = kheap_zalloc(sizeof(Env));
     env->super.tag = KOBJECT_ENV;
     env->addr_space.working_set = nbhm_alloc(100);
-    env->access_rights = nbhm_alloc(500);
+    env->access_rights = nbhm_alloc(50);
 
     #ifdef __x86_64__
     // copy over the kernel's higher half pages bar for bar.
-    env->addr_space.hw_tables = kheap_alloc(PAGE_SIZE);
+    env->addr_space.hw_tables = kheap_alloc_page();
     for (size_t i = 512; (i--) > 256;) {
         u64 src_page = boot_info->kernel_pml4->entries[i];
         if (src_page == 0) { break; }
@@ -27,7 +27,7 @@ Env* env_create(void) {
     #endif
 
     STORE_PUT(env);
-    kprintf("[env] %p | %p | HW Tables at %p\n", env, &env->addr_space.hw_tables, env->addr_space.hw_tables);
+    kprintf("[env]  %p | HW Tables at %p\n", env, env->addr_space.hw_tables);
     return env;
 }
 
@@ -43,10 +43,10 @@ void env_kill(Env* env) {
     }
 
     env->first_in_env = env->last_in_env = NULL;
+    kheap_free_page(env->addr_space.hw_tables);
     spin_unlock(&env->lock);
 }
 
-static atomic_int ID_TICKER = 0;
 Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintptr_t stack, size_t stack_size) {
     bool is_user = env != NULL;
 
@@ -59,12 +59,12 @@ Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintpt
         // initial cpu state (CPU specific)
         .state = new_thread_state(entrypoint, arg, stack, stack_size, is_user)
     };
-    new_thread->client.id     = ++ID_TICKER;
     new_thread->client.weight = 10;
     new_thread->client.slice  = 1000;
-
-    snprintf(new_thread->tag, 32, "Thread-%p", new_thread);
     STORE_PUT(new_thread);
+
+    new_thread->client.id = new_thread->super.id;
+    snprintf(new_thread->tag, 32, "Thread-%d", new_thread->client.id);
 
     // attach to env
     if (env != NULL) {

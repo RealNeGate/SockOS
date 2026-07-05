@@ -112,7 +112,9 @@ MapFileEntry* map_entry_get(uint32_t rva) {
         }
     }
 
-    kassert(right - 1 < map_entry_count, "OOB %#x", rva);
+    if (right - 1 >= map_entry_count) {
+        return NULL;
+    }
     return &map_entries[right - 1];
 }
 

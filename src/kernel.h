@@ -62,6 +62,9 @@ void* kheap_zalloc(size_t size);
 void  kheap_free(void* obj, size_t size);
 void  kheap_dump(void);
 
+void* kheap_alloc_page(void);
+void  kheap_free_page(void* ptr);
+
 #define NBHM_ASSERT(x) kassert(x, ":(")
 #include "nbhm.h"
 

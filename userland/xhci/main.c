@@ -138,8 +138,6 @@ static atomic_int dev_to_refresh;
 
 static void mark_pending_urb(uintptr_t paddr, USB_Device* dev, int pipe) {
     SPIN_LOCK(&pending_urb_lock);
-    printf("PENDING %p\n", paddr);
-    fault_handler();
     pending_urbs[pending_urb_count++] = (PendingURB){
         paddr, dev, pipe
     };
@@ -264,7 +262,7 @@ static void usb_fsm(int msg, int port, int slot) {
             if (sts & 1) { // Connect
                 // USB3 will immediately set the PED flag, USB2 requires a reset before doing so
                 if ((sts & 2) == 0) {
-                    printf("[usb] Port%u connecting via USB2, sts=%#x (reset enqueued)\n", port, sts);
+                    printf("[usb]  Port%u connecting via USB2, sts=%#x (reset enqueued)\n", port, sts);
                     assert(ports[port].usb_type == 0);
                     ports[port].usb_type = 2;
                     *sts_ptr |= 1 << 4;
@@ -276,7 +274,7 @@ static void usb_fsm(int msg, int port, int slot) {
                     ports[port].usb_type = 3;
                 }
 
-                printf("[usb] Port%u connecting via USB%d, sts=%#x, speed=%d\n", port, ports[port].usb_type, sts, (sts >> 10) & 0xF);
+                printf("[usb]  Port%u connecting via USB%d, sts=%#x, speed=%d\n", port, ports[port].usb_type, sts, (sts >> 10) & 0xF);
                 pending_con[pending_con_count++] = (PendingConnection){
                     PORT_DEFAULT, port, crcr.dequeue_paddr
                 };
@@ -286,7 +284,7 @@ static void usb_fsm(int msg, int port, int slot) {
                 ring_submit_cmd(&crcr, 9, cmd);
                 ring_doorbell(NULL, 0);
             } else { // Disconnect
-                printf("[usb] Port%u disconnecting, sts=%#x\n", port, sts);
+                printf("[usb]  Port%u disconnecting, sts=%#x\n", port, sts);
 
                 // TODO(NeGate): disconnect all child devices correctly
                 assert(dev);
@@ -295,7 +293,7 @@ static void usb_fsm(int msg, int port, int slot) {
         } break;
 
         case MSG_SLOT_ENABLE: {
-            printf("[usb] Port%u is associated with Slot%u\n", port, slot);
+            printf("[usb]  Port%u is associated with Slot%u\n", port, slot);
 
             uintptr_t in_ctx_paddr;
             InputContext* in_ctx = pin(4096, &in_ctx_paddr);
@@ -347,7 +345,7 @@ static void usb_fsm(int msg, int port, int slot) {
             dcbaap[1 + slot] = out_ctx_paddr;
             asm volatile("mfence" : : : "memory");
 
-            printf("[usb] Initialized Port%u with In:%p, Out:%p Transfer:%p (%zu max packet)\n", port, in_ctx_paddr, out_ctx_paddr, xfer_ring->base_paddr, max_packet);
+            printf("[usb]  Initialized Port%u with In:%p, Out:%p Transfer:%p (%zu max packet)\n", port, in_ctx_paddr, out_ctx_paddr, xfer_ring->base_paddr, max_packet);
 
             dev->speed = speed;
             dev->in_ctx_paddr = in_ctx_paddr;
@@ -453,9 +451,6 @@ static void usb_device_thread(void* d) {
     USB_Device* dev = d;
     mailbox_send(root_mailbox, 0, DEV_SLOT(dev), 0, NULL, &(KHandle){ dev->mailbox });
 
-    printf("AAA!\n");
-    fault_handler();
-
     USB_RequestBlock urb = {
         .dev   = dev,
         .setup = {
@@ -482,15 +477,14 @@ static void usb_device_thread(void* d) {
     size_t interface_size = 0;
     int usb_type = USB_DRIVER_NONE;
 
-    #if 1
+    #if 0
     printf(" FOUND DEVICE!!! %02x:%02x, %d\n", dev->desc.dev_class, dev->desc.dev_sub_class, dev->desc.num_configs);
     for (int j = 0; j < desc_len; j++) {
         printf(" %02x", buf[j] & 0xFF);
     }
     printf("\n");
-    #endif
-
     fault_handler();
+    #endif
 
     if (dev->desc.dev_class == 0 && dev->desc.dev_sub_class == 0) {
         int selected_config = 0;
@@ -560,7 +554,7 @@ static void usb_device_thread(void* d) {
     // Initialize the interface's endpoints
     if (interface_size > 0) {
         int slot = DEV_SLOT(dev);
-        printf("[usb] dev%d: connected '%s' %04x:%04x\n", slot, dev->name, dev->desc.id_vendor, dev->desc.id_product);
+        printf("[usb]  dev%d: connected '%s' %04x:%04x\n", slot, dev->name, dev->desc.id_vendor, dev->desc.id_product);
         fault_handler();
 
         InputContext* in_ctx = dev->in_ctx;
@@ -599,7 +593,7 @@ static void usb_device_thread(void* d) {
                 }
             }
 
-            printf("[usb] dev%d: endpoint%d: num=%d, dir=%-3s, type=%s, rate=%d, max_packet=%d\n", slot, j, ep->addr & 0xF, dir_in ? "IN" : "OUT", type_str, ep->interval, ep->max_packet_size);
+            printf("[usb]  dev%d: endpoint%d: num=%d, dir=%-3s, type=%s, rate=%d, max_packet=%d\n", slot, j, ep->addr & 0xF, dir_in ? "IN" : "OUT", type_str, ep->interval, ep->max_packet_size);
             usb_set_endpoint(dev, ep, ep_interval);
         }
         fault_handler();
@@ -750,7 +744,7 @@ int _start(KHandle pci_device) {
     doorbell = &mmio[mmio[5] >> 2];
 
     context_slot_size = (mmio[4] >> 2) & 1 ? 64 : 32;
-    printf("[usb] Slot size: %zu\n", context_slot_size);
+    printf("[usb]  Slot size: %zu\n", context_slot_size);
 
     uint32_t max_ports = mmio[1] >> 24u;
     uint32_t max_slots = mmio[1] & 0xFF;
@@ -786,16 +780,16 @@ int _start(KHandle pci_device) {
     op_base[0] |= 1; // (USBCMD @ 00h)
     asm volatile("mfence" : : : "memory");
 
-    printf("[usb] Detected %u root hub ports (%d max slots)\n", max_ports, max_slots);
+    printf("[usb]  Detected %u root hub ports (%d max slots)\n", max_ports, max_slots);
     FOR_N(i, 0, max_ports) {
         volatile uint32_t* sts = &op_base[0x100 + (4 * i)];
         if (*sts & 1) {
-            printf("[usb] Resetting root hub Port%zu...\n", i);
+            printf("[usb]  Resetting root hub Port%zu...\n", i);
             *sts |= 1 << 4;
         }
     }
 
-    printf("[usb] Ready to receive events!\n");
+    printf("[usb]  Ready to receive events!\n");
     fault_handler();
 
     bool ccs = true;
@@ -812,7 +806,7 @@ int _start(KHandle pci_device) {
             uint32_t type = (trb[3] >> 10) & 0b111111;
 
             uintptr_t trb_phys = ers0_paddr + trb_i*sizeof(uint32_t);
-            ring_dump_cmd(trb_phys, (uint32_t*) trb);
+            // ring_dump_cmd(trb_phys, (uint32_t*) trb);
 
             if (type == 0x21) { // Command completion
                 uintptr_t cmd_ptr = trb[0] | ((uintptr_t) trb[1] << 32ull);

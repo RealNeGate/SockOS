@@ -459,13 +459,12 @@ uintptr_t vmem_try_commit(Env* env, VMem_PageDesc* desc, uintptr_t access_addr, 
     // attempt to commit page in working set
     uintptr_t actual_page = (uintptr_t) vmem_addrhm_get(ws, (void*) (in_space_addr + VMEM_WORKING_SET_OFFSET));
     if (actual_page == 0) {
-        void* page = kheap_alloc(PAGE_SIZE);
-        memset(page, 0, PAGE_SIZE);
+        void* page = kheap_alloc_page();
         uintptr_t new_page = kaddr2paddr(page);
 
         actual_page = (uintptr_t) vmem_addrhm_put_if_null(ws, (void*) (in_space_addr + VMEM_WORKING_SET_OFFSET), (void*) new_page);
         if (actual_page != new_page) {
-            kheap_free(paddr2kaddr(new_page), PAGE_SIZE);
+            kheap_free_page(paddr2kaddr(new_page));
         }
     }
 

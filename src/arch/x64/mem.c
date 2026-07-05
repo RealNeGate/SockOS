@@ -21,7 +21,7 @@ static PageTable* get_or_alloc_pt(PageTable* parent, size_t index, int depth, Pa
         return paddr2kaddr(arch_canonical_addr(parent->entries[index] & 0xFFFFFFFFF000ull));
     }
 
-    PageTable* new_pt = kheap_alloc(PAGE_SIZE);
+    PageTable* new_pt = kheap_alloc_page();
     kassert(((uintptr_t) new_pt & 0xFFF) == 0, "page tables must be 4KiB aligned");
     parent->entries[index] = kaddr2paddr(new_pt) | flags | PAGE_PRESENT;
     return new_pt;

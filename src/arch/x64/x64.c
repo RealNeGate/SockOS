@@ -129,8 +129,11 @@ void arch_backtrace(void) {
         if (rip >= boot_info->elf_virtual_ptr) {
             uint32_t rva = rip - boot_info->elf_virtual_ptr;
             MapFileEntry* entry = map_entry_get(rva);
-
-            kprintf("  %p %s+%d\n", frame->rip, entry->name, rva - entry->rva);
+            if (entry != NULL) {
+                kprintf("  %p %s+%d\n", frame->rip, entry->name, rva - entry->rva);
+            } else {
+                kprintf("  %p ???\n", frame->rip);
+            }
         } else {
             kprintf("  %p\n", frame->rip);
         }
