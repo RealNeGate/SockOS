@@ -1,8 +1,7 @@
 // Multi-head logs, we call that layer C0. When C0 is full, it'll flush
 // out to C1 which is a list of logs that are uncompacted. Any two logs
 // can be merged since we have a strong monotonic guarantee from the IDs.
-#include <kernel.h>
-
+#include "kernel.h"
 #include "threads.h"
 #include "pci.h"
 

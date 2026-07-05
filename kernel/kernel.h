@@ -2,7 +2,7 @@
 #pragma once
 #include <common.h>
 #include "boot_info.h"
-#include "kernel/printf.h"
+#include "printf.h"
 
 enum {
     CHUNK_SIZE = 2*1024*1024,

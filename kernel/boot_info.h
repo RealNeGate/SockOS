@@ -1,7 +1,7 @@
 #pragma once
 
 #include <common.h>
-#include "kernel/scheduler.h"
+#include "scheduler.h"
 
 // Physical address
 typedef struct { uintptr_t raw; } PAddr;

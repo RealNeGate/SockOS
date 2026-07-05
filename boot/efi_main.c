@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdalign.h>
-#include "../boot_info.h"
+#include <boot_info.h>
 
 #include "crt.c"
 #include "com.c"
@@ -234,15 +234,15 @@ static bool mem_map_verify(MemMap* mem_map) {
 }
 
 static _Alignas(4096) const uint8_t kernel_so[] = {
-    #embed "../../objs/kernel.so"
+    #embed "../objs/kernel.so"
 };
 
 static _Alignas(4096) char kernel_map[] = {
-    #embed "../../objs/kernel.map"
+    #embed "../objs/kernel.map"
 };
 
 static _Alignas(4096) uint8_t initrd[] = {
-    #embed "../../objs/initrd"
+    #embed "../objs/initrd"
 };
 
 EFI_STATUS efi_main(EFI_HANDLE img_handle, EFI_SYSTEM_TABLE* st) {

@@ -1,7 +1,7 @@
 #include <beans.h>
 #include <common.h>
 #include <elf.h>
-#include "../src/kernel/printf.c"
+#include "../kernel/printf.c"
 
 void* memset(void* buffer, int c, size_t n) {
     u8* buf = (u8*)buffer;

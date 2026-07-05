@@ -2,7 +2,7 @@
 #include <common.h>
 #include <stdatomic.h>
 #include <emmintrin.h>
-#include "../src/kernel/printf.c"
+#include "../kernel/printf.c"
 
 #define IPC_RING_IMPL
 #include "../ipc_ring.h"
