@@ -76,9 +76,13 @@ static uint64_t mailbox_wait(KHandle mailbox, uint64_t info, uint64_t args[2], v
     return __syscall6_out2(SYS_mailbox_wait, mailbox, info, &args[0], &args[1], (long) ptr, handle);
 }
 
+static KHandle mailbox_create(size_t max_rqs) { return syscall(SYS_mailbox_create, max_rqs); }
+
 static KHandle vmo_create(size_t size)  { return syscall(SYS_vmo_create, size); }
 static size_t vmo_get_size(KHandle vmo) { return syscall(SYS_vmo_get_size, vmo); }
 
 static void* mmap(KHandle env, KHandle vmo, uintptr_t addr, size_t size, uint32_t flags, size_t offset) { return (void*) syscall(SYS_mmap, env, vmo, addr, size, flags, offset); }
 static void* mpin(KHandle vmo, size_t offset, size_t size, uintptr_t* out_paddr) { return (void*) syscall(SYS_mpin, vmo, offset, size, out_paddr); }
+
+static void thread_exit(int code) { syscall(SYS_thread_exit, code); }
 #endif

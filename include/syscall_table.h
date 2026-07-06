@@ -1,5 +1,4 @@
 X(sleep)
-X(sched_time)
 X(test)
 // Namespace
 X(get_root_mailbox)
@@ -7,6 +6,7 @@ X(get_root_mailbox)
 X(env_create)
 X(thread_create)
 X(thread_setattr)
+X(thread_exit)
 // Tracing/Debug
 X(debug_log)
 // Event

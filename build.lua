@@ -85,7 +85,7 @@ rules({
     {
         name = "cc",
         depfile = "$out.d",
-        command = "clang  $in $flags -MD -MF $out.d -o $out",
+        command = "clang-20 $in $flags -MD -MF $out.d -o $out",
         description = "CC $in"
     },
     {
@@ -114,6 +114,7 @@ rules({
 do
     local init_rd_list = {
         "userland/drivers.txt",
+        "objs/stdlib.so",
         "objs/xhci.so",
         "objs/intel_gpu.so",
         "objs/bochs.so",
@@ -122,6 +123,11 @@ do
     table.insert(lines, "# INIT PROGRAM")
     build("objs/init.elf", "cc", "userland/init/main.c", {
         flags = elf_cflags.." -fuse-ld=lld -T userland/init/link.ld -fpic"
+    })
+
+    table.insert(lines, "# STDLIB")
+    build("objs/stdlib.so", "cc", "userland/stdlib/entry.c", {
+        flags = elf_cflags.." -fuse-ld=lld -fpic"
     })
 
     table.insert(lines, "# INTEL GPU")

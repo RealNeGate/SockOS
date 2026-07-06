@@ -154,6 +154,14 @@ typedef struct {
 } Elf64_Sym;
 
 typedef struct {
+    Elf64_Sxword  d_tag;
+    union {
+        Elf64_Xword d_val;
+        Elf64_Addr  d_ptr;
+    };
+} Elf64_Dyn;
+
+typedef struct {
     Elf64_Addr   r_offset;
     Elf64_Xword  r_info;
     Elf64_Sxword r_addend;

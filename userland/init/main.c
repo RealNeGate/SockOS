@@ -221,6 +221,7 @@ static bool exec(FileEntry* file, KHandle arg) {
 
     uintptr_t lo = 0, hi = 0;
     size_t page_size = 4096;
+    size_t total_memsz = 0;
     const char* segments = contents + elf_header->e_phoff;
     for (size_t i = 0; i < elf_header->e_phnum; i++) {
         Elf64_Phdr* segment = (Elf64_Phdr*) (segments + i*segment_size);
@@ -232,36 +233,68 @@ static bool exec(FileEntry* file, KHandle arg) {
         uintptr_t vaddr    = segment->p_vaddr & -page_size;
         uintptr_t vaddr_hi = vaddr + mem_size;
 
+        uintptr_t offset   = segment->p_vaddr & (page_size - 1);
+        total_memsz = (segment->p_memsz + offset + page_size - 1) & -page_size;
+
         if (lo > vaddr)    { lo = vaddr; }
         if (hi < vaddr_hi) { hi = vaddr_hi; }
     }
 
+    printf("Total Mem %zu\n", total_memsz);
+    fault_handler();
+
     // Create environment
     KHandle child_env = syscall(SYS_env_create);
+    KHandle section_vmo = syscall(SYS_vmo_create, 0, total_memsz);
+
+    enum {
+        DT_FLAGS_1 = 0x6ffffffb,
+        DT_DEBUG   = 21,
+        DT_SYMTAB  = 6,
+        DT_SYMENT  = 11,
+        DT_STRTAB  = 5,
+        DT_STRSZ   = 10,
+        DT_GNUHASH = 0x6ffffef5,
+    };
 
     // Place ELF into env
+    size_t curr_memsz = 0;
     char* elf_vmap = mmap(child_env, 0, 0, hi - lo, PROT_READ | PROT_WRITE | MEM_PLACEHOLDER, 0);
     for (size_t i = 0; i < elf_header->e_phnum; i++) {
         Elf64_Phdr* segment = (Elf64_Phdr*) (segments + i*segment_size);
-        if (segment->p_type != PT_LOAD) {
-            continue;
+        if (segment->p_type == PT_DYNAMIC) {
+            Elf64_Dyn* dyns = (Elf64_Dyn*) &contents[segment->p_offset];
+            size_t dyn_count = segment->p_memsz / sizeof(Elf64_Dyn);
+
+            size_t symtab = 0, syment = 0;
+            for (size_t j = 0; j < dyn_count; j++) {
+                printf("DYN[%#zx] %p\n", dyns[j].d_tag, dyns[j].d_ptr);
+
+                if (dyns[j].d_tag == DT_SYMTAB) { symtab = dyns[j].d_ptr; }
+                if (dyns[j].d_tag == DT_SYMENT) { syment = dyns[j].d_ptr; }
+            }
+
+            for (size_t j = 0; j < dyn_count; j++) {
+                printf("SYM[%#zx]\n", j);
+
+            }
+        } else if (segment->p_type == PT_LOAD) {
+            uintptr_t vaddr  = (segment->p_vaddr & -page_size) - lo;
+            uintptr_t offset = segment->p_vaddr & (page_size - 1);
+            uintptr_t memsz  = segment->p_memsz + offset;
+            memsz = (memsz + page_size - 1) & -page_size;
+
+            char* dst = mmap(0, section_vmo, 0, memsz, PROT_READ | PROT_WRITE, curr_memsz);
+            if (segment->p_filesz > 0) {
+                memcpy(dst + offset, &contents[segment->p_offset], segment->p_filesz);
+            }
+
+            // Map into child environment
+            mmap(child_env, section_vmo, (uintptr_t) elf_vmap + vaddr, memsz, PROT_READ | PROT_WRITE, curr_memsz);
+            curr_memsz += memsz;
         }
-
-        uintptr_t vaddr  = (segment->p_vaddr & -page_size) - lo;
-        uintptr_t offset = segment->p_vaddr & (page_size - 1);
-        uintptr_t memsz  = segment->p_memsz + offset;
-        memsz = (memsz + page_size - 1) & -page_size;
-
-        // TODO(NeGate): we should coalesce the section VMOs
-        KHandle section_vmo = syscall(SYS_vmo_create, 0, memsz);
-        char* dst = mmap(0, section_vmo, 0, memsz, PROT_READ | PROT_WRITE, 0);
-        if (segment->p_filesz > 0) {
-            memcpy(dst + offset, &contents[segment->p_offset], segment->p_filesz);
-        }
-
-        // Map into child environment
-        mmap(child_env, section_vmo, (uintptr_t) elf_vmap + vaddr, memsz, PROT_READ | PROT_WRITE, 0);
     }
+    fault_handler();
 
     // Spin up the main thread
     KHandle thread = syscall(SYS_thread_create, child_env, elf_vmap + (elf_header->e_entry - lo), arg, 2*1024*1024, 1);
@@ -308,11 +341,11 @@ int _start(KHandle bootstrap_vmo) {
 
     // Launch the desktop server, this will handle I/O relevant to
     // visualizing and interfacing with a UI.
-    /*FileEntry* desktop = find_file(initrd, sizeof("/desktop.so")-1, "/desktop.so");
-    if (desktop != NULL) {
-        printf("Found desktop! %zu bytes\n", desktop->data_len);
-        exec(desktop, 0);
-    }*/
+    FileEntry* stdlib = find_file(initrd, sizeof("/stdlib.so")-1, "/stdlib.so");
+    if (stdlib != NULL) {
+        printf("Found desktop! %zu bytes\n", stdlib->data_len);
+        exec(stdlib, 0);
+    }
 
     fault_handler();
 

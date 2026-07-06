@@ -156,18 +156,6 @@ SYS_FN(sleep) {
     do_context_switch(state, new_cr3);
 }
 
-SYS_FN(sched_time) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_sched_time(arr=%p)\n", SYS_PARAM0));
-
-    u64 now_time = __rdtsc() / boot_info->tsc_freq;
-    u64* arr = (u64*) SYS_PARAM0;
-    FOR_N(i, 0, boot_info->core_count) {
-        PerCPU* some_cpu = &boot_info->cores[i];
-        arr[i] = sched_total_exec_time(some_cpu, now_time);
-    }
-    return now_time;
-}
-
 SYS_FN(debug_log) {
     ON_DEBUG(SYSCALL)(kprintf("SYS_debug_log(vmo=%p, length=%d)\n", SYS_PARAM0, SYS_PARAM1));
 
@@ -338,7 +326,7 @@ SYS_FN(thread_create) {
     uintptr_t arg = SYS_PARAM2;
     size_t stack_size = SYS_PARAM3;
 
-    if (SYS_PARAM4 & 1) {
+    if ((SYS_PARAM4 & 1) && arg) {
         KAccessRights rights;
         KObject* obj = env_get_handle(env, arg, &rights);
         KCHECK(obj, RESULT_BAD_PERMISSION);
@@ -380,6 +368,17 @@ SYS_FN(thread_setattr) {
     }
 
     return 0;
+}
+
+SYS_FN(thread_exit) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_thread_exit(code=%d)\n", SYS_PARAM0));
+
+    Thread* curr = cpu->current_thread;
+    curr->client.is_dead = true;
+
+    state->interrupt_num = 32;
+    uintptr_t new_cr3 = x86_irq_int_handler(state, cr3, cpu);
+    do_context_switch(state, new_cr3);
 }
 
 SYS_FN(event_create) {
