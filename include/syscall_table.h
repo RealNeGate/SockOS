@@ -1,38 +1,25 @@
-X(sleep)
 X(test)
-// Namespace
-X(get_root_mailbox)
-// Env/Threads
-X(env_create)
-X(thread_create)
-X(thread_setattr)
-X(thread_exit)
-// Tracing/Debug
 X(debug_log)
-// Event
+X(thread_create)
+X(thread_control)
+X(env_create)
+X(mem_map)
+X(mem_unmap)
+X(mem_translate)
+X(vmo_create)
+X(vmo_get_size)
 X(event_create)
 X(event_wait)
 X(event_signal)
-// VMM
-X(mmap)
-X(munmap)
-X(mpin)
-X(mdump)
-X(get_paddr)
-X(vmo_create)
-X(vmo_get_size)
-// PCI
 X(pci_device_count)
 X(pci_claim_device)
 X(pci_bar_count)
 X(pci_get_bar)
 X(pci_read_config_32)
 X(pci_write_config_32)
-// RPC
 X(mailbox_create)
 X(mailbox_send)
 X(mailbox_wait)
 X(mailbox_reply)
-// x86 stuff (TODO move to VDSO)
-X(tsc_freq)
+X(root_mailbox)
 #undef X

@@ -54,7 +54,7 @@ IPC_Ring* ipc_ring_alloc(size_t block_size, size_t cap, KHandle* out_vmo) {
     size = (size + 4095ull) & ~4095ull;
 
     KHandle ring_vmo = syscall(SYS_vmo_create, 0, size);
-    IPC_Ring* ring = mmap(0, ring_vmo, 0, size, PROT_READ | PROT_WRITE, 0);
+    IPC_Ring* ring = mem_map(NULL_HANDLE, 0, ring_vmo, 0, size, PROT_RW, 0);
     ring->cap = cap;
     ring->block_size = block_size;
 
@@ -70,7 +70,7 @@ IPC_Ring* ipc_ring_alloc2(size_t block_size, size_t target_size, KHandle* out_vm
 
 IPC_Endpoint ipc_endpoint_from_vmo(KHandle ring_vmo, bool is_consumer) {
     size_t size = vmo_get_size(ring_vmo);
-    IPC_Ring* ring = mmap(0, ring_vmo, 0, size, PROT_READ | PROT_WRITE, 0);
+    IPC_Ring* ring = mem_map(NULL_HANDLE, 0, ring_vmo, 0, size, PROT_RW, 0);
     return (IPC_Endpoint){ ring, 0, is_consumer };
 }
 

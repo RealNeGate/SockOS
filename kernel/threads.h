@@ -1,4 +1,5 @@
 #include <kernel.h>
+#include <beans.h>
 
 #ifdef __x86_64__
 #include "../arch/x64/x64.h"
@@ -28,6 +29,9 @@ struct Thread {
     Thread* calling_thread;
     uintptr_t saved_sp;
 
+    // In the environment's address space
+    uintptr_t utcb_addr;
+
     // Address space optimization, we track the last faulted address.
     // If we keep faulting in an array like
     struct {
@@ -41,4 +45,5 @@ struct Thread {
 };
 
 bool sched_is_blocked(Thread* t);
+
 

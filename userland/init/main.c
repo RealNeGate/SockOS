@@ -78,7 +78,7 @@ void fault_handler(void) {
 void _putchar(char ch) {
     if (log_stream == 0) {
         log_stream = syscall(SYS_vmo_create, 0, 4*1024);
-        log_buffer = mmap(0, log_stream, 0, 4*1024, PROT_READ | PROT_WRITE, 0);
+        log_buffer = mem_map(NULL_HANDLE, 0, log_stream, 0, 4*1024, PROT_RW, 0);
     } else if (log_used == 4096) {
         syscall(SYS_debug_log, log_stream, log_used);
         log_used = 0;
@@ -136,7 +136,7 @@ static DriverEntry* get_driver(uint32_t key) {
 }
 
 static bool parse_driver_list(FileEntry* file) {
-    char* src = mmap(0, 0, 0, file->unpacked_len, PROT_READ | PROT_WRITE, 0);
+    char* src = mem_map_private(NULL_HANDLE, 0, file->unpacked_len, PROT_READ | PROT_WRITE, 0);
     int res = LZ4_decompress_safe(file->data, src, file->data_len, file->unpacked_len);
     if (file->unpacked_len != res) {
         return false;
@@ -205,7 +205,7 @@ static bool exec(FileEntry* file, KHandle arg) {
         return false;
     }
 
-    char* contents = mmap(0, 0, 0, file->unpacked_len, PROT_READ | PROT_WRITE, 0);
+    char* contents = mem_map_private(NULL_HANDLE, 0, file->unpacked_len, PROT_READ | PROT_WRITE, 0);
     int res = LZ4_decompress_safe(file->data, contents, file->data_len, file->unpacked_len);
     if (file->unpacked_len != res) {
         return false;
@@ -257,26 +257,26 @@ static bool exec(FileEntry* file, KHandle arg) {
         DT_GNUHASH = 0x6ffffef5,
     };
 
+    // Elf dynamic state
+    size_t symtab = 0, syment = 0;
+    char* strtab = NULL;
+
     // Place ELF into env
     size_t curr_memsz = 0;
-    char* elf_vmap = mmap(child_env, 0, 0, hi - lo, PROT_READ | PROT_WRITE | MEM_PLACEHOLDER, 0);
+    uintptr_t elf_vmap = (uintptr_t) mem_map_private(child_env, hi - lo, PROT_READ | PROT_WRITE, 0);
+    char* elf_mirror = mem_map_private(NULL_HANDLE, hi - lo, PROT_NONE, 0);
     for (size_t i = 0; i < elf_header->e_phnum; i++) {
         Elf64_Phdr* segment = (Elf64_Phdr*) (segments + i*segment_size);
         if (segment->p_type == PT_DYNAMIC) {
             Elf64_Dyn* dyns = (Elf64_Dyn*) &contents[segment->p_offset];
             size_t dyn_count = segment->p_memsz / sizeof(Elf64_Dyn);
 
-            size_t symtab = 0, syment = 0;
             for (size_t j = 0; j < dyn_count; j++) {
                 printf("DYN[%#zx] %p\n", dyns[j].d_tag, dyns[j].d_ptr);
 
                 if (dyns[j].d_tag == DT_SYMTAB) { symtab = dyns[j].d_ptr; }
                 if (dyns[j].d_tag == DT_SYMENT) { syment = dyns[j].d_ptr; }
-            }
-
-            for (size_t j = 0; j < dyn_count; j++) {
-                printf("SYM[%#zx]\n", j);
-
+                if (dyns[j].d_tag == DT_STRTAB) { strtab = &elf_mirror[dyns[j].d_ptr]; }
             }
         } else if (segment->p_type == PT_LOAD) {
             uintptr_t vaddr  = (segment->p_vaddr & -page_size) - lo;
@@ -284,27 +284,44 @@ static bool exec(FileEntry* file, KHandle arg) {
             uintptr_t memsz  = segment->p_memsz + offset;
             memsz = (memsz + page_size - 1) & -page_size;
 
-            char* dst = mmap(0, section_vmo, 0, memsz, PROT_READ | PROT_WRITE, curr_memsz);
+            // Mirror into current env
+            char* dst = mem_map(NULL_HANDLE, (uintptr_t) elf_mirror + vaddr, section_vmo, curr_memsz, , memsz, PROT_READ | PROT_WRITE, );
             if (segment->p_filesz > 0) {
-                memcpy(dst + offset, &contents[segment->p_offset], segment->p_filesz);
+                memcpy(&dst[offset], &contents[segment->p_offset], segment->p_filesz);
             }
 
-            // Map into child environment
-            mmap(child_env, section_vmo, (uintptr_t) elf_vmap + vaddr, memsz, PROT_READ | PROT_WRITE, curr_memsz);
+            // Map into child env
+            mem_map(child_env, (uintptr_t) elf_vmap + vaddr, section_vmo, curr_memsz, memsz, PROT_RW, 0);
             curr_memsz += memsz;
+        }
+    }
+
+    {
+        for (int i = 0; i < 10; i++) {
+            printf("A %c %d\n", elf_mirror[symtab + i], elf_mirror[symtab + i]);
+        }
+
+        Elf64_Sym* syms = (Elf64_Sym*) &elf_mirror[symtab];
+        printf("SYM %p\n", syms);
+        for (size_t j = 0; j < 1; j++) {
+            printf("SYM[%#zx] %p\n", j, syms[j].st_name);
         }
     }
     fault_handler();
 
+    // TODO(NeGate): unmap and revoke our own rights over the
+    // child env to avoid later leaks of resources.
+    // ...
+
     // Spin up the main thread
-    KHandle thread = syscall(SYS_thread_create, child_env, elf_vmap + (elf_header->e_entry - lo), arg, 2*1024*1024, 1);
-    syscall(SYS_thread_setattr, thread, 1, file->path);
+    void* fn = (void*) (elf_vmap + (elf_header->e_entry - lo));
+    KHandle thread = thread_create(child_env, fn, arg, 2*1024*1024, THREAD_FLAGS_GRANT);
     return true;
 }
 
 int _start(KHandle bootstrap_vmo) {
     size_t initrd_size = vmo_get_size(bootstrap_vmo);
-    FileEntry* initrd  = mmap(0, bootstrap_vmo, 0, initrd_size, PROT_READ | PROT_WRITE, 0);
+    FileEntry* initrd  = mem_map(NULL_HANDLE, 0, bootstrap_vmo, 0, initrd_size, PROT_RW, 0);
 
     // Scan the drivers.txt, construct hashmap for driver mappings
     printf("InitRD:\n");
@@ -349,7 +366,7 @@ int _start(KHandle bootstrap_vmo) {
 
     fault_handler();
 
-    KHandle mailbox = syscall(SYS_get_root_mailbox);
+    KHandle mailbox = syscall(SYS_root_mailbox);
     static KHandle names[256];
 
     // Process messages

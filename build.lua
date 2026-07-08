@@ -85,7 +85,7 @@ rules({
     {
         name = "cc",
         depfile = "$out.d",
-        command = "clang-20 $in $flags -MD -MF $out.d -o $out",
+        command = "clang $in $flags -MD -MF $out.d -o $out",
         description = "CC $in"
     },
     {
@@ -127,7 +127,7 @@ do
 
     table.insert(lines, "# STDLIB")
     build("objs/stdlib.so", "cc", "userland/stdlib/entry.c", {
-        flags = elf_cflags.." -fuse-ld=lld -fpic"
+        flags = elf_cflags.." -fuse-ld=lld -shared -fPIC"
     })
 
     table.insert(lines, "# INTEL GPU")

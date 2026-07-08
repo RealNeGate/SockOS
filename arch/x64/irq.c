@@ -503,11 +503,11 @@ void arch_pte_update(Env* env, uintptr_t access_addr, uintptr_t translated, VMem
     }
 }
 
-CPUState new_thread_state(void* entrypoint, uintptr_t arg, uintptr_t stack, size_t stack_size, bool is_user) {
+CPUState new_thread_state(uintptr_t ip, uintptr_t arg, uintptr_t sp, bool is_user) {
     // the stack will grow downwards.
     // the other registers are zeroed by default.
     CPUState s = {
-        .rip = (uintptr_t) entrypoint, .rsp = stack + stack_size,
+        .rip = ip, .rsp = sp,
         .rdi = arg,
         .flags = 0x200, .cs = 0x08, .ss = 0x10,
     };

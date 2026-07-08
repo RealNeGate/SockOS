@@ -8,8 +8,8 @@ static void ring_alloc(HCI_Ring* ring, size_t cnt) {
     ring->cycle_bit = true;
     ring->count = cnt;
 
-    ring->base = mmap(0, 0, 0, size, PROT_READ | PROT_WRITE, 0);
-    ring->base_paddr = syscall(SYS_get_paddr, ring->base);
+    ring->base = mem_map_private(NULL_HANDLE, size, PROT_RW, 0);
+    ring->base_paddr = mem_translate(NULL_HANDLE, ring->base);
     assert(ring->base_paddr);
 
     ring->dequeue = ring->base;
@@ -23,7 +23,7 @@ static void ring_alloc(HCI_Ring* ring, size_t cnt) {
         // Insert Link TRBs
         size_t page_count = (size + 4095) / 4096;
         FOR_N(i, 1, page_count) {
-            uintptr_t paddr = syscall(SYS_get_paddr, &base[i*PAGE_SIZE_DWORDS]);
+            uintptr_t paddr = mem_translate(NULL_HANDLE, &base[i*PAGE_SIZE_DWORDS]);
             if (prev_paddr+4096 != paddr) {
                 // Not contiguous? insert link at the end of the prev_paddr
                 uint32_t* link_entry = &base[i*PAGE_SIZE_DWORDS - 4];

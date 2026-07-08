@@ -39,7 +39,7 @@ EXPORT_FN void* memmove(void* dest, const void* src, size_t n) {
 
 void _start(KHandle handle) {
     KHandle vmo  = syscall(SYS_vmo_create, 0, 4*1024);
-    char* buffer = mmap(0, vmo, 0, 4*1024, PROT_READ | PROT_WRITE, 0);
+    char* buffer = mem_map(NULL_HANDLE, 0, vmo, 0, 4*1024, PROT_RW, 0);
     for (int i = 0; i < sizeof(text); i++) {
         buffer[i] = text[i];
     }

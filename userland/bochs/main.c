@@ -271,7 +271,7 @@ int _start(KHandle display_pci) {
 
         uint64_t elapsed = (__rdtsc() - start) / tsc_freq;
         if (elapsed < 16666) {
-            syscall(SYS_sleep, 16666 - elapsed);
+            thread_sleep(16666 - elapsed);
         }
     }
 }

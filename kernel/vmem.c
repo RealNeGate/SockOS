@@ -345,7 +345,7 @@ void vmem_dump(Env* env) {
     kprintf("\n");
 }
 
-uintptr_t vmem_map(Env* env, KObject_VMO* vmo, uintptr_t vaddr, size_t offset, size_t size, VMem_Flags flags, uintptr_t* out_paddr) {
+uintptr_t vmem_map(Env* env, KObject_VMO* vmo, uintptr_t vaddr, size_t offset, size_t size, VMem_Flags flags) {
     kassert((size & (PAGE_SIZE-1)) == 0, "must be page-aligned (%d)", size);
 
     // walk all regions until we find a gap big enough (SLOW!!!)
@@ -401,8 +401,7 @@ uintptr_t vmem_map(Env* env, KObject_VMO* vmo, uintptr_t vaddr, size_t offset, s
         FOR_N(i, 0, size / PAGE_SIZE) {
             vmem_commit_page(env, vaddr + i*PAGE_SIZE, kaddr + i*PAGE_SIZE);
         }
-
-        *out_paddr = kaddr2paddr(kaddr);
+        // *out_paddr = kaddr2paddr(kaddr);
     }
 
     return vaddr;

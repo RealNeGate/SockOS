@@ -47,7 +47,7 @@ void env_kill(Env* env) {
     spin_unlock(&env->lock);
 }
 
-Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintptr_t stack, size_t stack_size) {
+Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintptr_t sp) {
     bool is_user = env != NULL;
 
     Thread* new_thread = kheap_alloc(sizeof(Thread));
@@ -57,7 +57,7 @@ Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintpt
         },
         .parent = env,
         // initial cpu state (CPU specific)
-        .state = new_thread_state(entrypoint, arg, stack, stack_size, is_user)
+        .state = new_thread_state((uintptr_t) entrypoint, arg, sp, is_user)
     };
     new_thread->client.weight = 10;
     new_thread->client.slice  = 1000;

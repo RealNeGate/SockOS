@@ -1,6 +1,7 @@
 // Arch-independent kernel stuff
 #pragma once
 #include <common.h>
+#include <beans.h>
 #include "boot_info.h"
 #include "printf.h"
 
@@ -145,7 +146,7 @@ typedef struct {
 // virtual addresses -> committed pages
 typedef NBHM VMem_WorkingSet;
 
-uintptr_t vmem_map(Env* env, KObject_VMO* vmo, uintptr_t vaddr, size_t offset, size_t size, VMem_Flags flags, uintptr_t* out_paddr);
+uintptr_t vmem_map(Env* env, KObject_VMO* vmo, uintptr_t vaddr, size_t offset, size_t size, VMem_Flags flags);
 void vmem_add_range(Env* env, KObject_VMO* vmo, uintptr_t vaddr, size_t offset, size_t vsize, VMem_Flags flags);
 VMem_Cursor vmem_node_lookup(Env* env, uintptr_t key);
 
@@ -325,7 +326,7 @@ void env_ungrant_rights(Env* env, KObject* obj);
 ////////////////////////////////
 typedef int ThreadEntryFn(void*);
 
-Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintptr_t stack, size_t stack_size);
+Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintptr_t sp);
 void thread_resume(Thread* thread, PerCPU* cpu);
 void thread_kill(Thread* thread);
 
@@ -360,7 +361,7 @@ void arch_pte_update(Env* env, uintptr_t access_addr, uintptr_t translated, VMem
 void arch_tlb_shootdown(Env* env);
 void arch_backtrace(void);
 
-CPUState new_thread_state(void* entrypoint, uintptr_t arg, uintptr_t stack, size_t stack_size, bool is_user);
+CPUState new_thread_state(uintptr_t ip, uintptr_t arg, uintptr_t sp, bool is_user);
 _Noreturn void do_context_switch(CPUState* state, uintptr_t addr_space);
 
 void* memmap_view(PageTable* address_space, uintptr_t phys_addr, uintptr_t virt_addr, size_t size, VMem_Flags flags);

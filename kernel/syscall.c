@@ -8,16 +8,6 @@
 #define SYS_FN(name) static uintptr_t syscall_ ## name(CPUState* state, uintptr_t cr3, PerCPU* cpu)
 typedef uintptr_t SyscallFn(CPUState* state, uintptr_t cr3, PerCPU* cpu);
 
-// forward decls
-#define X(name, ...) static uintptr_t syscall_ ## name (CPUState*, uintptr_t, PerCPU*);
-#include "syscall_table.h"
-
-SyscallFn* syscall_table[] = {
-    #define X(name, ...) [SYS_ ## name] = syscall_ ## name,
-    #include "syscall_table.h"
-};
-size_t syscall_table_count = SYS_MAX;
-
 #ifdef __x86_64__
 #include "threads.h"
 
@@ -131,6 +121,12 @@ static _Noreturn void yield_syscall(PerCPU* cpu, uintptr_t cr3, CPUState* state,
     do_context_switch(state, new_cr3);
 }
 
+static _Noreturn void yield_thread(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
+    state->interrupt_num = 32;
+    uintptr_t new_cr3 = x86_irq_int_handler(state, cr3, cpu);
+    do_context_switch(state, new_cr3);
+}
+
 static int get_obj_with_rights(Env* env, KObjectID id, int tag, KAccessRights exp, KObject** out_obj) {
     exp |= KACCESS_READ;
 
@@ -144,27 +140,22 @@ static int get_obj_with_rights(Env* env, KObjectID id, int tag, KAccessRights ex
 }
 #define GET_OBJ_WITH_RIGHTS(env, id, tag, exp, out_obj) get_obj_with_rights(env, id, tag, exp, (KObject**) out_obj)
 
-////////////////////////////////
-// Syscall table
-////////////////////////////////
-SYS_FN(sleep) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_sleep(t=%d us)\n", SYS_PARAM0));
-    sched_wait(SYS_PARAM0);
+#include "syscall_wrappers.h"
 
-    state->interrupt_num = 32;
-    uintptr_t new_cr3 = x86_irq_int_handler(state, cr3, cpu);
-    do_context_switch(state, new_cr3);
+////////////////////////////////
+// Syscall impls
+////////////////////////////////
+static uintptr_t syscall_test(CPUState* state, uintptr_t cr3, PerCPU* cpu, uint64_t a0) {
+    printf("SYS_test(%p)\n", a0);
+    return 0;
 }
 
-SYS_FN(debug_log) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_debug_log(vmo=%p, length=%d)\n", SYS_PARAM0, SYS_PARAM1));
-
+static uintptr_t syscall_debug_log(CPUState* state, uintptr_t cr3, PerCPU* cpu, KHandle vmo_handle, size_t len) {
     Env* env = cpu->current_thread->parent;
-    KObject_VMO* vmo = env_get_handle(env, SYS_PARAM0, NULL);
+    KObject_VMO* vmo = env_get_handle(env, vmo_handle, NULL);
     KCHECK(vmo, RESULT_NO_HANDLE);
     KCHECK(vmo->super.tag == KOBJECT_VMO, RESULT_WRONG_HANDLE);
 
-    size_t len = SYS_PARAM1;
     if (len > vmo->size) {
         len = vmo->size;
     }
@@ -184,6 +175,186 @@ SYS_FN(debug_log) {
     return 0;
 }
 
+static uintptr_t syscall_thread_create(CPUState* state, uintptr_t cr3, PerCPU* cpu, KHandle env_handle, uintptr_t ip, uintptr_t sp, uintptr_t arg, uintptr_t utcb, int flags) {
+    int res;
+    Env* env = cpu->current_thread->parent;
+
+    Env* t_env = env;
+    if (env_handle) {
+        KVALIDATE(GET_OBJ_WITH_RIGHTS(env, env_handle, KOBJECT_ENV, KACCESS_WRITE, &t_env));
+    }
+
+    if ((flags & THREAD_FLAGS_GRANT) && arg) {
+        KAccessRights rights;
+        KObject* obj = env_get_handle(env, arg, &rights);
+        KCHECK(obj, RESULT_BAD_PERMISSION);
+
+        // import argument as handle
+        env_grant_rights(t_env, KACCESS_WRITE, obj);
+    }
+
+    Thread* thread = thread_create(t_env, (ThreadEntryFn*) ip, arg, sp);
+    KCHECK(thread, RESULT_NO_MEM);
+
+    // make an accessible handle for the thread
+    thread_resume(thread, NULL);
+    return env_grant_rights(env, KACCESS_WRITE, &thread->super);
+}
+
+static uintptr_t syscall_thread_control(CPUState* state, uintptr_t cr3, PerCPU* cpu, KHandle thread_handle, int request, uint64_t arg, Rawptr ptr) {
+    Env* env = cpu->current_thread->parent;
+    Thread* thread = cpu->current_thread;
+
+    if (thread_handle && thread_handle != thread->super.id) {
+        thread = env_get_handle(env, thread_handle, NULL);
+        KCHECK(thread, RESULT_NO_HANDLE);
+        KCHECK(thread->super.tag == KOBJECT_THREAD, RESULT_WRONG_HANDLE);
+
+        // thread_control on another thread
+        return RESULT_BAD_PERMISSION;
+    } else {
+        // thread_control on self
+        switch (request) {
+            case THREAD_CTRL_EXIT: {
+                thread->client.is_dead = true;
+                yield_thread(state, cr3, cpu);
+            }
+
+            case THREAD_CTRL_SLEEP: {
+                sched_wait(arg);
+                yield_thread(state, cr3, cpu);
+            }
+
+            default: return RESULT_BAD_PERMISSION;
+        }
+    }
+    return 0;
+}
+
+static uintptr_t syscall_env_create(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
+    Env* parent = cpu->current_thread->parent;
+    Env* env    = env_create();
+    return env_grant_rights(parent, KACCESS_WRITE, &env->super);
+}
+
+static uintptr_t syscall_mem_map(CPUState* state, uintptr_t cr3, PerCPU* cpu, KHandle env_handle, MapControl ctrl, KHandle vmo_handle, uintptr_t offset, size_t size, int flags) {
+    int res;
+    size_t page_aligned_size = (size + PAGE_SIZE - 1) & -PAGE_SIZE;
+    KCHECK(page_aligned_size, 0);
+
+    uint32_t mem_flags = 0;
+    if (ctrl.prot & PROT_W) { mem_flags |= VMEM_PAGE_WRITE; }
+    if (ctrl.prot & PROT_X) { mem_flags |= VMEM_PAGE_EXEC;  }
+
+    Env* env = cpu->current_thread->parent;
+    Env* map_env = env;
+    if (env_handle != 0) {
+        KVALIDATE(GET_OBJ_WITH_RIGHTS(env, env_handle, KOBJECT_ENV, KACCESS_WRITE, &map_env));
+    }
+
+    KObject_VMO* vmo = NULL;
+    if (vmo_handle != 0) {
+        // TODO(NeGate): validate permissions correctly when mapping VMOs
+        KVALIDATE(GET_OBJ_WITH_RIGHTS(env, vmo_handle, KOBJECT_VMO, 0, &vmo));
+
+        if (map_env != env) {
+            env_grant_rights(map_env, 0, &vmo->super);
+        }
+    }
+
+    return vmem_map(map_env, vmo, ctrl.addr << 4ull, offset, page_aligned_size, mem_flags);
+}
+
+static uintptr_t syscall_mem_unmap(CPUState* state, uintptr_t cr3, PerCPU* cpu, KHandle env_handle, uintptr_t vaddr, size_t size) {
+    Env* env = cpu->current_thread->parent;
+
+    // we can't have multiple writers on the interval tree at once
+    // but we don't need a TLB shootdown until page writing.
+    rwlock_lock_exclusive(&env->addr_space.lock);
+    // TODO(NeGate): actually remove the PTEs
+    arch_tlb_shootdown(env);
+    // TODO(NeGate): actually recycle the memory from those PTEs
+    rwlock_unlock_exclusive(&env->addr_space.lock);
+    return 0;
+}
+
+static uintptr_t syscall_mem_translate(CPUState* state, uintptr_t cr3, PerCPU* cpu, KHandle env_handle, Rawptr addr) {
+    int res;
+    Env* env = cpu->current_thread->parent;
+    if (env_handle) {
+        // TODO(NeGate): viewing physical addresses shouldn't be unprivileged
+        KVALIDATE(GET_OBJ_WITH_RIGHTS(env, env_handle, KOBJECT_ENV, 0, &env));
+    }
+    return translate_vaddr(env, (uintptr_t) addr);
+}
+
+static uintptr_t syscall_vmo_create(CPUState* state, uintptr_t cr3, PerCPU* cpu, size_t size) {
+    Env* env = cpu->current_thread->parent;
+    KObject_VMO* vmo_ptr = vmo_create_physical(0, size, VMEM_PAGE_WRITE);
+    return env_grant_rights(env, KACCESS_WRITE, &vmo_ptr->super);
+}
+
+static uintptr_t syscall_vmo_get_size(CPUState* state, uintptr_t cr3, PerCPU* cpu, KHandle vmo_handle) {
+    Env* env = cpu->current_thread->parent;
+    KObject_VMO* vmo = env_get_handle(env, SYS_PARAM0, NULL);
+    KCHECK(vmo, RESULT_NO_HANDLE);
+    KCHECK(vmo->super.tag == KOBJECT_VMO, RESULT_WRONG_HANDLE);
+    return vmo->size;
+}
+
+static uintptr_t syscall_event_create(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
+    Env* parent = cpu->current_thread->parent;
+    KObject_Event* event = event_create();
+    return env_grant_rights(parent, 0, &event->super);
+}
+
+static uintptr_t syscall_event_wait(CPUState* state, uintptr_t cr3, PerCPU* cpu, KHandle event_handle) {
+    Env* env = cpu->current_thread->parent;
+    KObject_Event* event = env_get_handle(env, event_handle, NULL);
+    KCHECK(event, RESULT_NO_HANDLE);
+    KCHECK(event->super.tag == KOBJECT_EVENT, RESULT_WRONG_HANDLE);
+
+    bool res = event_wait(event, cpu->current_thread);
+    if (!res) {
+        // Continue running, we signalled already
+        return 0;
+    }
+    yield_thread(state, cr3, cpu);
+}
+
+static uintptr_t syscall_event_signal(CPUState* state, uintptr_t cr3, PerCPU* cpu, KHandle event_handle) {
+    Env* env = cpu->current_thread->parent;
+    KObject_Event* event = env_get_handle(env, event_handle, NULL);
+    KCHECK(event, RESULT_NO_HANDLE);
+    KCHECK(event->super.tag == KOBJECT_EVENT, RESULT_WRONG_HANDLE);
+
+    Thread* next = event_signal(event);
+    if (next != NULL) {
+        next->client.is_blocked = false;
+        next->wait_obj = NULL;
+        thread_resume(next, cpu);
+    }
+}
+
+extern KObject_Mailbox* kernel_root_mailbox;
+static uintptr_t syscall_root_mailbox(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
+    Env* parent = cpu->current_thread->parent;
+    return env_grant_rights(parent, KACCESS_WRITE, &kernel_root_mailbox->super);
+}
+
+#if 0
+////////////////////////////////
+// Syscall table
+////////////////////////////////
+SYS_FN(sleep) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_sleep(t=%d us)\n", SYS_PARAM0));
+    sched_wait(SYS_PARAM0);
+
+    state->interrupt_num = 32;
+    uintptr_t new_cr3 = x86_irq_int_handler(state, cr3, cpu);
+    do_context_switch(state, new_cr3);
+}
+
 SYS_FN(env_create) {
     ON_DEBUG(SYSCALL)(kprintf("SYS_env_create()\n"));
     Env* parent = cpu->current_thread->parent;
@@ -191,9 +362,8 @@ SYS_FN(env_create) {
     return env_grant_rights(parent, KACCESS_WRITE, &env->super);
 }
 
-extern KObject_Mailbox* kernel_root_mailbox;
-SYS_FN(get_root_mailbox) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_get_root_mailbox()\n"));
+SYS_FN(root_mailbox) {
+    ON_DEBUG(SYSCALL)(kprintf("SYS_root_mailbox()\n"));
     Env* parent = cpu->current_thread->parent;
     return env_grant_rights(parent, KACCESS_WRITE, &kernel_root_mailbox->super);
 }
@@ -308,132 +478,6 @@ SYS_FN(munmap) {
     // TODO(NeGate): actually recycle the memory from those PTEs
 
     rwlock_unlock_exclusive(&env->addr_space.lock);
-    return 0;
-}
-
-SYS_FN(thread_create) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_thread_create(env=%p, fn=%p, arg=%p, stack_size=%d, flags=%d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2, SYS_PARAM3, SYS_PARAM4));
-
-    int res;
-    Env* env = cpu->current_thread->parent;
-
-    Env* t_env = env;
-    if (SYS_PARAM0) {
-        KVALIDATE(GET_OBJ_WITH_RIGHTS(env, SYS_PARAM0, KOBJECT_ENV, KACCESS_WRITE, &t_env));
-    }
-
-    ThreadEntryFn* fn = (ThreadEntryFn*) SYS_PARAM1;
-    uintptr_t arg = SYS_PARAM2;
-    size_t stack_size = SYS_PARAM3;
-
-    if ((SYS_PARAM4 & 1) && arg) {
-        KAccessRights rights;
-        KObject* obj = env_get_handle(env, arg, &rights);
-        KCHECK(obj, RESULT_BAD_PERMISSION);
-
-        // import argument as handle
-        env_grant_rights(t_env, KACCESS_WRITE, obj);
-    }
-
-    uintptr_t stack_ptr = vmem_map(t_env, 0, 0, 0, stack_size, VMEM_PAGE_WRITE, NULL);
-    KCHECK(stack_ptr, RESULT_NO_MEM);
-
-    Thread* thread = thread_create(t_env, fn, arg, stack_ptr, stack_size);
-    KCHECK(thread, RESULT_NO_MEM);
-
-    // make an accessible handle for the thread
-    thread_resume(thread, NULL);
-    return env_grant_rights(env, KACCESS_WRITE, &thread->super);
-}
-
-SYS_FN(thread_setattr) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_thread_setattr(%p, %d, %d)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2));
-    Env* env = cpu->current_thread->parent;
-
-    Thread* thread = env_get_handle(env, SYS_PARAM0, NULL);
-    KCHECK(thread, RESULT_NO_HANDLE);
-    KCHECK(thread->super.tag == KOBJECT_THREAD, RESULT_WRONG_HANDLE);
-
-    if (SYS_PARAM1 == 0) {
-        // thread->client.weight = 20;
-    } else if (SYS_PARAM1 == 1) {
-        // TODO(NeGate): make this safe
-        int i = 0;
-        const char* str = (const char*) SYS_PARAM2;
-        for (; i < 31 && str[i]; i++) {
-            thread->tag[i] = str[i];
-        }
-        thread->tag[i] = 0;
-        // kprintf("SET NAME '%s'\n", thread->tag);
-    }
-
-    return 0;
-}
-
-SYS_FN(thread_exit) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_thread_exit(code=%d)\n", SYS_PARAM0));
-
-    Thread* curr = cpu->current_thread;
-    curr->client.is_dead = true;
-
-    state->interrupt_num = 32;
-    uintptr_t new_cr3 = x86_irq_int_handler(state, cr3, cpu);
-    do_context_switch(state, new_cr3);
-}
-
-SYS_FN(event_create) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_event_create()\n"));
-    Env* parent = cpu->current_thread->parent;
-    KObject_Event* event = event_create();
-    return env_grant_rights(parent, 0, &event->super);
-}
-
-SYS_FN(event_wait) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_event_wait(%p)\n", SYS_PARAM0));
-
-    Env* env = cpu->current_thread->parent;
-    KObject_Event* event = env_get_handle(env, SYS_PARAM0, NULL);
-    KCHECK(event, RESULT_NO_HANDLE);
-    KCHECK(event->super.tag == KOBJECT_EVENT, RESULT_WRONG_HANDLE);
-
-    bool res = event_wait(event, cpu->current_thread);
-    if (!res) {
-        // Continue running, we signalled already
-        return 0;
-    }
-
-    // Pick a new task
-    state->interrupt_num = 32;
-    uintptr_t new_cr3 = x86_irq_int_handler(state, cr3, cpu);
-    do_context_switch(state, new_cr3);
-}
-
-SYS_FN(event_signal) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_event_signal(%p)\n", SYS_PARAM0));
-
-    Env* env = cpu->current_thread->parent;
-    KObject_Event* event = env_get_handle(env, SYS_PARAM0, NULL);
-    KCHECK(event, RESULT_NO_HANDLE);
-    KCHECK(event->super.tag == KOBJECT_EVENT, RESULT_WRONG_HANDLE);
-
-    Thread* next = event_signal(event);
-    if (next != NULL) {
-        next->client.is_blocked = false;
-        next->wait_obj = NULL;
-        thread_resume(next, cpu);
-    }
-    return 0;
-}
-
-SYS_FN(test) {
-    kprintf("SYS_test(%p)\n", SYS_PARAM0);
-
-    for (size_t j = 0; j < 50; j++) {
-        for (size_t i = 0; i < 50; i++) {
-            boot_info->fb.pixels[i + (j * boot_info->fb.stride)] = SYS_PARAM0;
-        }
-    }
-
     return 0;
 }
 
@@ -683,6 +727,7 @@ SYS_FN(tsc_freq) {
     ON_DEBUG(SYSCALL)(kprintf("SYS_tsc_freq()\n"));
     return boot_info->tsc_freq;
 }
+#endif
 
 #undef SYS_PARAM0
 #undef SYS_PARAM1

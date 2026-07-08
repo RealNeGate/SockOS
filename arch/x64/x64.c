@@ -46,7 +46,6 @@ void x86_set_kernel_gs(int core_id) {
 static atomic_int cores_ready;
 
 void pci_init(void);
-void ps2_init(void);
 void arch_init(int id) {
     // Stuff we only handle once
     x86_set_kernel_gs(id);
@@ -76,7 +75,7 @@ void arch_init(int id) {
         store_alloc();
         pci_init();
 
-        kernel_idle_state = new_thread_state(kernel_idle, 0, 0, 0, false);
+        kernel_idle_state = new_thread_state((uintptr_t) kernel_idle, 0, 0, false);
 
         x86_irq_startup(id);
         x86_boot_cores();
