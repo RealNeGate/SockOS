@@ -49,7 +49,7 @@ for i=1,#tree do
             log_str[j] = string.format(", SYS_PARAM%d", j-1)
             fmt_str[j] = "%p"
         end
-        lines[#lines + 1] = string.format("    ON_DEBUG(SYSCALL)(kprintf(\"SYS_%s(%s)\"%s));", name, table.concat(fmt_str, ", "), table.concat(log_str))
+        lines[#lines + 1] = string.format("    ON_DEBUG(SYSCALL)(kprintf(\"SYS_%s(%s)\\n\"%s));", name, table.concat(fmt_str, ", "), table.concat(log_str))
         lines[#lines + 1] = string.format("    return syscall_%s(state, cr3, cpu%s);", name, table.concat(args_str))
         lines[#lines + 1] = "}"
         lines[#lines + 1] = ""

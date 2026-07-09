@@ -125,7 +125,9 @@ static int ebr_thread_fn(void* arg) {
 static _Atomic bool init;
 void ebr_init(void) {
     if (atomic_cas_acq_rel(&init, &(bool){ false }, true)) {
-        Thread* t = thread_create(NULL, ebr_thread_fn, 0, (uintptr_t) kheap_alloc(KERNEL_STACK_SIZE), KERNEL_STACK_SIZE);
+        uintptr_t stack = (uintptr_t) kheap_alloc(KERNEL_STACK_SIZE);
+
+        Thread* t = thread_create(NULL, ebr_thread_fn, 0, stack+KERNEL_STACK_SIZE);
         thread_resume(t, NULL);
     }
 }

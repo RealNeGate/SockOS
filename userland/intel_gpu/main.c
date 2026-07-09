@@ -32,19 +32,20 @@ typedef struct {
     uintptr_t base_dsm;
     uintptr_t gmch_ctrl;
 
-    // VMOs for the BARs
-    KHandle bar0, bar2;
-
     // Mapped BARs
     size_t ggtt_size;
     volatile uint32_t* mmio;
     volatile uint64_t* ggtt;
     volatile uint8_t* main_mem;
 
+    void* scratch_page;
+    uintptr_t scratch_paddr;
+
+    // VMEM allocator
+    uintptr_t vaddr_gtt_mark;
+
     // Cursor stuff
-    size_t cursor_paddr;
-    size_t cursor_gpu_addr;
-    uint32_t* cursor_data;
+    uintptr_t cursor_gpu_addr;
 } IntelGPU;
 
 static IntelGPU gpu;
@@ -63,7 +64,7 @@ static void allocate_buffers(void) {
         igpu_mmio_write(addr + 0x9C, igpu_mmio_read(addr + 0x9C));
     }
 
-    syscall(SYS_sleep, 20000);
+    thread_sleep(20000);
 
     // igpu_mmio_write(0x7017C, buf_config(0, 32));  // CUR_BUF_CFG_A
     // igpu_mmio_write(0x7027C, buf_config(32, 160)); // PLANE_BUF_CFG_1_A
@@ -96,20 +97,40 @@ static void allocate_buffers(void) {
     igpu_mmio_write(0x70084, gpu.cursor_gpu_addr); // CUR_BASE_A
 }
 
+static void* igpu_mmap(size_t size, uintptr_t* out_gpu_vaddr) {
+    size_t num_pages = (size + 4095) / 4096;
+    size = num_pages * 4096;
+
+    char* vaddr = mem_map_private(NULL_HANDLE, size, PROT_RW, 0);
+
+    uintptr_t gpu_vaddr = gpu.vaddr_gtt_mark;
+    uintptr_t gtt_start = gpu_vaddr / 4096;
+    gpu.vaddr_gtt_mark += size;
+
+    // Update TLB
+    for (size_t i = 0; i < num_pages; i++) {
+        uintptr_t paddr = mem_translate(NULL_HANDLE, vaddr + i*4096);
+
+        gpu.ggtt[gtt_start + i] = paddr | 1;
+        vaddr += 4096;
+    }
+    return vaddr;
+}
+
 static int WIDTH = 1720, STRIDE = 1728, HEIGHT = 1440;
 static void intel_gpu_driver_init(KHandle display_pci) {
     // BDSM_0_2_0_PCI - Mirror of Base Data of Stolen Memory
     gpu.base_dsm = syscall(SYS_pci_read_config_32, display_pci, 0x5C) & 0xFFFFFu;
 
+    PCI_Desc pci;
+    int res = syscall(SYS_pci_claim_device, display_pci, &pci);
+
     // GTTMMADR, low 8MB is MMIO, high 8MB is global GTT
-    size_t size;
-    gpu.bar0 = syscall(SYS_pci_get_bar, display_pci, 0, &size);
-    gpu.mmio = mmap(0, gpu.bar0, 0, size, PROT_READ | PROT_WRITE, 0);
+    gpu.mmio = mem_map(NULL_HANDLE, 0, pci.bars[0], 0, pci.sizes[0], PROT_RW, 0);
     gpu.ggtt = (volatile uint64_t*) ((uint8_t*) gpu.mmio + 0x800000);
 
     // GMADR, 4GiB region for main memory
-    gpu.bar2 = syscall(SYS_pci_get_bar, display_pci, 2, &size);
-    gpu.main_mem = mmap(0, gpu.bar2, 0, size, PROT_READ | PROT_WRITE, 0);
+    gpu.main_mem = mem_map(NULL_HANDLE, 0, pci.bars[2], 0, pci.sizes[2], PROT_RW, 0);
 
     // GGC_0_0_0_PCI - GMCH Graphics Control
     gpu.gmch_ctrl = syscall(SYS_pci_read_config_32, display_pci, 0x50);
@@ -121,23 +142,9 @@ static void intel_gpu_driver_init(KHandle display_pci) {
         #embed "../desktop/cursor.bin"
     };
 
-    uintptr_t cursor_paddr;
-    gpu.cursor_data = (uint32_t*) syscall(SYS_mpin, 0, 0, 4*4096, &cursor_paddr);
-    for (size_t j = 0; j < 56; j++) {
-        for (size_t i = 0; i < 56; i++) {
-            const uint8_t* pixel = &cursor_raw[(j*56 + i) * 4];
-            gpu.cursor_data[j*64 + i] = (pixel[3] << 24u) | (pixel[0] << 16u) | (pixel[1] << 8u) | (pixel[2] << 0u);
-        }
-    }
-
-    for (size_t i = 0; i < 4096; i += 64/4) {
-        _mm_clflush(&gpu.cursor_data[i]);
-    }
-
-    gpu.cursor_paddr = cursor_paddr;
-
-    uintptr_t scratch_paddr;
-    syscall(SYS_mpin, 0, 0, 4096, &scratch_paddr);
+    // it's writable and mapped whenever we need to fill some pad space
+    gpu.scratch_page  = mem_map_private(NULL_HANDLE, 4096, PROT_RW, 0);
+    gpu.scratch_paddr = mem_translate(NULL_HANDLE, gpu.scratch_page);
 
     uint32_t plane_size = igpu_mmio_read(0x70190);
     WIDTH  = (plane_size & 0xFFFFu); + 1;
@@ -149,18 +156,26 @@ static void intel_gpu_driver_init(KHandle display_pci) {
         size_t gtt_start = ((STRIDE*HEIGHT*4) + 4095) / 4096;
         size_t gtt_end   = gpu.ggtt_size / sizeof(uint64_t);
 
-        // Carve out 16KiB for the cursor
-        gpu.cursor_gpu_addr = gtt_start * 4096;
-        for (size_t i = 0; i < 4; i++) {
-            gpu.ggtt[gtt_start++] = cursor_paddr + i*4096 + 1;
-        }
-
         // leave the UEFI framebuffer at the base of the stolen memory untouched
         for (size_t i = gtt_start; i < gtt_end; i++) {
-            gpu.ggtt[i] = scratch_paddr | 1;
+            gpu.ggtt[i] = gpu.scratch_paddr | 1;
         }
 
-        volatile uint32_t head = *(volatile uint32_t*) &gpu.ggtt[gtt_end - 1];
+        gpu.vaddr_gtt_mark = gtt_start;
+        // volatile uint32_t head = *(volatile uint32_t*) &gpu.ggtt[gtt_end - 1];
+    }
+
+    // Upload cursor image
+    uint32_t* cursor_data = igpu_mmap(4*4096, &gpu.cursor_gpu_addr);
+    for (size_t j = 0; j < 56; j++) {
+        for (size_t i = 0; i < 56; i++) {
+            const uint8_t* pixel = &cursor_raw[(j*56 + i) * 4];
+            cursor_data[j*64 + i] = (pixel[3] << 24u) | (pixel[0] << 16u) | (pixel[1] << 8u) | (pixel[2] << 0u);
+        }
+    }
+
+    for (size_t i = 0; i < 4096; i += 64/4) {
+        _mm_clflush(&cursor_data[i]);
     }
 
     allocate_buffers();
@@ -248,7 +263,7 @@ int _start(KHandle display_pci) {
     tsc_freq = syscall(SYS_tsc_freq);
     intel_gpu_driver_init(display_pci);
 
-    KHandle root_mailbox = syscall(SYS_get_root_mailbox);
+    KHandle root_mailbox = get_root_mailbox();
 
     // Find USB mouse
     /* KHandle mouse_dev = 0;
@@ -298,7 +313,7 @@ int _start(KHandle display_pci) {
 
         uint64_t elapsed = (__rdtsc() - start) / tsc_freq;
         if (elapsed < 16666) {
-            syscall(SYS_sleep, 16666 - elapsed);
+            thread_sleep(16666 - elapsed);
         }
     }
 

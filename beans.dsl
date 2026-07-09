@@ -38,14 +38,12 @@
 (syscall event_signal   int       (KHandle))
 
 // PCI
-(syscall pci_device_count    size_t   ())
-(syscall pci_claim_device    KHandle  (size_t Rawptr))
-(syscall pci_bar_count       size_t   ())
-(syscall pci_get_bar         KHandle  (KHandle size_t Rawptr))
+(syscall pci_peek_device     KHandle  (size_t  Rawptr))
+(syscall pci_claim_device    KHandle  (KHandle Rawptr))
 (syscall pci_read_config_32  uint32_t (KHandle size_t))
 (syscall pci_write_config_32 void     (KHandle size_t uint32_t))
 
-(syscall mailbox_create KHandle   ())
+(syscall mailbox_create KHandle   (int))
 (syscall mailbox_send   uintptr_t ())
 (syscall mailbox_wait   uintptr_t ())
 (syscall mailbox_reply  uintptr_t ())
@@ -53,3 +51,5 @@
 // Namespace
 (syscall root_mailbox   KHandle ())
 
+// TODO(NeGate): get rid of this later
+(syscall tsc_freq       uint64_t ())

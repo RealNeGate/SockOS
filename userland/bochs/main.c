@@ -175,19 +175,18 @@ static void redraw_cell(int cell_x, int cell_y) {
 int _start(KHandle display_pci) {
     uint64_t tsc_freq = syscall(SYS_tsc_freq);
 
-    size_t size;
-    int fb_bar = syscall(SYS_pci_get_bar, display_pci, 0, &size);
-    volatile uint32_t* fb = mmap(0, fb_bar, 0, size, PROT_READ | PROT_WRITE, 0);
+    PCI_Desc pci;
+    int res = syscall(SYS_pci_claim_device, display_pci, &pci);
 
-    int vbe_bar = syscall(SYS_pci_get_bar, display_pci, 2, &size);
-    volatile uint16_t* display_mmio = mmap(0, vbe_bar, 0, size, PROT_READ | PROT_WRITE, 0);
+    volatile uint32_t* fb = mem_map(NULL_HANDLE, 0, pci.bars[0], 0, pci.sizes[0], PROT_RW, 0);
+    volatile uint16_t* display_mmio = mem_map(NULL_HANDLE, 0, pci.bars[2], 0, pci.sizes[2], PROT_RW, 0);
 
     volatile uint16_t* vbe = &display_mmio[0x280];
     view.width  = vbe[VBE_XRES];
     view.height = vbe[VBE_YRES];
     view.stride = vbe[VBE_VIRT_WIDTH];
 
-    KHandle root_mailbox = syscall(SYS_get_root_mailbox);
+    KHandle root_mailbox = get_root_mailbox();
 
     // Find USB mouse
     /* KHandle mouse_dev = 0;

@@ -86,7 +86,7 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
 
     // tiny i know
     size_t stack_size = 2*1024*1024;
-    uintptr_t stack_ptr = vmem_map(env, NULL, 0, 0, stack_size, VMEM_PAGE_WRITE, NULL);
+    uintptr_t stack_ptr = vmem_map(env, 0, 0, 0, stack_size, VMEM_PAGE_WRITE);
 
     ON_DEBUG(ENV)(kprintf("[elf] entry=%p\n", elf_header->e_entry));
     ON_DEBUG(ENV)(kprintf("[elf] stack=%p\n", stack_ptr));
@@ -94,7 +94,7 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
     KObject_VMO* initrd_vmo = vmo_create_physical(kaddr2paddr(boot_info->initrd), boot_info->initrd_size, VMEM_PAGE_WRITE);
     KObjectID initrd_handle = env_grant_rights(env, KACCESS_WRITE, &initrd_vmo->super);
 
-    return thread_create(env, (ThreadEntryFn*) elf_header->e_entry, initrd_handle, stack_ptr, stack_size);
+    return thread_create(env, (ThreadEntryFn*) elf_header->e_entry, initrd_handle, stack_ptr + stack_size);
 }
 
 size_t map_entry_count;

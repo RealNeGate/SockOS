@@ -112,6 +112,16 @@ typedef struct {
     _Alignas(64) uint64_t words[8];
 } UTCB;
 
+// user-land state of PCI device
+typedef struct {
+    uint32_t vend_prod;
+
+    // VMOs or 0 if I/O
+    int bar_count;
+    size_t sizes[6];
+    KHandle bars[6];
+} PCI_Desc;
+
 #ifndef KERNEL_LAND
 #include "syscall_helper.h"
 

@@ -77,7 +77,7 @@ void fault_handler(void) {
 
 void _putchar(char ch) {
     if (log_stream == 0) {
-        log_stream = syscall(SYS_vmo_create, 0, 4*1024);
+        log_stream = syscall(SYS_vmo_create, 4*1024);
         log_buffer = mem_map(NULL_HANDLE, 0, log_stream, 0, 4*1024, PROT_RW, 0);
     } else if (log_used == 4096) {
         syscall(SYS_debug_log, log_stream, log_used);
@@ -136,7 +136,7 @@ static DriverEntry* get_driver(uint32_t key) {
 }
 
 static bool parse_driver_list(FileEntry* file) {
-    char* src = mem_map_private(NULL_HANDLE, 0, file->unpacked_len, PROT_READ | PROT_WRITE, 0);
+    char* src = mem_map_private(NULL_HANDLE, file->unpacked_len, PROT_RW, 0);
     int res = LZ4_decompress_safe(file->data, src, file->data_len, file->unpacked_len);
     if (file->unpacked_len != res) {
         return false;
@@ -205,7 +205,7 @@ static bool exec(FileEntry* file, KHandle arg) {
         return false;
     }
 
-    char* contents = mem_map_private(NULL_HANDLE, 0, file->unpacked_len, PROT_READ | PROT_WRITE, 0);
+    char* contents = mem_map_private(NULL_HANDLE, file->unpacked_len, PROT_RW, 0);
     int res = LZ4_decompress_safe(file->data, contents, file->data_len, file->unpacked_len);
     if (file->unpacked_len != res) {
         return false;
@@ -245,7 +245,7 @@ static bool exec(FileEntry* file, KHandle arg) {
 
     // Create environment
     KHandle child_env = syscall(SYS_env_create);
-    KHandle section_vmo = syscall(SYS_vmo_create, 0, total_memsz);
+    KHandle section_vmo = syscall(SYS_vmo_create, total_memsz);
 
     enum {
         DT_FLAGS_1 = 0x6ffffffb,
@@ -262,8 +262,8 @@ static bool exec(FileEntry* file, KHandle arg) {
     char* strtab = NULL;
 
     // Place ELF into env
-    size_t curr_memsz = 0;
-    uintptr_t elf_vmap = (uintptr_t) mem_map_private(child_env, hi - lo, PROT_READ | PROT_WRITE, 0);
+    size_t curr_pos = 0;
+    char* elf_vmap   = mem_map_private(child_env, hi - lo, PROT_RW, 0);
     char* elf_mirror = mem_map_private(NULL_HANDLE, hi - lo, PROT_NONE, 0);
     for (size_t i = 0; i < elf_header->e_phnum; i++) {
         Elf64_Phdr* segment = (Elf64_Phdr*) (segments + i*segment_size);
@@ -285,14 +285,14 @@ static bool exec(FileEntry* file, KHandle arg) {
             memsz = (memsz + page_size - 1) & -page_size;
 
             // Mirror into current env
-            char* dst = mem_map(NULL_HANDLE, (uintptr_t) elf_mirror + vaddr, section_vmo, curr_memsz, , memsz, PROT_READ | PROT_WRITE, );
+            char* dst = mem_map(NULL_HANDLE, elf_mirror + vaddr, section_vmo, curr_pos, memsz, PROT_RW, 0);
             if (segment->p_filesz > 0) {
                 memcpy(&dst[offset], &contents[segment->p_offset], segment->p_filesz);
             }
 
             // Map into child env
-            mem_map(child_env, (uintptr_t) elf_vmap + vaddr, section_vmo, curr_memsz, memsz, PROT_RW, 0);
-            curr_memsz += memsz;
+            mem_map(child_env, elf_vmap + vaddr, section_vmo, curr_pos, memsz, PROT_RW, 0);
+            curr_pos += memsz;
         }
     }
 
@@ -314,7 +314,7 @@ static bool exec(FileEntry* file, KHandle arg) {
     // ...
 
     // Spin up the main thread
-    void* fn = (void*) (elf_vmap + (elf_header->e_entry - lo));
+    void* fn = elf_vmap + (elf_header->e_entry - lo);
     KHandle thread = thread_create(child_env, fn, arg, 2*1024*1024, THREAD_FLAGS_GRANT);
     return true;
 }
@@ -341,10 +341,10 @@ int _start(KHandle bootstrap_vmo) {
     }
 
     // Find the first set of connected PCI devices
-    int dev_count = syscall(SYS_pci_device_count);
-    for (int i = 0; i < dev_count; i++) {
+    for (int i = 0;; i++) {
         uint32_t key;
-        KHandle dev = syscall(SYS_pci_claim_device, i, &key);
+        KHandle dev = syscall(SYS_pci_peek_device, i, &key);
+        if (dev == RESULT_NO_HANDLE) { break; }
 
         DriverEntry* driver = get_driver(key);
         if (driver != NULL) {

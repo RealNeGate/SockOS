@@ -48,7 +48,7 @@ static void assert_msg(const char* str) {
 void _putchar(char ch) {
     SPIN_LOCK(&log_lock);
     if (log_stream == 0) {
-        log_stream = syscall(SYS_vmo_create, 0, 4*1024);
+        log_stream = syscall(SYS_vmo_create, 4*1024);
         log_buffer = mem_map(NULL_HANDLE, 0, log_stream, 0, 4*1024, PROT_RW, 0);
     } else if (log_used == 4096) {
         syscall(SYS_debug_log, log_stream, log_used);
@@ -298,10 +298,10 @@ static void usb_fsm(int msg, int port, int slot) {
             printf("[usb]  Port%u is associated with Slot%u\n", port, slot);
 
             uintptr_t in_ctx_paddr;
-            InputContext* in_ctx = pin(4096, &in_ctx_paddr);
+            InputContext* in_ctx = alloc_pinned_page(&in_ctx_paddr);
 
             uintptr_t out_ctx_paddr;
-            uint32_t* out_ctx = pin(4096, &out_ctx_paddr);
+            uint32_t* out_ctx = alloc_pinned_page(&out_ctx_paddr);
 
             HCI_Ring* xfer_ring = &dev->xfer_ring[0];
             ring_alloc(xfer_ring, 256);
@@ -370,7 +370,7 @@ static void usb_fsm(int msg, int port, int slot) {
             dev->mailbox = syscall(SYS_mailbox_create, 1);
             dev->ipc_ring_evt[0] = event_create();
 
-            thread_create(NULL_HANDLE, usb_device_thread, dev, 8192, 0);
+            thread_create(NULL_HANDLE, usb_device_thread, (uintptr_t) dev, 8192, 0);
         } break;
     }
 }
@@ -627,7 +627,7 @@ static void usb_device_thread(void* d) {
                 int i       = (index - 1)*2 + (dir_in ? 4 : 3);
 
                 uintptr_t val = (i - 2) | (DEV_SLOT(dev) << 32u);
-                thread_create(NULL_HANDLE, usb_endpoint_thread, (void*) val, 8192, 0);
+                thread_create(NULL_HANDLE, usb_endpoint_thread, val, 8192, 0);
             }
         }
     }
@@ -679,7 +679,7 @@ static void usb_endpoint_thread(void* arg) {
             uintptr_t addr = ((uintptr_t) packet) & ~4095ull;
             if (addr != last_vaddr) {
                 last_vaddr = addr;
-                last_paddr = mem_translate(NULL_HANDLE, last_vaddr);
+                last_paddr = mem_translate(NULL_HANDLE, (void*) last_vaddr);
             }
             uintptr_t data_paddr = last_paddr + (((uintptr_t) packet) & 4095ull);
 
@@ -712,23 +712,27 @@ static void usb_endpoint_thread(void* arg) {
 }
 
 #define USBSTS_CNR (1<<11)
-int _start(KHandle pci_device) {
+int _start(KHandle pci_handle) {
     root_mailbox = get_root_mailbox();
 
-    size_t size;
-    KHandle bar0 = syscall(SYS_pci_get_bar, pci_device, 0, &size);
-    mmio = mem_map(NULL_HANDLE, 0, bar0, 0, max_slots*sizeof(USB_Device), PROT_RW, 0);
+    PCI_Desc pci;
+    int res = syscall(SYS_pci_claim_device, pci_handle, &pci);
+    if (res < 0) {
+        thread_exit(1);
+    }
+
+    mmio = mem_map(NULL_HANDLE, 0, pci.bars[0], 0, pci.sizes[0], PROT_RW, 0);
 
     uintptr_t dcbaap_paddr;
-    dcbaap = pin(4096, &dcbaap_paddr);
+    dcbaap = alloc_pinned_page(&dcbaap_paddr);
 
     ring_alloc(&crcr, 256);
 
     uintptr_t ers0_paddr;
-    uint32_t* ers0 = pin(4096, &ers0_paddr);
+    uint32_t* ers0 = alloc_pinned_page(&ers0_paddr);
 
     uintptr_t erst_paddr;
-    uint32_t* erst = pin(4096, &erst_paddr);
+    uint32_t* erst = alloc_pinned_page(&erst_paddr);
 
     // ERS0 has 4K worth of TRB entries
     erst[0] = ers0_paddr & 0xFFFFFFFF;
