@@ -1,4 +1,4 @@
-(syscall test           void    (uint64_t))
+(syscall test           void      (uint64_t))
 
 // Debug Tracing
 //                                 vmo     size
@@ -34,8 +34,7 @@
 
 // Events
 (syscall event_create   KHandle   ())
-(syscall event_wait     int       (KHandle))
-(syscall event_signal   int       (KHandle))
+(syscall event_op       int       (int KHandle))
 
 // PCI
 (syscall pci_peek_device     KHandle  (size_t  Rawptr))
@@ -43,13 +42,11 @@
 (syscall pci_read_config_32  uint32_t (KHandle size_t))
 (syscall pci_write_config_32 void     (KHandle size_t uint32_t))
 
-(syscall mailbox_create KHandle   (int))
-(syscall mailbox_send   uintptr_t ())
-(syscall mailbox_wait   uintptr_t ())
-(syscall mailbox_reply  uintptr_t ())
+(syscall mailbox_create KHandle   ())
+(syscall mailbox_ipc    uintptr_t (KHandle KHandle MSG_Tag KHandle))
 
 // Namespace
-(syscall root_mailbox   KHandle ())
+(syscall root_mailbox   KHandle   ())
 
 // TODO(NeGate): get rid of this later
-(syscall tsc_freq       uint64_t ())
+(syscall tsc_freq       uint64_t  ())

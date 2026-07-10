@@ -53,7 +53,7 @@ IPC_Ring* ipc_ring_alloc(size_t block_size, size_t cap, KHandle* out_vmo) {
     // round to page
     size = (size + 4095ull) & ~4095ull;
 
-    KHandle ring_vmo = syscall(SYS_vmo_create, 0, size);
+    KHandle ring_vmo = vmo_create(size);
     IPC_Ring* ring = mem_map(NULL_HANDLE, 0, ring_vmo, 0, size, PROT_RW, 0);
     ring->cap = cap;
     ring->block_size = block_size;

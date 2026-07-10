@@ -7,6 +7,8 @@
 #define IPC_RING_IMPL
 #include "../ipc_ring.h"
 
+#include "../protocols.h"
+
 #include "usb.h"
 
 static volatile uint32_t* mmio;
@@ -48,10 +50,10 @@ static void assert_msg(const char* str) {
 void _putchar(char ch) {
     SPIN_LOCK(&log_lock);
     if (log_stream == 0) {
-        log_stream = syscall(SYS_vmo_create, 4*1024);
+        log_stream = vmo_create(4*1024);
         log_buffer = mem_map(NULL_HANDLE, 0, log_stream, 0, 4*1024, PROT_RW, 0);
     } else if (log_used == 4096) {
-        syscall(SYS_debug_log, log_stream, log_used);
+        sys_debug_log(log_stream, log_used);
         log_used = 0;
     }
 
@@ -449,7 +451,7 @@ static void interrupt_in_try(USB_Device* dev, int pipe, char* data, size_t data_
 
 static void usb_device_thread(void* d) {
     USB_Device* dev = d;
-    mailbox_send(root_mailbox, 0, DEV_SLOT(dev), 0, NULL, &(KHandle){ dev->mailbox });
+    name_register_driver(root_mailbox, DEV_SLOT(dev), dev->mailbox);
 
     USB_RequestBlock urb = {
         .dev   = dev,

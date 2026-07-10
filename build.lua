@@ -127,7 +127,7 @@ do
 
     table.insert(lines, "# STDLIB")
     build("objs/stdlib.so", "cc", "userland/stdlib/entry.c", {
-        flags = elf_cflags.." -fuse-ld=lld -shared -fPIC"
+        flags = elf_cflags.." -fuse-ld=lld -shared -Wl,--hash-style=both -fPIC"
     })
 
     table.insert(lines, "# INTEL GPU")

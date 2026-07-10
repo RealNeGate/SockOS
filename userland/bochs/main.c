@@ -173,10 +173,10 @@ static void redraw_cell(int cell_x, int cell_y) {
 }
 
 int _start(KHandle display_pci) {
-    uint64_t tsc_freq = syscall(SYS_tsc_freq);
+    uint64_t tsc_freq = syscall0(SYS_tsc_freq);
 
     PCI_Desc pci;
-    int res = syscall(SYS_pci_claim_device, display_pci, &pci);
+    int res = syscall2(SYS_pci_claim_device, display_pci, (uint64_t) &pci);
 
     volatile uint32_t* fb = mem_map(NULL_HANDLE, 0, pci.bars[0], 0, pci.sizes[0], PROT_RW, 0);
     volatile uint16_t* display_mmio = mem_map(NULL_HANDLE, 0, pci.bars[2], 0, pci.sizes[2], PROT_RW, 0);

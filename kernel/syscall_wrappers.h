@@ -92,18 +92,12 @@ static uintptr_t SYSW_event_create(CPUState* state, uintptr_t cr3, PerCPU* cpu) 
     return syscall_event_create(state, cr3, cpu);
 }
 
-static uintptr_t syscall_event_wait(CPUState* state, uintptr_t cr3, PerCPU* cpu, KHandle a0);
-static uintptr_t SYSW_event_wait(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
-    KHandle         arg_0 = (KHandle) SYS_PARAM0;
-    ON_DEBUG(SYSCALL)(kprintf("SYS_event_wait(%p)\n", SYS_PARAM0));
-    return syscall_event_wait(state, cr3, cpu, arg_0);
-}
-
-static uintptr_t syscall_event_signal(CPUState* state, uintptr_t cr3, PerCPU* cpu, KHandle a0);
-static uintptr_t SYSW_event_signal(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
-    KHandle         arg_0 = (KHandle) SYS_PARAM0;
-    ON_DEBUG(SYSCALL)(kprintf("SYS_event_signal(%p)\n", SYS_PARAM0));
-    return syscall_event_signal(state, cr3, cpu, arg_0);
+static uintptr_t syscall_event_op(CPUState* state, uintptr_t cr3, PerCPU* cpu, int a0, KHandle a1);
+static uintptr_t SYSW_event_op(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
+    int             arg_0 = (int) SYS_PARAM0;
+    KHandle         arg_1 = (KHandle) SYS_PARAM1;
+    ON_DEBUG(SYSCALL)(kprintf("SYS_event_op(%p, %p)\n", SYS_PARAM0, SYS_PARAM1));
+    return syscall_event_op(state, cr3, cpu, arg_0, arg_1);
 }
 
 static uintptr_t syscall_pci_peek_device(CPUState* state, uintptr_t cr3, PerCPU* cpu, size_t a0, Rawptr a1);
@@ -139,29 +133,20 @@ static uintptr_t SYSW_pci_write_config_32(CPUState* state, uintptr_t cr3, PerCPU
     return syscall_pci_write_config_32(state, cr3, cpu, arg_0, arg_1, arg_2);
 }
 
-static uintptr_t syscall_mailbox_create(CPUState* state, uintptr_t cr3, PerCPU* cpu, int a0);
+static uintptr_t syscall_mailbox_create(CPUState* state, uintptr_t cr3, PerCPU* cpu);
 static uintptr_t SYSW_mailbox_create(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
-    int             arg_0 = (int) SYS_PARAM0;
-    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_create(%p)\n", SYS_PARAM0));
-    return syscall_mailbox_create(state, cr3, cpu, arg_0);
+    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_create()\n"));
+    return syscall_mailbox_create(state, cr3, cpu);
 }
 
-static uintptr_t syscall_mailbox_send(CPUState* state, uintptr_t cr3, PerCPU* cpu);
-static uintptr_t SYSW_mailbox_send(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_send()\n"));
-    return syscall_mailbox_send(state, cr3, cpu);
-}
-
-static uintptr_t syscall_mailbox_wait(CPUState* state, uintptr_t cr3, PerCPU* cpu);
-static uintptr_t SYSW_mailbox_wait(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_wait()\n"));
-    return syscall_mailbox_wait(state, cr3, cpu);
-}
-
-static uintptr_t syscall_mailbox_reply(CPUState* state, uintptr_t cr3, PerCPU* cpu);
-static uintptr_t SYSW_mailbox_reply(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
-    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_reply()\n"));
-    return syscall_mailbox_reply(state, cr3, cpu);
+static uintptr_t syscall_mailbox_ipc(CPUState* state, uintptr_t cr3, PerCPU* cpu, KHandle a0, KHandle a1, MSG_Tag a2, KHandle a3);
+static uintptr_t SYSW_mailbox_ipc(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
+    KHandle         arg_0 = (KHandle) SYS_PARAM0;
+    KHandle         arg_1 = (KHandle) SYS_PARAM1;
+    MSG_Tag         arg_2; memcpy(&arg_2, &SYS_PARAM2, sizeof(MSG_Tag));
+    KHandle         arg_3 = (KHandle) SYS_PARAM3;
+    ON_DEBUG(SYSCALL)(kprintf("SYS_mailbox_ipc(%p, %p, %p, %p)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2, SYS_PARAM3));
+    return syscall_mailbox_ipc(state, cr3, cpu, arg_0, arg_1, arg_2, arg_3);
 }
 
 static uintptr_t syscall_root_mailbox(CPUState* state, uintptr_t cr3, PerCPU* cpu);
@@ -189,16 +174,13 @@ SyscallFn* syscall_table[] = {
     [SYS_vmo_create] = SYSW_vmo_create,
     [SYS_vmo_get_size] = SYSW_vmo_get_size,
     [SYS_event_create] = SYSW_event_create,
-    [SYS_event_wait] = SYSW_event_wait,
-    [SYS_event_signal] = SYSW_event_signal,
+    [SYS_event_op] = SYSW_event_op,
     [SYS_pci_peek_device] = SYSW_pci_peek_device,
     [SYS_pci_claim_device] = SYSW_pci_claim_device,
     [SYS_pci_read_config_32] = SYSW_pci_read_config_32,
     [SYS_pci_write_config_32] = SYSW_pci_write_config_32,
     [SYS_mailbox_create] = SYSW_mailbox_create,
-    [SYS_mailbox_send] = SYSW_mailbox_send,
-    [SYS_mailbox_wait] = SYSW_mailbox_wait,
-    [SYS_mailbox_reply] = SYSW_mailbox_reply,
+    [SYS_mailbox_ipc] = SYSW_mailbox_ipc,
     [SYS_root_mailbox] = SYSW_root_mailbox,
     [SYS_tsc_freq] = SYSW_tsc_freq,
 };

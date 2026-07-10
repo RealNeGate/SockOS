@@ -247,7 +247,7 @@ void kmain(BootInfo* restrict info) {
     thread_resume(bootstrap, NULL);
     #endif
 
-    kernel_root_mailbox = mailbox_create(boot_info->core_count);
+    kernel_root_mailbox = mailbox_create();
 
     // Thread* t = thread_create(NULL, sched_load_balancer, 0, (uintptr_t) kheap_alloc(16384), 16384);
     // thread_resume(t, NULL);

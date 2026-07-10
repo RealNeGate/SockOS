@@ -25,21 +25,22 @@ struct Thread {
     // waiting on signalling objects
     _Atomic(void*) wait_obj;
 
-    // Mailbox threads need to notify their calling thread
-    Thread* calling_thread;
-    uintptr_t saved_sp;
-
     // In the environment's address space
     uintptr_t utcb_addr;
 
     // Address space optimization, we track the last faulted address.
-    // If we keep faulting in an array like
     struct {
         uintptr_t base_addr;
         uintptr_t next_addr;
     } last_touch;
 
     char tag[32];
+
+    // segment regs
+    #ifdef __x86_64__
+    uintptr_t fs_base;
+    uintptr_t gs_base;
+    #endif
 
     _Alignas(16) CPUState state;
 };

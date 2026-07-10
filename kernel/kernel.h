@@ -170,6 +170,8 @@ VMem_Cursor vmem_cursor_next(VMem_Cursor cur);
 typedef struct {
     Lock lock;
     Thread* thread;
+
+    // _Alignas(64) _Atomic(Thread*) thread;
 } WaitQueue;
 
 typedef enum {
@@ -216,12 +218,11 @@ typedef struct {
     u32 cap_log2;
     void* handler_pc;
 
-    WaitQueue tx_wait; // blocked on send()
+    // threads waiting for receivers
+    WaitQueue tx_wait;
 
-    _Alignas(64) atomic_u64 head;
-    _Alignas(64) atomic_u64 tail;
-
-    atomic_u64 ids_n_items[];
+    // threads waiting for senders
+    WaitQueue rx_wait;
 } KObject_Mailbox;
 
 typedef struct KObject_Event KObject_Event;
@@ -242,7 +243,7 @@ extern PCI_Device* pci_devs[PCI_MAX_DEVICES];
 
 KObject_VMO* vmo_create_physical(uintptr_t addr, size_t size, VMem_Flags flags);
 
-KObject_Mailbox* mailbox_create(size_t max_requests);
+KObject_Mailbox* mailbox_create(void);
 // return the thread we'll be using the respond
 Thread* mailbox_send(KObject_Mailbox* mailbox);
 // hand the thread back, we're now waiting for new messages
@@ -331,7 +332,7 @@ void thread_resume(Thread* thread, PerCPU* cpu);
 void thread_kill(Thread* thread);
 
 void waitqueue_wait(WaitQueue* wq, Thread* t);
-Thread* waitqueue_wake(WaitQueue* wq, PerCPU* cpu);
+Thread* waitqueue_wake(WaitQueue* wq, PerCPU* cpu, bool resume);
 void waitqueue_broadcast(WaitQueue* wq);
 
 ////////////////////////////////

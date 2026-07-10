@@ -200,6 +200,30 @@ static FileEntry* find_file(FileEntry* initrd, size_t path_len, const char* path
     return NULL;
 }
 
+static void hexdump(const char* buf, size_t len) {
+    printf("DUMP %p %zu\n", buf, len);
+
+    size_t rows = (len + 15) / 16;
+    for (int j = 0; j < rows; j++) {
+        for (int i = 0; i < 16; i++) {
+            int ch = buf[j*16 + i];
+            printf("%02x ", ch);
+        }
+
+        for (int i = 0; i < 16; i++) {
+            int ch = buf[j*16 + i];
+            if (ch >= 32) {
+                _putchar(ch);
+            } else if (ch == 0) {
+                _putchar('.');
+            } else {
+                printf("\x1b[96m.\x1b[0m");
+            }
+        }
+        printf("\n");
+    }
+}
+
 static bool exec(FileEntry* file, KHandle arg) {
     if (file->unpacked_len < sizeof(Elf64_Ehdr)) {
         return false;
@@ -253,6 +277,7 @@ static bool exec(FileEntry* file, KHandle arg) {
         DT_SYMTAB  = 6,
         DT_SYMENT  = 11,
         DT_STRTAB  = 5,
+        DT_HASH    = 4,
         DT_STRSZ   = 10,
         DT_GNUHASH = 0x6ffffef5,
     };
@@ -260,6 +285,7 @@ static bool exec(FileEntry* file, KHandle arg) {
     // Elf dynamic state
     size_t symtab = 0, syment = 0;
     char* strtab = NULL;
+    char* dyn_ht = NULL;
 
     // Place ELF into env
     size_t curr_pos = 0;
@@ -274,6 +300,7 @@ static bool exec(FileEntry* file, KHandle arg) {
             for (size_t j = 0; j < dyn_count; j++) {
                 printf("DYN[%#zx] %p\n", dyns[j].d_tag, dyns[j].d_ptr);
 
+                if (dyns[j].d_tag == DT_HASH)   { dyn_ht = &elf_mirror[dyns[j].d_ptr]; }
                 if (dyns[j].d_tag == DT_SYMTAB) { symtab = dyns[j].d_ptr; }
                 if (dyns[j].d_tag == DT_SYMENT) { syment = dyns[j].d_ptr; }
                 if (dyns[j].d_tag == DT_STRTAB) { strtab = &elf_mirror[dyns[j].d_ptr]; }
@@ -286,6 +313,7 @@ static bool exec(FileEntry* file, KHandle arg) {
 
             // Mirror into current env
             char* dst = mem_map(NULL_HANDLE, elf_mirror + vaddr, section_vmo, curr_pos, memsz, PROT_RW, 0);
+            printf("RANG %p %p\n", elf_mirror + vaddr, elf_mirror + vaddr + memsz - 1);
             if (segment->p_filesz > 0) {
                 memcpy(&dst[offset], &contents[segment->p_offset], segment->p_filesz);
             }
@@ -297,14 +325,16 @@ static bool exec(FileEntry* file, KHandle arg) {
     }
 
     {
-        for (int i = 0; i < 10; i++) {
-            printf("A %c %d\n", elf_mirror[symtab + i], elf_mirror[symtab + i]);
-        }
+        hexdump(&elf_mirror[symtab], sizeof(Elf64_Sym));
 
+        uint32_t ht_entry_count;
+        memcpy(&ht_entry_count, dyn_ht, sizeof(uint32_t));
+        printf("A %d\n", ht_entry_count);
+
+        // first symbol is NULL symbol
         Elf64_Sym* syms = (Elf64_Sym*) &elf_mirror[symtab];
-        printf("SYM %p\n", syms);
-        for (size_t j = 0; j < 1; j++) {
-            printf("SYM[%#zx] %p\n", j, syms[j].st_name);
+        for (size_t j = 1; j < ht_entry_count; j++) {
+            printf("SYM[%zu] %s\n", j, &strtab[syms[j].st_name]);
         }
     }
     fault_handler();
@@ -366,18 +396,20 @@ int _start(KHandle bootstrap_vmo) {
 
     fault_handler();
 
-    KHandle mailbox = syscall(SYS_root_mailbox);
+    KHandle mailbox = get_root_mailbox();
+    UTCB* utcb      = get_utcb();
+
     static KHandle names[256];
 
     // Process messages
-    KHandle handle;
-    uint64_t args[2], msg[4];
-    uint64_t info = mailbox_wait(mailbox, sizeof(msg) << 32u, args, msg, &handle);
+    KHandle from;
+    MSG_Tag tag = mailbox_wait(mailbox, NULL_HANDLE, (MSG_Tag){ 0 }, &from);
+    mailbox_wait(KHandle mailbox, KHandle to, &from);
     for (;;) {
         fault_handler();
 
-        int ret = 0;
-        switch (info & 0xFFFF) {
+        uintptr_t ret[2];
+        switch (tag.cmd) {
             // Register into names
             case 0: {
                 names[args[0]] = handle;
@@ -395,7 +427,7 @@ int _start(KHandle bootstrap_vmo) {
             }
         }
         // reply and wait for the next message
-        info = mailbox_reply(mailbox, (sizeof(msg) << 32u) | (ret & 0xFFFF), args, msg, &handle);
+        tag = mailbox_reply(mailbox, from, tag, &from, ret[0], ret[1]);
     }
 }
 

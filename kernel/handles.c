@@ -50,14 +50,10 @@ KObject_VMO* vmo_create_physical(uintptr_t addr, size_t size, VMem_Flags flags) 
     return obj;
 }
 
-KObject_Mailbox* mailbox_create(size_t max_requests) {
-    size_t log2 = 63 - __builtin_clzll(max_requests);
-    KObject_Mailbox* obj = kheap_zalloc(sizeof(KObject_Mailbox) + max_requests*sizeof(atomic_u64[2]));
+KObject_Mailbox* mailbox_create(void) {
+    KObject_Mailbox* obj = kheap_zalloc(sizeof(KObject_Mailbox));
     *obj = (KObject_Mailbox){
-        .super = {
-            .tag = KOBJECT_MAILBOX,
-        },
-        .cap_log2 = log2
+        .super = { .tag = KOBJECT_MAILBOX },
     };
     STORE_PUT(obj);
     return obj;
@@ -66,9 +62,7 @@ KObject_Mailbox* mailbox_create(size_t max_requests) {
 KObject_Event* event_create(void) {
     KObject_Event* obj = kheap_zalloc(sizeof(KObject_Event));
     *obj = (KObject_Event){
-        .super = {
-            .tag = KOBJECT_EVENT,
-        },
+        .super = { .tag = KOBJECT_EVENT },
     };
     STORE_PUT(obj);
     return obj;
@@ -98,55 +92,6 @@ bool event_wait(KObject_Event* restrict event, Thread* thread) {
     thread->client.is_blocked = true;
     thread->wait_obj = event;
     return atomic_compare_exchange_strong(&event->waiting_thread, &(Thread*){ NULL }, thread);
-}
-
-Thread* mailbox_send(KObject_Mailbox* restrict mailbox) {
-    // pop a stack from the mailbox, transfer control
-    u64 exp  = mailbox->cap_log2;
-    u64 mask = (1ull << exp) - 1;
-    u64 max_id = UINT64_MAX >> (exp+1);
-
-    u64 ticket = atomic_load_explicit(&mailbox->head, memory_order_relaxed);
-    u64 target, id;
-    do {
-        target = ticket & mask;
-        id = ((ticket >> exp) * 2) + 1;
-        if (atomic_load_explicit(&mailbox->ids_n_items[target], memory_order_acquire) != id) {
-            return NULL;
-        }
-    } while (!atomic_compare_exchange_strong(&mailbox->head, &ticket, ticket + 1));
-
-    // grab the stack we'll be using
-    Thread* thread = (Thread*) mailbox->ids_n_items[(1ull << exp) + target];
-
-    // notify that the slot can be reused now
-    id += 1;
-    atomic_store_explicit(&mailbox->ids_n_items[target], id != max_id ? id : 0, memory_order_release);
-    return thread;
-}
-
-bool mailbox_recv(KObject_Mailbox* mailbox, Thread* thread) {
-    // push to stack from the mailbox, go to sleep
-    u64 exp  = mailbox->cap_log2;
-    u64 mask = (1ull << exp) - 1;
-    u64 max_id = UINT64_MAX >> (exp+1);
-
-    u64 ticket = atomic_load_explicit(&mailbox->tail, memory_order_relaxed);
-    u64 target, id;
-    do {
-        target = ticket & mask;
-        id = ((ticket >> exp) * 2);
-        if (atomic_load_explicit(&mailbox->ids_n_items[target], memory_order_acquire) != id) {
-            return false;
-        }
-    } while (!atomic_compare_exchange_strong(&mailbox->tail, &ticket, ticket + 1));
-
-    mailbox->ids_n_items[(1ull << exp) + target] = (u64) thread;
-
-    // notify that the slot can be reused now
-    id += 1;
-    atomic_store_explicit(&mailbox->ids_n_items[target], id != max_id ? id : 0, memory_order_release);
-    return true;
 }
 
 void* env_get_handle(Env* env, KObjectID id, KAccessRights* out_rights) {

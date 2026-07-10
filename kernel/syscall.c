@@ -18,6 +18,8 @@ typedef uintptr_t SyscallFn(CPUState* state, uintptr_t cr3, PerCPU* cpu);
 #define GET_PARAM3(s) (s)->r10
 #define GET_PARAM4(s) (s)->r8
 #define GET_PARAM5(s) (s)->r9
+#define GET_PARAM6(s) (s)->r12
+#define GET_PARAM7(s) (s)->r13
 #else
 #error "TODO: Syscall parameters aren't available for this arch"
 #endif
@@ -28,6 +30,8 @@ typedef uintptr_t SyscallFn(CPUState* state, uintptr_t cr3, PerCPU* cpu);
 #define SYS_PARAM3 GET_PARAM3(state)
 #define SYS_PARAM4 GET_PARAM4(state)
 #define SYS_PARAM5 GET_PARAM5(state)
+#define SYS_PARAM6 GET_PARAM6(state)
+#define SYS_PARAM7 GET_PARAM7(state)
 
 #define KCHECK(pred, code) if ((pred) == 0) { return code; }
 #define KVALIDATE(pred) if (res = (pred), res < 0) { return res; }
@@ -103,24 +107,6 @@ static bool copy_across_spaces(Env* dst, uintptr_t dst_vaddr, const char* src_va
     return true;
 }
 
-static _Noreturn void yield_syscall(PerCPU* cpu, uintptr_t cr3, CPUState* state, WaitQueue* wq) {
-    const uint8_t* code = (const uint8_t*) state->rip;
-
-    #ifdef __x86_64__
-    kassert(code[-2] == 0x0F && code[-1] == 0x05, "not a syscall? huh?");
-    state->rip -= 2; // 0F 05
-    #else
-    #error "TODO"
-    #endif
-
-    Thread* old = cpu->current_thread;
-    waitqueue_wait(wq, cpu->current_thread);
-
-    state->interrupt_num = 32;
-    uintptr_t new_cr3 = x86_irq_int_handler(state, cr3, cpu);
-    do_context_switch(state, new_cr3);
-}
-
 static _Noreturn void yield_thread(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
     state->interrupt_num = 32;
     uintptr_t new_cr3 = x86_irq_int_handler(state, cr3, cpu);
@@ -157,63 +143,53 @@ void transfer_time(PerCPU* cpu, Thread* curr, Thread* next, CPUState* state) {
     next->client.v_deadline = curr->client.v_deadline;
     next->client.is_blocked = false;
     next->wait_obj = NULL;
-    next->calling_thread = curr;
 
     // replace curr thread in scheduler state
     cpu->current_thread = next;
-    // kprintf("XFER C%d -> C%d\n", curr->client.id, next->client.id);
 }
 
-static int mailbox_xfer(CPUState* state, PerCPU* cpu, Thread* curr, Thread* next, KObject_Mailbox* mailbox) {
+static int mailbox_xfer(CPUState* state, PerCPU* cpu, Thread* curr, Thread* next, MSG_Tag tag) {
     // the sender thread is now blocked
     transfer_time(cpu, curr, next, state);
 
-    uint64_t  send_info   = SYS_PARAM1;
-    uint64_t  send_msg    = SYS_PARAM4;
-    KObjectID send_handle = SYS_PARAM5;
+    KCHECK(memmap_translate(next->parent->addr_space.hw_tables, next->utcb_addr, NULL), RESULT_BAD_MEMORY);
+    UTCB* dst_utcb = (UTCB*) next->utcb_addr;
 
-    uint64_t recv_info  = GET_PARAM1(&next->state);
-    uintptr_t recv_msg  = GET_PARAM4(&next->state);
+    // transfer inline args (MR0, MR1)
+    GET_RETURN(&next->state) = SYS_PARAM1;
+    GET_PARAM4(&next->state) = SYS_PARAM4;
+    GET_PARAM5(&next->state) = SYS_PARAM5;
+    GET_PARAM6(&next->state) = SYS_PARAM6;
+    GET_PARAM7(&next->state) = SYS_PARAM7;
 
-    // msg length should be the min of the sender and receiver
-    size_t msg_len = send_info >> 32ull;
-    if (msg_len > (recv_info >> 32ull)) {
-        msg_len = (recv_info >> 32ull);
-    }
-    KCHECK(msg_len <= 64, RESULT_PACKET_TOO_BIG);
-    GET_RETURN(&next->state) = (msg_len << 32ull) | (send_info & 0xFFFFFFFF);
+    arch_set_address_space(next->parent);
 
-    // transfer inline args
-    GET_PARAM2(&next->state) = SYS_PARAM2;
-    GET_PARAM3(&next->state) = SYS_PARAM3;
-    GET_PARAM5(&next->state) = 0;
+    // copy remaining untyped regs into UTCB
+    if (tag.untyped > 4 || tag.typed > 0) {
+        Env* env = curr->parent;
 
-    // translate handle
-    if (send_handle) {
-        KObject* obj = env_get_handle(curr->parent, send_handle, NULL);
-        KCHECK(obj, RESULT_NO_HANDLE);
-        env_grant_rights(next->parent, 0, obj);
-    }
+        u64 utcb_paddr;
+        // can't cross page boundary
+        KCHECK((curr->utcb_addr & (PAGE_SIZE - 1)) + sizeof(UTCB) > PAGE_SIZE, RESULT_BAD_MEMORY);
+        // translate UTCB, should be resident in memory if we just wrote to it
+        KCHECK(memmap_translate(curr->parent->addr_space.hw_tables, curr->utcb_addr, &utcb_paddr), RESULT_BAD_MEMORY);
 
-    // copy message across address space
-    if (msg_len > 0) {
-        char* tmp = cpu->message_buffer;
-        ingest_usermem(tmp, send_msg, msg_len);
-        arch_set_address_space(next->parent);
-        egest_usermem(recv_msg, tmp, msg_len);
-    } else {
-        arch_set_address_space(next->parent);
-    }
+        UTCB* src_utcb = paddr2kaddr(utcb_paddr);
+        FOR_N(i, 4, tag.untyped) {
+            dst_utcb->mr[i] = src_utcb->mr[i];
+        }
 
-    if (mailbox != NULL) {
-        // Put the mailbox thread back on the wait list.
-        mailbox_recv(mailbox, curr);
-        // Notify any senders who think there's no one waiting
-        waitqueue_wake(&mailbox->tx_wait, cpu);
+        // copy handles
+        FOR_N(i, 0, tag.typed) {
+            KObject* obj = env_get_handle(env, src_utcb->hr[i], NULL);
+            KCHECK(obj, RESULT_NO_HANDLE);
+            env_grant_rights(next->parent, 0, obj);
+
+            dst_utcb->hr[i] = src_utcb->hr[i];
+        }
     }
 
-    // actually transition now
-    do_context_switch(&next->state, 0);
+    return 0;
 }
 
 #include "syscall_wrappers.h"
@@ -272,8 +248,12 @@ static uintptr_t syscall_thread_create(CPUState* state, uintptr_t cr3, PerCPU* c
     Thread* thread = thread_create(t_env, (ThreadEntryFn*) ip, arg, sp);
     KCHECK(thread, RESULT_NO_MEM);
 
-    // make an accessible handle for the thread
-    thread_resume(thread, NULL);
+    thread->utcb_addr = utcb;
+
+    if ((flags & THREAD_FLAGS_SUSPEND) == 0) {
+        thread_resume(thread, NULL);
+    }
+
     return env_grant_rights(env, KACCESS_WRITE, &thread->super);
 }
 
@@ -281,28 +261,38 @@ static uintptr_t syscall_thread_control(CPUState* state, uintptr_t cr3, PerCPU* 
     Env* env = cpu->current_thread->parent;
     Thread* thread = cpu->current_thread;
 
+    bool self = true;
     if (thread_handle && thread_handle != thread->super.id) {
         thread = env_get_handle(env, thread_handle, NULL);
         KCHECK(thread, RESULT_NO_HANDLE);
         KCHECK(thread->super.tag == KOBJECT_THREAD, RESULT_WRONG_HANDLE);
 
         // thread_control on another thread
-        return RESULT_BAD_PERMISSION;
-    } else {
-        // thread_control on self
-        switch (request) {
-            case THREAD_CTRL_EXIT: {
-                thread->client.is_dead = true;
-                yield_thread(state, cr3, cpu);
-            }
+        self = false;
+    }
 
-            case THREAD_CTRL_SLEEP: {
-                sched_wait(arg);
-                yield_thread(state, cr3, cpu);
-            }
-
-            default: return RESULT_BAD_PERMISSION;
+    switch (request) {
+        case THREAD_CTRL_EXIT: {
+            KCHECK(self, RESULT_BAD_PERMISSION);
+            thread->client.is_dead = true;
+            yield_thread(state, cr3, cpu);
         }
+
+        case THREAD_CTRL_SLEEP: {
+            KCHECK(self, RESULT_BAD_PERMISSION);
+            sched_wait(arg);
+            yield_thread(state, cr3, cpu);
+        }
+
+        #ifdef __x86_64__
+        case THREAD_CTRL_SET_FS: {
+            // TODO(NeGate): register write access rights
+            thread->fs_base = arg;
+            break;
+        }
+        #endif
+
+        default: return RESULT_BAD_PERMISSION;
     }
     return 0;
 }
@@ -384,33 +374,30 @@ static uintptr_t syscall_event_create(CPUState* state, uintptr_t cr3, PerCPU* cp
     return env_grant_rights(parent, 0, &event->super);
 }
 
-static uintptr_t syscall_event_wait(CPUState* state, uintptr_t cr3, PerCPU* cpu, KHandle event_handle) {
+static uintptr_t syscall_event_op(CPUState* state, uintptr_t cr3, PerCPU* cpu, int op, KHandle event_handle) {
     Env* env = cpu->current_thread->parent;
     KObject_Event* event = env_get_handle(env, event_handle, NULL);
     KCHECK(event, RESULT_NO_HANDLE);
     KCHECK(event->super.tag == KOBJECT_EVENT, RESULT_WRONG_HANDLE);
 
-    bool res = event_wait(event, cpu->current_thread);
-    if (!res) {
-        // Continue running, we signalled already
+    if (op == EVENT_OP_WAIT) {
+        bool res = event_wait(event, cpu->current_thread);
+        if (!res) {
+            // Continue running, we signalled already
+            return 0;
+        }
+        yield_thread(state, cr3, cpu);
+    } else if (op == EVENT_OP_SIGNAL) {
+        Thread* next = event_signal(event);
+        if (next != NULL) {
+            next->client.is_blocked = false;
+            next->wait_obj = NULL;
+            thread_resume(next, cpu);
+        }
         return 0;
+    } else {
+        return RESULT_BAD_PARAM;
     }
-    yield_thread(state, cr3, cpu);
-}
-
-static uintptr_t syscall_event_signal(CPUState* state, uintptr_t cr3, PerCPU* cpu, KHandle event_handle) {
-    Env* env = cpu->current_thread->parent;
-    KObject_Event* event = env_get_handle(env, event_handle, NULL);
-    KCHECK(event, RESULT_NO_HANDLE);
-    KCHECK(event->super.tag == KOBJECT_EVENT, RESULT_WRONG_HANDLE);
-
-    Thread* next = event_signal(event);
-    if (next != NULL) {
-        next->client.is_blocked = false;
-        next->wait_obj = NULL;
-        thread_resume(next, cpu);
-    }
-    return 0;
 }
 
 static uintptr_t syscall_pci_peek_device(CPUState* state, uintptr_t cr3, PerCPU* cpu, size_t index, Rawptr out_key) {
@@ -495,66 +482,73 @@ static uintptr_t syscall_pci_write_config_32(CPUState* state, uintptr_t cr3, Per
     return 0;
 }
 
-static uintptr_t syscall_mailbox_create(CPUState* state, uintptr_t cr3, PerCPU* cpu, int max_requests) {
+static uintptr_t syscall_mailbox_create(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
     Env* env = cpu->current_thread->parent;
-    KObject_Mailbox* mailbox = mailbox_create(max_requests);
+    KObject_Mailbox* mailbox = mailbox_create();
     return env_grant_rights(env, 0, &mailbox->super);
 }
 
-static uintptr_t syscall_mailbox_send(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
+static uintptr_t syscall_mailbox_ipc(CPUState* state, uintptr_t cr3, PerCPU* cpu, KHandle mailbox_handle, KHandle to_handle, MSG_Tag tag, KHandle from_handle) {
     Env* env = cpu->current_thread->parent;
-    KObject_Mailbox* mailbox = env_get_handle(env, SYS_PARAM0, NULL);
+
+    KObject_Mailbox* mailbox = env_get_handle(env, mailbox_handle, NULL);
     KCHECK(mailbox, RESULT_NO_HANDLE);
-    KCHECK(mailbox->super.tag == KOBJECT_MAILBOX, RESULT_WRONG_HANDLE);
+    KCHECK(mailbox->super.tag == KOBJECT_THREAD, RESULT_WRONG_HANDLE);
 
     Thread* curr = cpu->current_thread;
-    Thread* next = mailbox_send(mailbox);
-    if (next == NULL) {
-        // TODO(NeGate): mailbox has no one waiting to answer responses,
-        // we should setup a smarter scheduling at some point to signal
-        // when it's ready but for now we'll just yield.
-        yield_syscall(cpu, cr3, state, &mailbox->tx_wait);
+    Thread* next = NULL;
+    if (tag.flags & MAILBOX_IPC_SEND) {
+        if (to_handle == NULL_HANDLE) {
+            // No one around to respond? just wait, we'll retry the
+            // syscall when the time comes.
+            next = waitqueue_wake(&mailbox->tx_wait, cpu, false);
+            if (next == NULL) {
+                const uint8_t* code = (const uint8_t*) state->rip;
+
+                #ifdef __x86_64__
+                kassert(code[-2] == 0x0F && code[-1] == 0x05, "not a syscall? huh?");
+                state->rip -= 2; // 0F 05
+                #else
+                #error "TODO"
+                #endif
+
+                waitqueue_wait(&mailbox->tx_wait, curr);
+                yield_thread(state, cr3, cpu);
+            }
+        } else {
+            KObject* to = env_get_handle(env, to_handle, NULL);
+            KCHECK(to, RESULT_NO_HANDLE);
+            KCHECK(to->tag == KOBJECT_THREAD, RESULT_WRONG_HANDLE);
+
+            next = (Thread*) to;
+            KCHECK(atomic_ldacq(&next->wait_obj) == mailbox, RESULT_BAD_PERMISSION);
+        }
+        kassert(next->parent, "mailboxes can't live in kernel-threads");
+
+        // We must be responded to by the same mailbox
+        curr->client.is_blocked = true;
+        curr->wait_obj = mailbox;
+
+        SYS_PARAM3 = next->super.id;
+
+        int res = mailbox_xfer(state, cpu, curr, next, tag);
+        if (res < 0) { return res; }
     }
-    kassert(next->parent, "mailboxes can't live in kernel-threads");
 
-    // Put to wait on mailbox
-    curr->client.is_blocked = true;
-    curr->wait_obj = mailbox;
-    return mailbox_xfer(state, cpu, curr, next, NULL);
-}
+    if (tag.flags & MAILBOX_IPC_RECV) {
+        // Go back to waiting
+        curr->client.is_blocked = true;
+        curr->wait_obj = mailbox;
+        waitqueue_wait(&mailbox->rx_wait, curr);
+        // Notify any senders who think there's no one waiting
+        waitqueue_wake(&mailbox->tx_wait, cpu, true);
+    }
 
-static uintptr_t syscall_mailbox_reply(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
-    Env* env = cpu->current_thread->parent;
-    KObject_Mailbox* mailbox = env_get_handle(env, SYS_PARAM0, NULL);
-    KCHECK(mailbox, RESULT_NO_HANDLE);
-    KCHECK(mailbox->super.tag == KOBJECT_MAILBOX, RESULT_WRONG_HANDLE);
-
-    Thread* curr = cpu->current_thread;
-    Thread* next = curr->calling_thread;
-
-    curr->client.is_blocked = true;
-    curr->wait_obj = mailbox;
-    curr->calling_thread = NULL;
-    return mailbox_xfer(state, cpu, curr, next, mailbox);
-}
-
-static uintptr_t syscall_mailbox_wait(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
-    Env* env = cpu->current_thread->parent;
-    Thread* curr = cpu->current_thread;
-    KObject_Mailbox* mailbox = env_get_handle(env, SYS_PARAM0, NULL);
-    KCHECK(mailbox, RESULT_NO_HANDLE);
-    KCHECK(mailbox->super.tag == KOBJECT_MAILBOX, RESULT_WRONG_HANDLE);
-
-    // Wait on mailbox
-    curr->client.is_blocked = true;
-    curr->wait_obj = mailbox;
-    mailbox_recv(mailbox, curr);
-
-    // Notify any senders who think there's no one waiting
-    waitqueue_wake(&mailbox->tx_wait, cpu);
-
-    // Pick a new task
-    yield_thread(state, cr3, cpu);
+    if (next != NULL) {
+        do_context_switch(&next->state, 0);
+    } else {
+        yield_thread(state, cr3, cpu);
+    }
 }
 
 extern KObject_Mailbox* kernel_root_mailbox;
