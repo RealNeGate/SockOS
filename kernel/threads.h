@@ -36,12 +36,6 @@ struct Thread {
 
     char tag[32];
 
-    // segment regs
-    #ifdef __x86_64__
-    uintptr_t fs_base;
-    uintptr_t gs_base;
-    #endif
-
     _Alignas(16) CPUState state;
 };
 

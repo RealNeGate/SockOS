@@ -33,8 +33,8 @@ for i=1,#tree do
             proto[#proto + 1] = string.format(", %s a%d", args[j], j-1)
         end
 
-        lines[#lines + 1] = string.format("static uintptr_t syscall_%s(CPUState* state, uintptr_t cr3, PerCPU* cpu%s);", name, table.concat(proto))
-        lines[#lines + 1] = string.format("static uintptr_t SYSW_%s(CPUState* state, uintptr_t cr3, PerCPU* cpu) {", name)
+        lines[#lines + 1] = string.format("static uintptr_t syscall_%s(CPUState* state, PerCPU* cpu%s);", name, table.concat(proto))
+        lines[#lines + 1] = string.format("static uintptr_t SYSW_%s(CPUState* state, PerCPU* cpu) {", name)
         -- swizzle inputs into shape
         local log_str = {}
         local args_str = {}
@@ -50,7 +50,7 @@ for i=1,#tree do
             fmt_str[j] = "%p"
         end
         lines[#lines + 1] = string.format("    ON_DEBUG(SYSCALL)(kprintf(\"SYS_%s(%s)\\n\"%s));", name, table.concat(fmt_str, ", "), table.concat(log_str))
-        lines[#lines + 1] = string.format("    return syscall_%s(state, cr3, cpu%s);", name, table.concat(args_str))
+        lines[#lines + 1] = string.format("    return syscall_%s(state, cpu%s);", name, table.concat(args_str))
         lines[#lines + 1] = "}"
         lines[#lines + 1] = ""
 

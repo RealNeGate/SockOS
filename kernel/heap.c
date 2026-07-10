@@ -51,7 +51,7 @@ struct Heap {
 };
 
 static int heap_size_class(size_t obj_size) {
-    if (obj_size < 64) {
+    if (obj_size <= 64) {
         return 0;
     }
     return 64 - __builtin_clzll((obj_size - 1) / 64);
@@ -296,7 +296,7 @@ static void* gimme_segment(Heap* heap, HeapFreeList* list, size_t size, bool is_
         return NULL;
     }
 
-    ON_DEBUG(KHEAP)(kprintf("[heap] Allocating 2M segment, split into %zuK: %p\n", kaddr2paddr(segment), size / 1024));
+    ON_DEBUG(KHEAP)(kprintf("[heap] Allocating 2M segment, split into %zuK: %p\n", size / 1024, kaddr2paddr(segment)));
     if (is_small) {
         // give away the remaining ones to the thread for other allocs
         FOR_REV_N(i, 1, SEGMENT_SIZE / size) {
@@ -335,6 +335,7 @@ void kheap_free_page(void* ptr) {
 }
 
 void* kheap_alloc(size_t obj_size) {
+    kassert(obj_size > 0, "Cannot allocate 0-sized objects");
     int core_id = cpu_get_index();
     Heap* heap  = &local_heaps[core_id];
 

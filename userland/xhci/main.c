@@ -34,7 +34,7 @@ void* memset(void* buffer, int c, size_t n) {
 void fault_handler(void) {
     SPIN_LOCK(&log_lock);
     if (log_stream && log_used) {
-        syscall(SYS_debug_log, log_stream, log_used);
+        sys_debug_log(log_stream, log_used);
         log_used = 0;
     }
     SPIN_UNLOCK(&log_lock);
@@ -369,7 +369,7 @@ static void usb_fsm(int msg, int port, int slot) {
         case MSG_ADDRESSED: {
             printf("Port%u is now addressed!\n", port);
             dev->state = PORT_ADDRESS;
-            dev->mailbox = syscall(SYS_mailbox_create, 1);
+            dev->mailbox = mailbox_create();
             dev->ipc_ring_evt[0] = event_create();
 
             thread_create(NULL_HANDLE, usb_device_thread, (uintptr_t) dev, 8192, 0);
@@ -451,7 +451,8 @@ static void interrupt_in_try(USB_Device* dev, int pipe, char* data, size_t data_
 
 static void usb_device_thread(void* d) {
     USB_Device* dev = d;
-    name_register_driver(root_mailbox, DEV_SLOT(dev), dev->mailbox);
+    UTCB* utcb = get_utcb();
+    name_register_driver(utcb, root_mailbox, DEV_SLOT(dev), dev->mailbox);
 
     USB_RequestBlock urb = {
         .dev   = dev,
@@ -636,6 +637,7 @@ static void usb_device_thread(void* d) {
 
     KHandle mailbox = dev->mailbox;
 
+    #if 0
     // Process messages
     KHandle handle;
     uint64_t args[2], msg[4];
@@ -657,6 +659,7 @@ static void usb_device_thread(void* d) {
         // reply and wait for the next message
         info = mailbox_reply(mailbox, (sizeof(msg) << 16u) | (ret & 0xFFFF), args, msg, &handle);
     }
+    #endif
 }
 
 static void usb_endpoint_thread(void* arg) {
@@ -718,7 +721,7 @@ int _start(KHandle pci_handle) {
     root_mailbox = get_root_mailbox();
 
     PCI_Desc pci;
-    int res = syscall(SYS_pci_claim_device, pci_handle, &pci);
+    int res = syscall2(SYS_pci_claim_device, pci_handle, (uint64_t) &pci);
     if (res < 0) {
         thread_exit(1);
     }

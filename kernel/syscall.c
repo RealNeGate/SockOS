@@ -5,8 +5,8 @@
 ////////////////////////////////
 // Syscall table
 ////////////////////////////////
-#define SYS_FN(name) static uintptr_t syscall_ ## name(CPUState* state, uintptr_t cr3, PerCPU* cpu)
-typedef uintptr_t SyscallFn(CPUState* state, uintptr_t cr3, PerCPU* cpu);
+#define SYS_FN(name) static uintptr_t syscall_ ## name(CPUState* state, PerCPU* cpu)
+typedef uintptr_t SyscallFn(CPUState* state, PerCPU* cpu);
 
 #ifdef __x86_64__
 #include "threads.h"
@@ -107,10 +107,12 @@ static bool copy_across_spaces(Env* dst, uintptr_t dst_vaddr, const char* src_va
     return true;
 }
 
-static _Noreturn void yield_thread(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
+static _Noreturn void yield_thread(CPUState* state, PerCPU* cpu, Thread* thread) {
+    uintptr_t cr3 = kaddr2paddr(thread->parent->addr_space.hw_tables);
+
     state->interrupt_num = 32;
     uintptr_t new_cr3 = x86_irq_int_handler(state, cr3, cpu);
-    do_context_switch(state, new_cr3);
+    do_context_switch(state, new_cr3, thread->utcb_addr);
 }
 
 static int get_obj_with_rights(Env* env, KObjectID id, int tag, KAccessRights exp, KObject** out_obj) {
@@ -197,12 +199,12 @@ static int mailbox_xfer(CPUState* state, PerCPU* cpu, Thread* curr, Thread* next
 ////////////////////////////////
 // Syscall impls
 ////////////////////////////////
-static uintptr_t syscall_test(CPUState* state, uintptr_t cr3, PerCPU* cpu, uint64_t a0) {
+static uintptr_t syscall_test(CPUState* state, PerCPU* cpu, uint64_t a0) {
     printf("SYS_test(%p)\n", a0);
     return 0;
 }
 
-static uintptr_t syscall_debug_log(CPUState* state, uintptr_t cr3, PerCPU* cpu, KHandle vmo_handle, size_t len) {
+static uintptr_t syscall_debug_log(CPUState* state, PerCPU* cpu, KHandle vmo_handle, size_t len) {
     Env* env = cpu->current_thread->parent;
     KObject_VMO* vmo = env_get_handle(env, vmo_handle, NULL);
     KCHECK(vmo, RESULT_NO_HANDLE);
@@ -227,7 +229,10 @@ static uintptr_t syscall_debug_log(CPUState* state, uintptr_t cr3, PerCPU* cpu, 
     return 0;
 }
 
-static uintptr_t syscall_thread_create(CPUState* state, uintptr_t cr3, PerCPU* cpu, KHandle env_handle, uintptr_t ip, uintptr_t sp, uintptr_t arg, uintptr_t utcb, int flags) {
+static uintptr_t syscall_thread_create(CPUState* state, PerCPU* cpu, KHandle env_handle, uintptr_t ip, uintptr_t sp, uintptr_t arg, uintptr_t utcb, int flags) {
+    KCHECK((utcb & 63) == 0, RESULT_BAD_MEMORY);
+    KCHECK((utcb & 4095) + sizeof(UTCB) > 4096, RESULT_BAD_MEMORY);
+
     int res;
     Env* env = cpu->current_thread->parent;
 
@@ -247,7 +252,6 @@ static uintptr_t syscall_thread_create(CPUState* state, uintptr_t cr3, PerCPU* c
 
     Thread* thread = thread_create(t_env, (ThreadEntryFn*) ip, arg, sp);
     KCHECK(thread, RESULT_NO_MEM);
-
     thread->utcb_addr = utcb;
 
     if ((flags & THREAD_FLAGS_SUSPEND) == 0) {
@@ -257,7 +261,7 @@ static uintptr_t syscall_thread_create(CPUState* state, uintptr_t cr3, PerCPU* c
     return env_grant_rights(env, KACCESS_WRITE, &thread->super);
 }
 
-static uintptr_t syscall_thread_control(CPUState* state, uintptr_t cr3, PerCPU* cpu, KHandle thread_handle, int request, uint64_t arg, Rawptr ptr) {
+static uintptr_t syscall_thread_control(CPUState* state, PerCPU* cpu, KHandle thread_handle, int request, uint64_t arg, Rawptr ptr) {
     Env* env = cpu->current_thread->parent;
     Thread* thread = cpu->current_thread;
 
@@ -275,35 +279,27 @@ static uintptr_t syscall_thread_control(CPUState* state, uintptr_t cr3, PerCPU* 
         case THREAD_CTRL_EXIT: {
             KCHECK(self, RESULT_BAD_PERMISSION);
             thread->client.is_dead = true;
-            yield_thread(state, cr3, cpu);
+            yield_thread(state, cpu, thread);
         }
 
         case THREAD_CTRL_SLEEP: {
             KCHECK(self, RESULT_BAD_PERMISSION);
             sched_wait(arg);
-            yield_thread(state, cr3, cpu);
+            yield_thread(state, cpu, thread);
         }
-
-        #ifdef __x86_64__
-        case THREAD_CTRL_SET_FS: {
-            // TODO(NeGate): register write access rights
-            thread->fs_base = arg;
-            break;
-        }
-        #endif
 
         default: return RESULT_BAD_PERMISSION;
     }
     return 0;
 }
 
-static uintptr_t syscall_env_create(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
+static uintptr_t syscall_env_create(CPUState* state, PerCPU* cpu) {
     Env* parent = cpu->current_thread->parent;
     Env* env    = env_create();
     return env_grant_rights(parent, KACCESS_WRITE, &env->super);
 }
 
-static uintptr_t syscall_mem_map(CPUState* state, uintptr_t cr3, PerCPU* cpu, KHandle env_handle, MapControl ctrl, KHandle vmo_handle, uintptr_t offset, size_t size, int flags) {
+static uintptr_t syscall_mem_map(CPUState* state, PerCPU* cpu, KHandle env_handle, MapControl ctrl, KHandle vmo_handle, uintptr_t offset, size_t size, int flags) {
     int res;
     size_t page_aligned_size = (size + PAGE_SIZE - 1) & -PAGE_SIZE;
     KCHECK(page_aligned_size, 0);
@@ -331,7 +327,7 @@ static uintptr_t syscall_mem_map(CPUState* state, uintptr_t cr3, PerCPU* cpu, KH
     return vmem_map(map_env, vmo, ctrl.addr << 4ull, offset, page_aligned_size, mem_flags);
 }
 
-static uintptr_t syscall_mem_unmap(CPUState* state, uintptr_t cr3, PerCPU* cpu, KHandle env_handle, uintptr_t vaddr, size_t size) {
+static uintptr_t syscall_mem_unmap(CPUState* state, PerCPU* cpu, KHandle env_handle, uintptr_t vaddr, size_t size) {
     Env* env = cpu->current_thread->parent;
 
     // we can't have multiple writers on the interval tree at once
@@ -344,7 +340,7 @@ static uintptr_t syscall_mem_unmap(CPUState* state, uintptr_t cr3, PerCPU* cpu, 
     return 0;
 }
 
-static uintptr_t syscall_mem_translate(CPUState* state, uintptr_t cr3, PerCPU* cpu, KHandle env_handle, Rawptr addr) {
+static uintptr_t syscall_mem_translate(CPUState* state, PerCPU* cpu, KHandle env_handle, Rawptr addr) {
     int res;
     Env* env = cpu->current_thread->parent;
     if (env_handle) {
@@ -354,27 +350,28 @@ static uintptr_t syscall_mem_translate(CPUState* state, uintptr_t cr3, PerCPU* c
     return translate_vaddr(env, (uintptr_t) addr);
 }
 
-static uintptr_t syscall_vmo_create(CPUState* state, uintptr_t cr3, PerCPU* cpu, size_t size) {
+static uintptr_t syscall_vmo_create(CPUState* state, PerCPU* cpu, size_t size) {
     Env* env = cpu->current_thread->parent;
     KObject_VMO* vmo_ptr = vmo_create_physical(0, size, VMEM_PAGE_WRITE);
     return env_grant_rights(env, KACCESS_WRITE, &vmo_ptr->super);
 }
 
-static uintptr_t syscall_vmo_get_size(CPUState* state, uintptr_t cr3, PerCPU* cpu, KHandle vmo_handle) {
+static uintptr_t syscall_vmo_get_size(CPUState* state, PerCPU* cpu, KHandle vmo_handle) {
     Env* env = cpu->current_thread->parent;
     KObject_VMO* vmo = env_get_handle(env, SYS_PARAM0, NULL);
     KCHECK(vmo, RESULT_NO_HANDLE);
     KCHECK(vmo->super.tag == KOBJECT_VMO, RESULT_WRONG_HANDLE);
+    kprintf("AAA %zu\n", vmo->size);
     return vmo->size;
 }
 
-static uintptr_t syscall_event_create(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
+static uintptr_t syscall_event_create(CPUState* state, PerCPU* cpu) {
     Env* parent = cpu->current_thread->parent;
     KObject_Event* event = event_create();
     return env_grant_rights(parent, 0, &event->super);
 }
 
-static uintptr_t syscall_event_op(CPUState* state, uintptr_t cr3, PerCPU* cpu, int op, KHandle event_handle) {
+static uintptr_t syscall_event_op(CPUState* state, PerCPU* cpu, int op, KHandle event_handle) {
     Env* env = cpu->current_thread->parent;
     KObject_Event* event = env_get_handle(env, event_handle, NULL);
     KCHECK(event, RESULT_NO_HANDLE);
@@ -386,7 +383,7 @@ static uintptr_t syscall_event_op(CPUState* state, uintptr_t cr3, PerCPU* cpu, i
             // Continue running, we signalled already
             return 0;
         }
-        yield_thread(state, cr3, cpu);
+        yield_thread(state, cpu, cpu->current_thread);
     } else if (op == EVENT_OP_SIGNAL) {
         Thread* next = event_signal(event);
         if (next != NULL) {
@@ -400,7 +397,7 @@ static uintptr_t syscall_event_op(CPUState* state, uintptr_t cr3, PerCPU* cpu, i
     }
 }
 
-static uintptr_t syscall_pci_peek_device(CPUState* state, uintptr_t cr3, PerCPU* cpu, size_t index, Rawptr out_key) {
+static uintptr_t syscall_pci_peek_device(CPUState* state, PerCPU* cpu, size_t index, Rawptr out_key) {
     Env* env = cpu->current_thread->parent;
     if (index >= pci_dev_count) {
         return RESULT_NO_HANDLE;
@@ -417,7 +414,7 @@ static uintptr_t syscall_pci_peek_device(CPUState* state, uintptr_t cr3, PerCPU*
     return 0;
 }
 
-static uintptr_t syscall_pci_claim_device(CPUState* state, uintptr_t cr3, PerCPU* cpu, KHandle dev_handle, Rawptr out_dev_unsafe) {
+static uintptr_t syscall_pci_claim_device(CPUState* state, PerCPU* cpu, KHandle dev_handle, Rawptr out_dev_unsafe) {
     Env* env = cpu->current_thread->parent;
 
     PCI_Device* dev = env_get_handle(env, dev_handle, NULL);
@@ -463,7 +460,7 @@ static uintptr_t syscall_pci_claim_device(CPUState* state, uintptr_t cr3, PerCPU
     return 0;
 }
 
-static uintptr_t syscall_pci_read_config_32(CPUState* state, uintptr_t cr3, PerCPU* cpu, KHandle dev_handle, size_t offset) {
+static uintptr_t syscall_pci_read_config_32(CPUState* state, PerCPU* cpu, KHandle dev_handle, size_t offset) {
     Env* env = cpu->current_thread->parent;
     PCI_Device* dev = env_get_handle(env, dev_handle, NULL);
     KCHECK(dev, RESULT_NO_HANDLE);
@@ -472,7 +469,7 @@ static uintptr_t syscall_pci_read_config_32(CPUState* state, uintptr_t cr3, PerC
     return pci_read_u32(dev->bus, dev->device, dev->func, SYS_PARAM1);
 }
 
-static uintptr_t syscall_pci_write_config_32(CPUState* state, uintptr_t cr3, PerCPU* cpu, KHandle dev_handle, size_t offset, uint32_t val) {
+static uintptr_t syscall_pci_write_config_32(CPUState* state, PerCPU* cpu, KHandle dev_handle, size_t offset, uint32_t val) {
     Env* env = cpu->current_thread->parent;
     PCI_Device* dev = env_get_handle(env, dev_handle, NULL);
     KCHECK(dev, RESULT_NO_HANDLE);
@@ -482,13 +479,13 @@ static uintptr_t syscall_pci_write_config_32(CPUState* state, uintptr_t cr3, Per
     return 0;
 }
 
-static uintptr_t syscall_mailbox_create(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
+static uintptr_t syscall_mailbox_create(CPUState* state, PerCPU* cpu) {
     Env* env = cpu->current_thread->parent;
     KObject_Mailbox* mailbox = mailbox_create();
     return env_grant_rights(env, 0, &mailbox->super);
 }
 
-static uintptr_t syscall_mailbox_ipc(CPUState* state, uintptr_t cr3, PerCPU* cpu, KHandle mailbox_handle, KHandle to_handle, MSG_Tag tag, KHandle from_handle) {
+static uintptr_t syscall_mailbox_ipc(CPUState* state, PerCPU* cpu, KHandle mailbox_handle, KHandle to_handle, MSG_Tag tag, KHandle from_handle) {
     Env* env = cpu->current_thread->parent;
 
     KObject_Mailbox* mailbox = env_get_handle(env, mailbox_handle, NULL);
@@ -513,7 +510,7 @@ static uintptr_t syscall_mailbox_ipc(CPUState* state, uintptr_t cr3, PerCPU* cpu
                 #endif
 
                 waitqueue_wait(&mailbox->tx_wait, curr);
-                yield_thread(state, cr3, cpu);
+                yield_thread(state, cpu, curr);
             }
         } else {
             KObject* to = env_get_handle(env, to_handle, NULL);
@@ -545,19 +542,19 @@ static uintptr_t syscall_mailbox_ipc(CPUState* state, uintptr_t cr3, PerCPU* cpu
     }
 
     if (next != NULL) {
-        do_context_switch(&next->state, 0);
+        do_context_switch(&next->state, 0, next->utcb_addr);
     } else {
-        yield_thread(state, cr3, cpu);
+        yield_thread(state, cpu, curr);
     }
 }
 
 extern KObject_Mailbox* kernel_root_mailbox;
-static uintptr_t syscall_root_mailbox(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
+static uintptr_t syscall_root_mailbox(CPUState* state, PerCPU* cpu) {
     Env* parent = cpu->current_thread->parent;
     return env_grant_rights(parent, KACCESS_WRITE, &kernel_root_mailbox->super);
 }
 
-static uintptr_t syscall_tsc_freq(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
+static uintptr_t syscall_tsc_freq(CPUState* state, PerCPU* cpu) {
     return boot_info->tsc_freq;
 }
 
@@ -567,3 +564,5 @@ static uintptr_t syscall_tsc_freq(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
 #undef SYS_PARAM3
 #undef SYS_PARAM4
 #undef SYS_PARAM5
+#undef SYS_PARAM6
+#undef SYS_PARAM7

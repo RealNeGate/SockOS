@@ -61,13 +61,13 @@ EXPORT_FN void* memmove(void* dest, const void* src, size_t n) {
 }
 
 EXPORT_FN void _start(KHandle handle) {
-    KHandle vmo  = syscall(SYS_vmo_create, 4*1024);
+    KHandle vmo  = vmo_create(4*1024);
     char* buffer = mem_map(NULL_HANDLE, 0, vmo, 0, 4*1024, PROT_RW, 0);
     for (int i = 0; i < sizeof(text); i++) {
         buffer[i] = text[i];
     }
 
-    syscall(SYS_debug_log, vmo, sizeof(text) - 1);
+    sys_debug_log(vmo, sizeof(text) - 1);
     thread_exit(0);
 }
 

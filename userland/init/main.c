@@ -70,17 +70,17 @@ int strcmp(const char* a, const char* b) {
 
 void fault_handler(void) {
     if (log_stream && log_used) {
-        syscall(SYS_debug_log, log_stream, log_used);
+        sys_debug_log(log_stream, log_used);
         log_used = 0;
     }
 }
 
 void _putchar(char ch) {
     if (log_stream == 0) {
-        log_stream = syscall(SYS_vmo_create, 4*1024);
+        log_stream = vmo_create(4*1024);
         log_buffer = mem_map(NULL_HANDLE, 0, log_stream, 0, 4*1024, PROT_RW, 0);
     } else if (log_used == 4096) {
-        syscall(SYS_debug_log, log_stream, log_used);
+        sys_debug_log(log_stream, log_used);
         log_used = 0;
     }
 
@@ -268,8 +268,8 @@ static bool exec(FileEntry* file, KHandle arg) {
     fault_handler();
 
     // Create environment
-    KHandle child_env = syscall(SYS_env_create);
-    KHandle section_vmo = syscall(SYS_vmo_create, total_memsz);
+    KHandle child_env = syscall0(SYS_env_create);
+    KHandle section_vmo = vmo_create(total_memsz);
 
     enum {
         DT_FLAGS_1 = 0x6ffffffb,
@@ -373,7 +373,7 @@ int _start(KHandle bootstrap_vmo) {
     // Find the first set of connected PCI devices
     for (int i = 0;; i++) {
         uint32_t key;
-        KHandle dev = syscall(SYS_pci_peek_device, i, &key);
+        KHandle dev = syscall2(SYS_pci_peek_device, i, (uint64_t) &key);
         if (dev == RESULT_NO_HANDLE) { break; }
 
         DriverEntry* driver = get_driver(key);
@@ -403,8 +403,7 @@ int _start(KHandle bootstrap_vmo) {
 
     // Process messages
     KHandle from;
-    MSG_Tag tag = mailbox_wait(mailbox, NULL_HANDLE, (MSG_Tag){ 0 }, &from);
-    mailbox_wait(KHandle mailbox, KHandle to, &from);
+    MSG_Tag tag = mailbox_wait(mailbox, &from);
     for (;;) {
         fault_handler();
 
@@ -412,20 +411,27 @@ int _start(KHandle bootstrap_vmo) {
         switch (tag.cmd) {
             // Register into names
             case 0: {
-                names[args[0]] = handle;
-                printf("Register! %d %p\n", args[0], handle);
+                size_t index = utcb->mr[0];
+                names[index] = utcb->hr[0];
+                tag = msg_tag(0, 0, 0, 0);
+
+                printf("Register! %d %p\n", index, utcb->hr[0]);
                 fault_handler();
                 break;
             }
 
             // Retrieve from names
             case 1: {
-                handle = names[args[0]];
-                printf("Get! %d %p\n", args[0], handle);
+                size_t index = utcb->mr[0];
+                utcb->hr[0] = names[index];
+                tag = msg_tag(0, 1, 0, 0);
+
+                printf("Get! %d %p\n", index, utcb->hr[0]);
                 fault_handler();
                 break;
             }
         }
+
         // reply and wait for the next message
         tag = mailbox_reply(mailbox, from, tag, &from, ret[0], ret[1]);
     }

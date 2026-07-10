@@ -85,7 +85,7 @@ rules({
     {
         name = "cc",
         depfile = "$out.d",
-        command = "clang-20 $in $flags -MD -MF $out.d -o $out",
+        command = "clang $in $flags -MD -MF $out.d -o $out",
         description = "CC $in"
     },
     {

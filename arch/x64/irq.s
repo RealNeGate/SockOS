@@ -90,10 +90,11 @@ DEFINE_INT 81
 asm_int_handler:
     cld
     cli
-
     ; swap out user gs, use kernel gs now
-    swapgs_if_necessary
-
+    cmp [rsp + 24], 8
+    je  .skip
+    swapgs
+.skip:
     push rax
     push rcx
     push rdx
@@ -225,8 +226,7 @@ syscall_handler:
 syscall_handler.has_syscall:
     ; run C syscall stuff & preserve old address space (in callee saved reg)
     mov rdi, rsp
-    mov rsi, cr3
-    mov rdx, gs:[0]
+    mov rsi, gs:[0]
     call rcx
 syscall_handler.no_syscall:
     ; fxrstor also needs to be aligned to 16bytes
@@ -271,6 +271,7 @@ syscall_handler.bad_syscall:
 
 ; RDI - CPUState*
 ; RSI - PageTable*
+; RDX - GS
 do_context_switch:
     ; switch to new address space
     test rsi, rsi
@@ -281,6 +282,12 @@ do_context_switch:
     test rdi, rdi
     jz .skip2
     mov rsp, rdi
+
+    ; write GS base
+    mov eax, edx
+    shr rdx, 32
+    mov ecx, 0xC0000101
+    wrmsr
 
     ; fxrstor also needs to be aligned to 16bytes
     add rsp, 512 + 16

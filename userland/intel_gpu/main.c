@@ -120,10 +120,10 @@ static void* igpu_mmap(size_t size, uintptr_t* out_gpu_vaddr) {
 static int WIDTH = 1720, STRIDE = 1728, HEIGHT = 1440;
 static void intel_gpu_driver_init(KHandle display_pci) {
     // BDSM_0_2_0_PCI - Mirror of Base Data of Stolen Memory
-    gpu.base_dsm = syscall(SYS_pci_read_config_32, display_pci, 0x5C) & 0xFFFFFu;
+    gpu.base_dsm = syscall2(SYS_pci_read_config_32, display_pci, 0x5C) & 0xFFFFFu;
 
     PCI_Desc pci;
-    int res = syscall(SYS_pci_claim_device, display_pci, &pci);
+    int res = syscall2(SYS_pci_claim_device, display_pci, (uint64_t) &pci);
 
     // GTTMMADR, low 8MB is MMIO, high 8MB is global GTT
     gpu.mmio = mem_map(NULL_HANDLE, 0, pci.bars[0], 0, pci.sizes[0], PROT_RW, 0);
@@ -133,7 +133,7 @@ static void intel_gpu_driver_init(KHandle display_pci) {
     gpu.main_mem = mem_map(NULL_HANDLE, 0, pci.bars[2], 0, pci.sizes[2], PROT_RW, 0);
 
     // GGC_0_0_0_PCI - GMCH Graphics Control
-    gpu.gmch_ctrl = syscall(SYS_pci_read_config_32, display_pci, 0x50);
+    gpu.gmch_ctrl = syscall2(SYS_pci_read_config_32, display_pci, 0x50);
 
     uint64_t gtt_size = (gpu.gmch_ctrl >> 6u) & 3;
     gpu.ggtt_size = 1u << (20u + gtt_size);
@@ -260,7 +260,7 @@ static void intel_gpu_driver_poll(void) {
 }
 
 int _start(KHandle display_pci) {
-    tsc_freq = syscall(SYS_tsc_freq);
+    tsc_freq = syscall0(SYS_tsc_freq);
     intel_gpu_driver_init(display_pci);
 
     KHandle root_mailbox = get_root_mailbox();

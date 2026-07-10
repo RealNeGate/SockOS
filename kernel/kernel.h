@@ -19,7 +19,7 @@ typedef uint64_t KObjectID;
 
 // Kernel Array Bounds Check
 #define kabc(i, arr) kassert(i < ELEM_COUNT(arr), "Out of bounds access of %s[%d]", #arr, i)
-#define kassert(cond, ...) ((cond) ? 0 : (kprintf("%s:%d: assertion failed!\n  %s\n  ", __FILE__, __LINE__, #cond), kprintf(__VA_ARGS__), kprintf("\n\n"), arch_backtrace(), __builtin_trap()))
+#define kassert(cond, ...) ((cond) ? 0 : (kprintf("%s:%d: assertion failed!\n  %s\n  ", __FILE__, __LINE__, #cond), kprintf(__VA_ARGS__), kprintf("\n\n"), arch_backtrace(NULL), __builtin_trap()))
 #define panic(...) (kprintf("%s:%d: panic!\n", __FILE__, __LINE__), kprintf(__VA_ARGS__), __builtin_trap())
 
 ////////////////////////////////
@@ -33,8 +33,7 @@ void spin_unlock(Lock* lock);
 void kprintf(const char *fmt, ...);
 void print_ring_init(void);
 
-void arch_backtrace(void);
-uint64_t arch_get_micros(void);
+void arch_backtrace(void* fp);
 
 PerCPU* cpu_get(void);
 size_t cpu_get_index(void);
@@ -316,7 +315,6 @@ struct Env {
 
 Env* env_create(void);
 void env_kill(Env* env);
-Thread* env_load_elf(Env* env, const u8* program, size_t program_size);
 
 void* env_get_handle(Env* env, KObjectID id, KAccessRights* rights);
 KObjectID env_grant_rights(Env* env, KAccessRights rights, KObject* obj);
@@ -355,15 +353,15 @@ void arch_init(int core_id);
 void arch_handoff(int core_id);
 void arch_wake_up(int core_id);
 uintptr_t arch_canonical_addr(uintptr_t p);
+uint64_t arch_get_micros(void);
 void arch_set_address_space(Env* env);
 void arch_pte_update(Env* env, uintptr_t access_addr, uintptr_t translated, VMem_Flags flags);
 
 // broadcast to all cores running an Env that we've modified the address space
 void arch_tlb_shootdown(Env* env);
-void arch_backtrace(void);
 
 CPUState new_thread_state(uintptr_t ip, uintptr_t arg, uintptr_t sp, bool is_user);
-_Noreturn void do_context_switch(CPUState* state, uintptr_t addr_space);
+_Noreturn void do_context_switch(CPUState* state, uintptr_t address_space, uintptr_t gs_base);
 
 void* memmap_view(PageTable* address_space, uintptr_t phys_addr, uintptr_t virt_addr, size_t size, VMem_Flags flags);
 void memmap_unview(PageTable* address_space, uintptr_t virt_addr, size_t size);

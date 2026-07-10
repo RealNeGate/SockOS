@@ -197,6 +197,10 @@ static __inline long __syscall(long n, long a1, long a2, long a3, long a4, long 
 #define syscall7(n, a1, a2, a3, a4, a5, a6, a7) __syscall(n, a1, a2, a3, a4, a5, a6, a7, 0)
 #define syscall8(n, a1, a2, a3, a4, a5, a6, a7, a8) __syscall(n, a1, a2, a3, a4, a5, a6, a7, a8)
 
+static MSG_Tag msg_tag(int untyped, int typed, int strs, uint64_t cmd) {
+    return (MSG_Tag){ .untyped = untyped, .typed = typed, .strings = strs, .cmd = cmd };
+}
+
 static __inline long mailbox_ipc(KHandle mailbox, KHandle to, MSG_Tag tag, KHandle* from) {
     UTCB* utcb = get_utcb();
 
@@ -221,6 +225,11 @@ static __inline long mailbox_ipc(KHandle mailbox, KHandle to, MSG_Tag tag, KHand
     return ret;
 }
 
+static MSG_Tag mailbox_call(KHandle mailbox, MSG_Tag tag) {
+    tag.flags = MAILBOX_IPC_SEND;
+    return (MSG_Tag){ .raw = mailbox_ipc(mailbox, NULL_HANDLE, tag, NULL) };
+}
+
 static MSG_Tag mailbox_send(KHandle mailbox, KHandle to, MSG_Tag tag, KHandle* from) {
     tag.flags = MAILBOX_IPC_SEND;
     return (MSG_Tag){ .raw = mailbox_ipc(mailbox, to, tag, from) };
@@ -231,13 +240,13 @@ static MSG_Tag mailbox_reply(KHandle mailbox, KHandle to, MSG_Tag tag, KHandle* 
     return (MSG_Tag){ .raw = mailbox_ipc(mailbox, to, tag, from) };
 }
 
-static __inline MSG_Tag mailbox_wait(KHandle mailbox, KHandle to, KHandle* from) {
+static __inline MSG_Tag mailbox_wait(KHandle mailbox, KHandle* from) {
     UTCB* utcb = get_utcb();
     MSG_Tag tag = { .flags = MAILBOX_IPC_RECV };
 
     register long ret __asm__("rax") = SYS_mailbox_ipc;
     register long b1  __asm__("rdi") = mailbox;
-    register long b2  __asm__("rsi") = to;
+    register long b2  __asm__("rsi") = 0;
     register long b3  __asm__("rdx") = tag.raw;
     register long b4  __asm__("r10") = 0;
     register long b5  __asm__("r8")  = 0;

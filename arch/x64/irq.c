@@ -30,7 +30,7 @@ _Static_assert(sizeof(IDT) == 10, "expected sizeof(IDT) to be 10 bytes");
 
 // in irq.asm
 extern void syscall_handler(void);
-extern _Noreturn void do_context_switch(CPUState* state, uintptr_t address_space);
+extern _Noreturn void do_context_switch(CPUState* state, uintptr_t address_space, uintptr_t gs_base);
 
 // this is where all interrupts get pointed to, from there it's redirected to irq_int_handler
 extern void isr_handler(void);
@@ -155,7 +155,7 @@ void x86_irq_startup(int id) {
         x86_writemsr(IA32_STAR, ((u64)KERNEL_CS << 32ull) | (0x10ull << 48ull));
 
         // we're storing the per_cpu info here, syscall will use this
-        x86_writemsr(IA32_KERNEL_GS_BASE, (uintptr_t) &boot_info->cores[id]);
+        // x86_writemsr(IA32_KERNEL_GS_BASE, (uintptr_t) &boot_info->cores[id]);
     }
 
     IDT idt;
@@ -293,9 +293,14 @@ uintptr_t timer_interrupt(CPUState* state, uintptr_t cr3, PerCPU* cpu, u64 now) 
     }
 
     // do thread context switch, if we changed
+    bool was_kernel_thread = cpu->current_thread == NULL || cpu->current_thread->state.cs == 8;
     if (cpu->current_thread != next) {
         *state = next->state;
         cpu->current_thread = next;
+    }
+
+    if (state->cs != 8) {
+        x86_writemsr(IA32_KERNEL_GS_BASE, next->utcb_addr);
     }
 
     #if DEBUG_SPALL
@@ -417,10 +422,7 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
                 cr3 = timer_interrupt(state, cr3, cpu, now);
             }
         } else {
-            #if DEBUG_IRQ
-            dump_page_fault(state, cr3, cpu, env, access_addr);
-            #endif
-
+            arch_backtrace((void*) state->rbp);
             x86_halt();
         }
     } else if (state->interrupt_num == 0x20) {

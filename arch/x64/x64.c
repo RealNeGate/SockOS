@@ -41,6 +41,8 @@ void x86_set_kernel_gs(int core_id) {
     // fill GS base with PerCPU*
     x86_writemsr(IA32_KERNEL_GS_BASE, (uintptr_t) &boot_info->cores[core_id]);
     asm volatile ("swapgs");
+
+    kprintf("Init GS %p %p\n", x86_readmsr(IA32_GS_BASE), x86_readmsr(IA32_KERNEL_GS_BASE));
 }
 
 static atomic_int cores_ready;
@@ -105,7 +107,7 @@ void arch_init(int id) {
         asm volatile ("mov ax, 0x28\nltr ax" ::: "ax");
     }
 
-    kprintf("Hello Mr. CPU! %p %d\n", cpu, id);
+    kprintf("Hello Mr. CPU! %p %d %p\n", cpu, id, cpu->irq_stack_top);
 
     // fence to wait for all CPUs to finish init
     cores_ready++;
@@ -120,9 +122,9 @@ struct StackFrame_x64 {
     void* rip;
 };
 
-void arch_backtrace(void) {
+void arch_backtrace(void* fp) {
     kprintf("CPU-%d: BACKTRACE:\n", cpu_get_index());
-    StackFrame_x64* frame = __builtin_frame_address(0);
+    StackFrame_x64* frame = fp ? fp : __builtin_frame_address(0);
     while (frame) {
         uintptr_t rip = (uintptr_t) frame->rip;
         if (rip >= boot_info->elf_virtual_ptr) {
