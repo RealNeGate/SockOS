@@ -126,7 +126,7 @@ do
     })
 
     table.insert(lines, "# STDLIB")
-    build("objs/ld.so", "cc", "userland/stdlib/entry.c", {
+    build("objs/ld.so", "cc", "userland/loader/main.c", {
         flags = elf_cflags.." -fuse-ld=lld -T userland/init/link.ld -fpic"
     })
 

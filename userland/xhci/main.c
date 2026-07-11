@@ -637,29 +637,21 @@ static void usb_device_thread(void* d) {
 
     KHandle mailbox = dev->mailbox;
 
-    #if 0
     // Process messages
-    KHandle handle;
-    uint64_t args[2], msg[4];
-    uint64_t info = mailbox_wait(mailbox, sizeof(msg) << 16u, args, msg, &handle);
+    KHandle from;
+    MSG_Tag tag = mailbox_wait(mailbox, &from);
     for (;;) {
-        int ret = 0;
-        switch (info & 0xFFFF) {
-            case USB_CMD_CTRL_XFER: {
-                break;
-            }
-
+        uintptr_t ret[2];
+        switch (tag.cmd) {
             case USB_CMD_BULK_XFER: {
-                fault_handler();
-
-                handle = dev->ipc_ring_vmo[args[0]];
+                size_t index = utcb->mr[0];
+                utcb->hr[0] = dev->ipc_ring_vmo[index];
                 break;
             }
         }
         // reply and wait for the next message
-        info = mailbox_reply(mailbox, (sizeof(msg) << 16u) | (ret & 0xFFFF), args, msg, &handle);
+        tag = mailbox_reply(mailbox, from, tag, &from, ret[0], ret[1]);
     }
-    #endif
 }
 
 static void usb_endpoint_thread(void* arg) {
@@ -745,12 +737,15 @@ int _start(KHandle pci_handle) {
     erst[2] = 256;
     erst[3] = 0;
 
+    printf("[usb]  MMIO: %p\n", mmio);
+
     volatile uint32_t* rt_regs = &mmio[mmio[6] >> 2];
     op_base  = &mmio[(mmio[0] & 0xFF) >> 2];
     doorbell = &mmio[mmio[5] >> 2];
 
     context_slot_size = (mmio[4] >> 2) & 1 ? 64 : 32;
     printf("[usb]  Slot size: %zu\n", context_slot_size);
+    fault_handler();
 
     uint32_t max_ports = mmio[1] >> 24u;
     uint32_t max_slots = mmio[1] & 0xFF;

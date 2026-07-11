@@ -10,8 +10,8 @@ typedef struct __attribute__((packed)) {
 } PCI_SegmentGroup;
 
 typedef struct {
-	u32 value;
-	u32 size;
+    u32 value;
+    u32 size;
 } Raw_BAR;
 
 struct PCI_Device {
@@ -44,12 +44,12 @@ struct PCI_Device {
 };
 
 typedef struct {
-	u64 addr;
+    u64 addr;
     u64 size;
-	bool prefetch;
-	u8 type;
+    bool prefetch;
+    u8 type;
 
-	bool is_mem;
+    bool is_mem;
 } BAR;
 
 typedef struct {

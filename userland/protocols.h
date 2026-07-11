@@ -2,8 +2,13 @@
 #include <beans.h>
 
 enum {
-    // (name: String, val: Mailbox) -> ()
+    // Name server protocol
     NAME_REGISTER_DRIVER,
+    NAME_FIND_DRIVER,
+
+    // USB protocol
+    USB_CTRL_XFER,
+    USB_BULK_XFER,
 };
 
 static int name_register_driver(UTCB* utcb, KHandle root, int name, KHandle handle) {

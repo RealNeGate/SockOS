@@ -124,7 +124,7 @@ bool memmap_translate(PageTable* address_space, uintptr_t virt, u64* out) {
         return false;
     }
 
-    if (*out) {
+    if (out) {
         *out = (r & ~0xFFFull) | (virt & 0xFFF);
     }
     return true;

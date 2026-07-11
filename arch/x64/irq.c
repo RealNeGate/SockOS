@@ -298,7 +298,6 @@ uintptr_t timer_interrupt(CPUState* state, uintptr_t cr3, PerCPU* cpu, u64 now) 
         *state = next->state;
         cpu->current_thread = next;
     }
-
     x86_writemsr(IA32_FS_BASE, next->utcb_addr);
 
     #if DEBUG_SPALL
@@ -400,6 +399,9 @@ uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu) {
                 bool success = vmem_segfault(env, access_addr, is_write);
                 if (!success) {
                     dump_page_fault(state, cr3, cpu, env, curr, access_addr);
+
+                    // arch_backtrace((void*) state->rbp);
+                    // x86_halt();
 
                     kassert(curr->client.wake_time == 0, "just in case");
                     curr->client.is_dead = true;

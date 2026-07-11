@@ -2,6 +2,7 @@
 #include <common.h>
 #include <elf.h>
 #include "../kernel/printf.c"
+#include "../protocols.h"
 
 void* memset(void* buffer, int c, size_t n) {
     u8* buf = (u8*)buffer;
@@ -291,8 +292,7 @@ static bool spawn_process(OpenFile* file, KHandle arg0, KHandle arg1) {
     // ...
 
     // Spin up the main thread
-    KHandle thread = thread_create(child_env, (void*) elf_header->e_entry, arg0, arg1, 2*1024*1024, THREAD_FLAGS_GRANT0 | THREAD_FLAGS_GRANT1);
-    return true;
+    return thread_create(child_env, (void*) elf_header->e_entry, arg0, arg1, 2*1024*1024, THREAD_FLAGS_GRANT0 | THREAD_FLAGS_GRANT1) > 0;
 }
 
 int _start(KHandle bootstrap_vmo, UTCB* utcb) {
@@ -359,26 +359,24 @@ int _start(KHandle bootstrap_vmo, UTCB* utcb) {
     KHandle from;
     MSG_Tag tag = mailbox_wait(mailbox, &from);
     for (;;) {
-        fault_handler();
-
         uintptr_t ret[2];
         switch (tag.cmd) {
             // Register into names
-            case 0: {
+            case NAME_REGISTER_DRIVER: {
                 size_t index = utcb->mr[0];
                 names[index] = utcb->hr[0];
-                tag = msg_tag(0, 0, 0, 0);
+                tag = msg_tag(0, 0, 0, tag.cmd);
 
-                printf("Register! %d %p\n", index, utcb->hr[0]);
+                printf("Register! %d %p (%p)\n", index, utcb->hr[0], from);
                 fault_handler();
                 break;
             }
 
             // Retrieve from names
-            case 1: {
+            case NAME_FIND_DRIVER: {
                 size_t index = utcb->mr[0];
                 utcb->hr[0] = names[index];
-                tag = msg_tag(0, 1, 0, 0);
+                tag = msg_tag(0, 1, 0, tag.cmd);
 
                 printf("Get! %d %p\n", index, utcb->hr[0]);
                 fault_handler();

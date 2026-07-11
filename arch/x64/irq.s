@@ -275,16 +275,18 @@ syscall_handler.bad_syscall:
 do_context_switch:
     ; switch to new address space
     test rsi, rsi
-    jz  .skip
-    mov cr3, rsi
+    jz   .skip
+    mov  cr3, rsi
 .skip:
-    mov rsp, rdi
-
+    mov  rsp, rdi
+    test rdx, rdx
+    jz   .skip2
     ; write FS base
     mov eax, edx
     shr rdx, 32
     mov ecx, 0xC0000100
     wrmsr
+.skip2:
 
     ; fxrstor also needs to be aligned to 16bytes
     add rsp, 512 + 16

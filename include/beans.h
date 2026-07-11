@@ -6,7 +6,7 @@
 #include <stdbool.h>
 
 #define NULL_HANDLE 0u
-typedef unsigned int KHandle;
+typedef unsigned long KHandle;
 
 // memory mapping prot
 enum {
@@ -176,7 +176,7 @@ typedef struct {
 
 static UTCB* get_utcb(void) {
     uint64_t result;
-    asm volatile ("mov %q0, fs:[0]" : "=r" (result));
+    asm volatile ("mov %q0, fs:[8]" : "=r" (result));
     return (UTCB*) result;
 }
 
@@ -221,7 +221,7 @@ static __inline long mailbox_ipc(KHandle mailbox, KHandle to, MSG_Tag tag, KHand
     register long b7  __asm__("r12") = utcb->mr[2];
     register long b8  __asm__("r13") = utcb->mr[3];
 
-    __asm__ __volatile__ ("syscall" : "+r"(ret), "+r"(b5), "+r"(b6), "+r"(b7), "+r"(b8) : "r"(b1), "r"(b2), "r"(b3), "r"(b4) : "rcx", "r11", "memory");
+    __asm__ __volatile__ ("syscall" : "+r"(ret), "+r"(b4), "+r"(b5), "+r"(b6), "+r"(b7), "+r"(b8) : "r"(b1), "r"(b2), "r"(b3) : "rcx", "r11", "memory");
 
     // writeback, technically not necessary
     if (from) { *from = b4; }
@@ -261,7 +261,7 @@ static __inline MSG_Tag mailbox_wait(KHandle mailbox, KHandle* from) {
     register long b7  __asm__("r12") = 0;
     register long b8  __asm__("r13") = 0;
 
-    __asm__ __volatile__ ("syscall" : "+r"(ret), "+r"(b5), "+r"(b6), "+r"(b7), "+r"(b8) : "r"(b1), "r"(b2), "r"(b3), "r"(b4) : "rcx", "r11", "memory");
+    __asm__ __volatile__ ("syscall" : "+r"(ret), "+r"(b4), "+r"(b5), "+r"(b6), "+r"(b7), "+r"(b8) : "r"(b1), "r"(b2), "r"(b3) : "rcx", "r11", "memory");
 
     // writeback, technically not necessary
     if (from) { *from = b4; }
@@ -316,7 +316,10 @@ static int event_signal(KHandle event) {
 
 static KHandle thread_create(KHandle env, void* fn, uintptr_t arg0, uintptr_t arg1, size_t stack_size, int flags) {
     char* stack = mem_map_private(env, stack_size, PROT_RW, 0);
-    char* utcb  = mem_map_private(env, sizeof(UTCB), PROT_RW, 0);
+    UTCB* utcb  = mem_map_private(env, sizeof(UTCB), PROT_RW, 0);
+    if (env == NULL_HANDLE) {
+        utcb->self = utcb;
+    }
     return syscall7(SYS_thread_create, env, (uint64_t) fn, (uint64_t) (stack+stack_size), arg0, arg1, (uint64_t) utcb, flags);
 }
 

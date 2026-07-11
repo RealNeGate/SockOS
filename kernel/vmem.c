@@ -331,7 +331,11 @@ void vmem_dump(Env* env) {
             if (!desc->valid) {
                 kprintf("[%p - %p] FREE\n", start_addr, end_addr);
             } else if (desc->vmo) {
-                kprintf("[%p - %p] VIEW: [OBJ-%p + %zu)\n", start_addr, end_addr, desc->vmo->super.id, desc->offset);
+                if (desc->vmo->paddr) {
+                    kprintf("[%p - %p] VIEW: [OBJ-%d:  %p)\n", start_addr, end_addr, desc->vmo->super.id, desc->vmo->paddr + desc->offset);
+                } else {
+                    kprintf("[%p - %p] VIEW: [OBJ-%d + %zu)\n", start_addr, end_addr, desc->vmo->super.id, desc->offset);
+                }
             } else {
                 kprintf("[%p - %p]\n", start_addr, end_addr);
             }
@@ -403,7 +407,6 @@ uintptr_t vmem_map(Env* env, KObject_VMO* vmo, uintptr_t vaddr, size_t offset, s
         }
         // *out_paddr = kaddr2paddr(kaddr);
     }
-
     return vaddr;
 }
 

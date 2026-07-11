@@ -112,7 +112,7 @@ static _Noreturn void yield_thread(CPUState* state, PerCPU* cpu, Thread* thread)
 
     state->interrupt_num = 32;
     uintptr_t new_cr3 = x86_irq_int_handler(state, cr3, cpu);
-    do_context_switch(state, new_cr3, thread->utcb_addr);
+    do_context_switch(state, new_cr3, 0);
 }
 
 static int get_obj_with_rights(Env* env, KObjectID id, int tag, KAccessRights exp, KObject** out_obj) {
@@ -155,16 +155,17 @@ static int mailbox_xfer(CPUState* state, PerCPU* cpu, Thread* curr, Thread* next
     transfer_time(cpu, curr, next, state);
 
     KCHECK(memmap_translate(next->parent->addr_space.hw_tables, next->utcb_addr, NULL), RESULT_BAD_MEMORY);
-    UTCB* dst_utcb = (UTCB*) next->utcb_addr;
 
-    // transfer inline args (MR0, MR1)
+    // transfer inline args (MR0, MR1, MR2, MR3, MR4)
     GET_RETURN(&next->state) = SYS_PARAM1;
+    GET_PARAM3(&next->state) = env_grant_rights(next->parent, 0, &curr->super);
     GET_PARAM4(&next->state) = SYS_PARAM4;
     GET_PARAM5(&next->state) = SYS_PARAM5;
     GET_PARAM6(&next->state) = SYS_PARAM6;
     GET_PARAM7(&next->state) = SYS_PARAM7;
 
     arch_set_address_space(next->parent);
+    UTCB* dst_utcb = (UTCB*) next->utcb_addr;
 
     // copy remaining untyped regs into UTCB
     if (tag.untyped > 4 || tag.typed > 0) {
@@ -176,12 +177,8 @@ static int mailbox_xfer(CPUState* state, PerCPU* cpu, Thread* curr, Thread* next
         // translate UTCB, should be resident in memory if we just wrote to it
         KCHECK(memmap_translate(curr->parent->addr_space.hw_tables, curr->utcb_addr, &utcb_paddr), RESULT_BAD_MEMORY);
 
-        UTCB* src_utcb = paddr2kaddr(utcb_paddr);
-        FOR_N(i, 4, tag.untyped) {
-            dst_utcb->mr[i] = src_utcb->mr[i];
-        }
-
         // copy handles
+        UTCB* src_utcb = paddr2kaddr(utcb_paddr);
         FOR_N(i, 0, tag.typed) {
             KObject* obj = env_get_handle(env, src_utcb->hr[i], NULL);
             KCHECK(obj, RESULT_NO_HANDLE);
@@ -190,7 +187,6 @@ static int mailbox_xfer(CPUState* state, PerCPU* cpu, Thread* curr, Thread* next
             dst_utcb->hr[i] = src_utcb->hr[i];
         }
     }
-
     return 0;
 }
 
@@ -434,13 +430,12 @@ static uintptr_t syscall_pci_claim_device(CPUState* state, PerCPU* cpu, KHandle 
         out_dev->bars[i]  = NULL_HANDLE;
     }
 
-    kprintf("PCI %p\n", dev);
     for (size_t i = 0; i < dev->bar_count; i++) {
-        if ((dev->bar[i].value & 1) == 0) {
+        Raw_BAR* bar = &dev->bar[i];
+        if (bar->value == 0 || (bar->value & 1)) {
             continue; // I/O bar
         }
 
-        Raw_BAR* bar = &dev->bar[i];
         size_t size = ~bar->size + 1;
         uintptr_t addr = (bar->value >> 4) << 4;
         uint8_t type = (bar->value >> 1) & 3;
@@ -448,14 +443,13 @@ static uintptr_t syscall_pci_claim_device(CPUState* state, PerCPU* cpu, KHandle 
         kassert(type == 0 || type == 2, "TODO: Unsupported BAR (%d)", type);
         if (type == 2) { // 64bit BAR
             KCHECK(i < dev->bar_count, RESULT_NO_BAR);
-            addr |= ((uintptr_t) dev->bar[i].value) << 32ull;
+            addr |= ((uintptr_t) dev->bar[i + 1].value) << 32ull;
         }
 
         VMem_Flags flags = (bar->value >> 3) & 1 ? VMEM_PAGE_WRITETHRU : VMEM_PAGE_UNCACHED;
         KObject_VMO* vmo_ptr = vmo_create_physical(addr, size, flags);
-        kprintf("BAR[%zu] %p %#zx\n", i, addr, size);
 
-        out_dev->sizes[i] = 0;
+        out_dev->sizes[i] = size;
         out_dev->bars[i]  = env_grant_rights(env, 0, &vmo_ptr->super);
 
         i += (type == 2); // 64bit BAR
@@ -502,7 +496,7 @@ static uintptr_t syscall_mailbox_ipc(CPUState* state, PerCPU* cpu, KHandle mailb
         if (to_handle == NULL_HANDLE) {
             // No one around to respond? just wait, we'll retry the
             // syscall when the time comes.
-            next = waitqueue_wake(&mailbox->tx_wait, cpu, mailbox, false);
+            next = waitqueue_wake(&mailbox->rx_wait, cpu, mailbox, false);
             if (next == NULL) {
                 const uint8_t* code = (const uint8_t*) state->rip;
 
@@ -526,12 +520,6 @@ static uintptr_t syscall_mailbox_ipc(CPUState* state, PerCPU* cpu, KHandle mailb
         }
         kassert(next->parent, "mailboxes can't live in kernel-threads");
 
-        // We must be responded to by the same mailbox
-        curr->client.is_blocked = true;
-        curr->wait_obj = mailbox;
-
-        SYS_PARAM3 = next->super.id;
-
         int res = mailbox_xfer(state, cpu, curr, next, tag);
         if (res < 0) { return res; }
     }
@@ -541,6 +529,10 @@ static uintptr_t syscall_mailbox_ipc(CPUState* state, PerCPU* cpu, KHandle mailb
         waitqueue_wait(&mailbox->rx_wait, curr, mailbox);
         // Notify any senders who think there's no one waiting
         waitqueue_wake(&mailbox->tx_wait, cpu, mailbox, true);
+    } else {
+        // We must be responded to by the same mailbox
+        curr->client.is_blocked = true;
+        curr->wait_obj = mailbox;
     }
 
     if (next != NULL) {
