@@ -34,6 +34,7 @@ enum {
     IA32_EFER  = 0xC0000080,
     IA32_STAR  = 0xC0000081,
     IA32_LSTAR = 0xC0000082,
+    IA32_FS_BASE = 0xC0000100,
     IA32_GS_BASE = 0xC0000101,
     IA32_KERNEL_GS_BASE = 0xC0000102,
 
@@ -55,9 +56,7 @@ _Noreturn void x86_halt(void);
 void x86_parse_acpi(void);
 void x86_enable_apic(void);
 void x86_boot_cores(void);
-
 void x86_irq_startup(int core_id);
-
 void x86_send_ipi(u64 lapic_id, u64 val);
 
 uintptr_t x86_irq_int_handler(CPUState* state, uintptr_t cr3, PerCPU* cpu);

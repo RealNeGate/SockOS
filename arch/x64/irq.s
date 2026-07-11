@@ -278,15 +278,12 @@ do_context_switch:
     jz  .skip
     mov cr3, rsi
 .skip:
-    ; use CPUState as the stack
-    test rdi, rdi
-    jz .skip2
     mov rsp, rdi
 
-    ; write GS base
+    ; write FS base
     mov eax, edx
     shr rdx, 32
-    mov ecx, 0xC0000101
+    mov ecx, 0xC0000100
     wrmsr
 
     ; fxrstor also needs to be aligned to 16bytes
@@ -310,6 +307,6 @@ do_context_switch:
     pop rax
 
     add rsp, 16 ; pop interrupt_num and error code
+
+    swapgs_if_necessary
     iretq
-.skip2:
-    ret

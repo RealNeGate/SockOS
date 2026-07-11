@@ -35,6 +35,13 @@ void* memmove(void* dest, const void* src, size_t n) {
     return dest;
 }
 
+int strcmp(const char* a, const char* b) {
+    while (*a && *b && *a == *b) {
+        a++, b++;
+    }
+    return *a - *b;
+}
+
 // Just build it as part of the bigger unit
 #define LZ4_memset(dst, src, n) memset(dst, src, n)
 #define LZ4_memcpy(dst, src, n) memcpy(dst, src, n)
@@ -61,14 +68,7 @@ static KHandle log_stream;
 static char* log_buffer;
 static int log_used;
 
-int strcmp(const char* a, const char* b) {
-    while (*a && *b && *a == *b) {
-        a++, b++;
-    }
-    return *a - *b;
-}
-
-void fault_handler(void) {
+static void fault_handler(void) {
     if (log_stream && log_used) {
         sys_debug_log(log_stream, log_used);
         log_used = 0;
@@ -85,6 +85,14 @@ void _putchar(char ch) {
     }
 
     log_buffer[log_used++] = ch;
+}
+
+#undef assert // lz4.c
+#define assert(cond) if (!(cond)) { assert_msg(#cond); }
+static void assert_msg(const char* str) {
+    printf("assert condition failed! %s\n", str);
+    fault_handler();
+    *((volatile int*) 0) = 0;
 }
 
 static int parse_hexchar(int ch) {
@@ -224,132 +232,75 @@ static void hexdump(const char* buf, size_t len) {
     }
 }
 
-static bool exec(FileEntry* file, KHandle arg) {
-    if (file->unpacked_len < sizeof(Elf64_Ehdr)) {
+typedef struct {
+    KHandle vmo;
+    size_t len;
+    char* contents;
+} OpenFile;
+
+// create VMO from unpacked file
+static bool open_file(FileEntry* file, OpenFile* out) {
+    out->vmo = vmo_create(file->unpacked_len);
+    out->len = file->unpacked_len;
+    out->contents = mem_map(NULL_HANDLE, 0, out->vmo, 0, out->len, PROT_RW, 0);
+    return LZ4_decompress_safe(file->data, out->contents, file->data_len, out->len) == out->len;
+}
+
+static bool spawn_process(OpenFile* file, KHandle arg0, KHandle arg1) {
+    if (file->len < sizeof(Elf64_Ehdr)) {
         return false;
     }
 
-    char* contents = mem_map_private(NULL_HANDLE, file->unpacked_len, PROT_RW, 0);
-    int res = LZ4_decompress_safe(file->data, contents, file->data_len, file->unpacked_len);
-    if (file->unpacked_len != res) {
-        return false;
-    }
-
-    Elf64_Ehdr* elf_header = (Elf64_Ehdr*) contents;
+    Elf64_Ehdr* elf_header = (Elf64_Ehdr*) file->contents;
     size_t segment_size = elf_header->e_phentsize;
     size_t segment_header_bounds = elf_header->e_phoff + elf_header->e_phnum*segment_size;
-    if (segment_header_bounds >= file->unpacked_len) {
+    if (segment_header_bounds >= file->len) {
         printf("[init] error: segments do not fit into file\n");
         return false;
     }
 
-    uintptr_t lo = 0, hi = 0;
-    size_t page_size = 4096;
-    size_t total_memsz = 0;
-    const char* segments = contents + elf_header->e_phoff;
-    for (size_t i = 0; i < elf_header->e_phnum; i++) {
-        Elf64_Phdr* segment = (Elf64_Phdr*) (segments + i*segment_size);
-        if (segment->p_type != PT_LOAD) {
-            continue;
-        }
-
-        size_t mem_size    = (segment->p_memsz + page_size - 1) & -page_size;
-        uintptr_t vaddr    = segment->p_vaddr & -page_size;
-        uintptr_t vaddr_hi = vaddr + mem_size;
-
-        uintptr_t offset   = segment->p_vaddr & (page_size - 1);
-        total_memsz = (segment->p_memsz + offset + page_size - 1) & -page_size;
-
-        if (lo > vaddr)    { lo = vaddr; }
-        if (hi < vaddr_hi) { hi = vaddr_hi; }
-    }
-
-    printf("Total Mem %zu\n", total_memsz);
-    fault_handler();
-
-    // Create environment
     KHandle child_env = syscall0(SYS_env_create);
-    KHandle section_vmo = vmo_create(total_memsz);
-
-    enum {
-        DT_FLAGS_1 = 0x6ffffffb,
-        DT_DEBUG   = 21,
-        DT_SYMTAB  = 6,
-        DT_SYMENT  = 11,
-        DT_STRTAB  = 5,
-        DT_HASH    = 4,
-        DT_STRSZ   = 10,
-        DT_GNUHASH = 0x6ffffef5,
-    };
-
-    // Elf dynamic state
-    size_t symtab = 0, syment = 0;
-    char* strtab = NULL;
-    char* dyn_ht = NULL;
+    KHandle elf_vmo = file->vmo;
 
     // Place ELF into env
-    size_t curr_pos = 0;
-    char* elf_vmap   = mem_map_private(child_env, hi - lo, PROT_RW, 0);
-    char* elf_mirror = mem_map_private(NULL_HANDLE, hi - lo, PROT_NONE, 0);
+    size_t page_size = 4096;
+    const char* segments = file->contents + elf_header->e_phoff;
     for (size_t i = 0; i < elf_header->e_phnum; i++) {
         Elf64_Phdr* segment = (Elf64_Phdr*) (segments + i*segment_size);
-        if (segment->p_type == PT_DYNAMIC) {
-            Elf64_Dyn* dyns = (Elf64_Dyn*) &contents[segment->p_offset];
-            size_t dyn_count = segment->p_memsz / sizeof(Elf64_Dyn);
+        if (segment->p_type == PT_LOAD) {
+            // check segment permissions
+            assert(segment->p_filesz <= segment->p_memsz && "no enough space in memory for file data");
+            assert((segment->p_align & (segment->p_align - 1)) == 0 && "alignment is not a power-of-two");
 
-            for (size_t j = 0; j < dyn_count; j++) {
-                printf("DYN[%#zx] %p\n", dyns[j].d_tag, dyns[j].d_ptr);
+            uintptr_t vaddr  = segment->p_vaddr & -page_size;
+            size_t offset    = segment->p_offset & -page_size;
+            size_t file_size = (segment->p_filesz + page_size - 1) & -page_size;
+            size_t mem_size  = (segment->p_memsz  + page_size - 1) & -page_size;
 
-                if (dyns[j].d_tag == DT_HASH)   { dyn_ht = &elf_mirror[dyns[j].d_ptr]; }
-                if (dyns[j].d_tag == DT_SYMTAB) { symtab = dyns[j].d_ptr; }
-                if (dyns[j].d_tag == DT_SYMENT) { syment = dyns[j].d_ptr; }
-                if (dyns[j].d_tag == DT_STRTAB) { strtab = &elf_mirror[dyns[j].d_ptr]; }
-            }
-        } else if (segment->p_type == PT_LOAD) {
-            uintptr_t vaddr  = (segment->p_vaddr & -page_size) - lo;
-            uintptr_t offset = segment->p_vaddr & (page_size - 1);
-            uintptr_t memsz  = segment->p_memsz + offset;
-            memsz = (memsz + page_size - 1) & -page_size;
-
-            // Mirror into current env
-            char* dst = mem_map(NULL_HANDLE, elf_mirror + vaddr, section_vmo, curr_pos, memsz, PROT_RW, 0);
-            printf("RANG %p %p\n", elf_mirror + vaddr, elf_mirror + vaddr + memsz - 1);
             if (segment->p_filesz > 0) {
-                memcpy(&dst[offset], &contents[segment->p_offset], segment->p_filesz);
+                mem_map(child_env, (void*) vaddr, elf_vmo, offset, file_size, PROT_RW, 0);
             }
-
-            // Map into child env
-            mem_map(child_env, elf_vmap + vaddr, section_vmo, curr_pos, memsz, PROT_RW, 0);
-            curr_pos += memsz;
+            if (file_size < mem_size) {
+                mem_map(child_env, (void*) (vaddr + file_size), NULL_HANDLE, 0, mem_size - file_size, PROT_RW, 0);
+            }
         }
     }
-
-    {
-        hexdump(&elf_mirror[symtab], sizeof(Elf64_Sym));
-
-        uint32_t ht_entry_count;
-        memcpy(&ht_entry_count, dyn_ht, sizeof(uint32_t));
-        printf("A %d\n", ht_entry_count);
-
-        // first symbol is NULL symbol
-        Elf64_Sym* syms = (Elf64_Sym*) &elf_mirror[symtab];
-        for (size_t j = 1; j < ht_entry_count; j++) {
-            printf("SYM[%zu] %s\n", j, &strtab[syms[j].st_name]);
-        }
-    }
-    fault_handler();
 
     // TODO(NeGate): unmap and revoke our own rights over the
     // child env to avoid later leaks of resources.
     // ...
 
     // Spin up the main thread
-    void* fn = elf_vmap + (elf_header->e_entry - lo);
-    KHandle thread = thread_create(child_env, fn, arg, 2*1024*1024, THREAD_FLAGS_GRANT);
+    KHandle thread = thread_create(child_env, (void*) elf_header->e_entry, arg0, arg1, 2*1024*1024, THREAD_FLAGS_GRANT0 | THREAD_FLAGS_GRANT1);
     return true;
 }
 
-int _start(KHandle bootstrap_vmo) {
+int _start(KHandle bootstrap_vmo, UTCB* utcb) {
+    static char dummy_tls[64];
+
+    utcb->tls_addr = dummy_tls;
+    utcb->self     = utcb;
+
     size_t initrd_size = vmo_get_size(bootstrap_vmo);
     FileEntry* initrd  = mem_map(NULL_HANDLE, 0, bootstrap_vmo, 0, initrd_size, PROT_RW, 0);
 
@@ -357,17 +308,27 @@ int _start(KHandle bootstrap_vmo) {
     printf("InitRD:\n");
     fault_handler();
 
+    bool has_ld_so = false;
+    OpenFile ld_so = { 0 };
     for (FileEntry* file = initrd; file->path[0];) {
         printf("[init] found file '%s' (%zu bytes)\n", file->path, file->data_len);
         fault_handler();
 
         if (strcmp(file->path, "/drivers.txt") == 0) {
             parse_driver_list(file);
+        } else if (strcmp(file->path, "/ld.so") == 0) {
+            has_ld_so = open_file(file, &ld_so);
         }
 
         // Advance files
         size_t padded_len = (file->data_len + 16) & -16ull;
         file = (FileEntry*) (((char*) file) + sizeof(FileEntry) + padded_len);
+    }
+
+    if (!has_ld_so) {
+        printf("[init] Where's ld.so?\n");
+        fault_handler();
+        thread_exit(1);
     }
 
     // Find the first set of connected PCI devices
@@ -379,25 +340,18 @@ int _start(KHandle bootstrap_vmo) {
         DriverEntry* driver = get_driver(key);
         if (driver != NULL) {
             FileEntry* file = find_file(initrd, driver->path_len, driver->path);
-            if (file != NULL) {
+
+            OpenFile driver_exec;
+            if (file != NULL && open_file(file, &driver_exec)) {
                 printf("[init] PCI Device matched! %04x:%04x    %.*s\n", key >> 16u, key & 0xFFFF, (int) driver->path_len, driver->path);
-                exec(file, dev);
+                spawn_process(&ld_so, driver_exec.vmo, dev);
             }
         }
     }
-
-    // Launch the desktop server, this will handle I/O relevant to
-    // visualizing and interfacing with a UI.
-    FileEntry* stdlib = find_file(initrd, sizeof("/stdlib.so")-1, "/stdlib.so");
-    if (stdlib != NULL) {
-        printf("Found desktop! %zu bytes\n", stdlib->data_len);
-        exec(stdlib, 0);
-    }
-
     fault_handler();
 
     KHandle mailbox = get_root_mailbox();
-    UTCB* utcb      = get_utcb();
+    utcb = get_utcb();
 
     static KHandle names[256];
 

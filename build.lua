@@ -73,7 +73,7 @@ function filename(file)
     return file:match("^.+/(.+)%..+")
 end
 
-local cflags = " -std=gnu23 -g -Wall -I ext -I include -masm=intel -nostdlib -mno-red-zone -fno-stack-protector -fno-finite-loops -Wno-unused"
+local cflags = " -std=gnu23 -Wall -I ext -I include -masm=intel -nostdlib -mno-red-zone -fno-stack-protector -fno-finite-loops -Wno-unused"
 if false then
     cflags = cflags.." -O2"
 end
@@ -114,7 +114,7 @@ rules({
 do
     local init_rd_list = {
         "userland/drivers.txt",
-        "objs/stdlib.so",
+        "objs/ld.so",
         "objs/xhci.so",
         "objs/intel_gpu.so",
         "objs/bochs.so",
@@ -126,8 +126,8 @@ do
     })
 
     table.insert(lines, "# STDLIB")
-    build("objs/stdlib.so", "cc", "userland/stdlib/entry.c", {
-        flags = elf_cflags.." -fuse-ld=lld -shared -Wl,--hash-style=both -fPIC"
+    build("objs/ld.so", "cc", "userland/stdlib/entry.c", {
+        flags = elf_cflags.." -fuse-ld=lld -T userland/init/link.ld -fpic"
     })
 
     table.insert(lines, "# INTEL GPU")

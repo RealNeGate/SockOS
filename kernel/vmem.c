@@ -169,7 +169,7 @@ void vmem_node_remove(Env* env, uintptr_t key) {
     vmem_cursor_remove(env, cursor.node, cursor.index, 1);
 }
 
-// insert range into B-tree
+// insert range into B+ tree
 VMem_PageDesc* vmem_node_insert(Env* env, uintptr_t key) {
     if (env->addr_space.root == NULL) {
         // new leaf root
@@ -525,3 +525,4 @@ bool vmem_segfault(Env* env, uintptr_t access_addr, bool is_write) {
     }
     return true;
 }
+

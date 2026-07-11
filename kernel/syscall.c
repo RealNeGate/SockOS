@@ -172,7 +172,7 @@ static int mailbox_xfer(CPUState* state, PerCPU* cpu, Thread* curr, Thread* next
 
         u64 utcb_paddr;
         // can't cross page boundary
-        KCHECK((curr->utcb_addr & (PAGE_SIZE - 1)) + sizeof(UTCB) > PAGE_SIZE, RESULT_BAD_MEMORY);
+        KCHECK((curr->utcb_addr & (PAGE_SIZE - 1)) + sizeof(UTCB) <= PAGE_SIZE, RESULT_BAD_MEMORY);
         // translate UTCB, should be resident in memory if we just wrote to it
         KCHECK(memmap_translate(curr->parent->addr_space.hw_tables, curr->utcb_addr, &utcb_paddr), RESULT_BAD_MEMORY);
 
@@ -229,9 +229,9 @@ static uintptr_t syscall_debug_log(CPUState* state, PerCPU* cpu, KHandle vmo_han
     return 0;
 }
 
-static uintptr_t syscall_thread_create(CPUState* state, PerCPU* cpu, KHandle env_handle, uintptr_t ip, uintptr_t sp, uintptr_t arg, uintptr_t utcb, int flags) {
+static uintptr_t syscall_thread_create(CPUState* state, PerCPU* cpu, KHandle env_handle, uintptr_t ip, uintptr_t sp, uintptr_t arg0, uintptr_t arg1, uintptr_t utcb, int flags) {
     KCHECK((utcb & 63) == 0, RESULT_BAD_MEMORY);
-    KCHECK((utcb & 4095) + sizeof(UTCB) > 4096, RESULT_BAD_MEMORY);
+    KCHECK((utcb & 4095) + sizeof(UTCB) <= 4096, RESULT_BAD_MEMORY);
 
     int res;
     Env* env = cpu->current_thread->parent;
@@ -241,18 +241,23 @@ static uintptr_t syscall_thread_create(CPUState* state, PerCPU* cpu, KHandle env
         KVALIDATE(GET_OBJ_WITH_RIGHTS(env, env_handle, KOBJECT_ENV, KACCESS_WRITE, &t_env));
     }
 
-    if ((flags & THREAD_FLAGS_GRANT) && arg) {
-        KAccessRights rights;
-        KObject* obj = env_get_handle(env, arg, &rights);
+    if ((flags & THREAD_FLAGS_GRANT0) && arg0) {
+        KObject* obj = env_get_handle(env, arg0, NULL);
         KCHECK(obj, RESULT_BAD_PERMISSION);
-
-        // import argument as handle
         env_grant_rights(t_env, KACCESS_WRITE, obj);
     }
 
-    Thread* thread = thread_create(t_env, (ThreadEntryFn*) ip, arg, sp);
+    if ((flags & THREAD_FLAGS_GRANT1) && arg1) {
+        KObject* obj = env_get_handle(env, arg1, NULL);
+        KCHECK(obj, RESULT_BAD_PERMISSION);
+        env_grant_rights(t_env, KACCESS_WRITE, obj);
+    }
+
+    Thread* thread = thread_create(t_env, (ThreadEntryFn*) ip, arg0, sp);
     KCHECK(thread, RESULT_NO_MEM);
     thread->utcb_addr = utcb;
+
+    GET_PARAM1(&thread->state) = arg1;
 
     if ((flags & THREAD_FLAGS_SUSPEND) == 0) {
         thread_resume(thread, NULL);
@@ -361,7 +366,6 @@ static uintptr_t syscall_vmo_get_size(CPUState* state, PerCPU* cpu, KHandle vmo_
     KObject_VMO* vmo = env_get_handle(env, SYS_PARAM0, NULL);
     KCHECK(vmo, RESULT_NO_HANDLE);
     KCHECK(vmo->super.tag == KOBJECT_VMO, RESULT_WRONG_HANDLE);
-    kprintf("AAA %zu\n", vmo->size);
     return vmo->size;
 }
 
@@ -490,7 +494,7 @@ static uintptr_t syscall_mailbox_ipc(CPUState* state, PerCPU* cpu, KHandle mailb
 
     KObject_Mailbox* mailbox = env_get_handle(env, mailbox_handle, NULL);
     KCHECK(mailbox, RESULT_NO_HANDLE);
-    KCHECK(mailbox->super.tag == KOBJECT_THREAD, RESULT_WRONG_HANDLE);
+    KCHECK(mailbox->super.tag == KOBJECT_MAILBOX, RESULT_WRONG_HANDLE);
 
     Thread* curr = cpu->current_thread;
     Thread* next = NULL;
@@ -498,7 +502,7 @@ static uintptr_t syscall_mailbox_ipc(CPUState* state, PerCPU* cpu, KHandle mailb
         if (to_handle == NULL_HANDLE) {
             // No one around to respond? just wait, we'll retry the
             // syscall when the time comes.
-            next = waitqueue_wake(&mailbox->tx_wait, cpu, false);
+            next = waitqueue_wake(&mailbox->tx_wait, cpu, mailbox, false);
             if (next == NULL) {
                 const uint8_t* code = (const uint8_t*) state->rip;
 
@@ -509,7 +513,7 @@ static uintptr_t syscall_mailbox_ipc(CPUState* state, PerCPU* cpu, KHandle mailb
                 #error "TODO"
                 #endif
 
-                waitqueue_wait(&mailbox->tx_wait, curr);
+                waitqueue_wait(&mailbox->tx_wait, curr, mailbox);
                 yield_thread(state, cpu, curr);
             }
         } else {
@@ -534,11 +538,9 @@ static uintptr_t syscall_mailbox_ipc(CPUState* state, PerCPU* cpu, KHandle mailb
 
     if (tag.flags & MAILBOX_IPC_RECV) {
         // Go back to waiting
-        curr->client.is_blocked = true;
-        curr->wait_obj = mailbox;
-        waitqueue_wait(&mailbox->rx_wait, curr);
+        waitqueue_wait(&mailbox->rx_wait, curr, mailbox);
         // Notify any senders who think there's no one waiting
-        waitqueue_wake(&mailbox->tx_wait, cpu, true);
+        waitqueue_wake(&mailbox->tx_wait, cpu, mailbox, true);
     }
 
     if (next != NULL) {

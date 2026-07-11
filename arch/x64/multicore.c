@@ -4,12 +4,10 @@
 // Toaruos SMP boot for reference
 // https://github.com/klange/toaruos/blob/master/kernel/arch/x86_64/smp.c
 static atomic_int core_awake;
-void smp_main(PerCPU* cpu) {
-    core_awake = 1;
-
-    int id = cpu - boot_info->cores;
-    arch_init(id);
-    arch_handoff(id);
+void smp_main(size_t core_id) {
+    atomic_add_acq_rel(&core_awake, 1);
+    arch_init(core_id);
+    arch_handoff(core_id);
 }
 
 u32 apic_get_errors(void) {
@@ -88,6 +86,7 @@ void x86_boot_cores(void) {
     u64* gdt_table = kheap_alloc(boot_info->core_count * sizeof(u64));
     gdt_table[0] = 0;
 
+    int max_lapic_id = 0;
     FOR_N(k, 1, boot_info->core_count) {
         char* sp = kheap_alloc(KERNEL_STACK_SIZE);
         // kprintf("KernelStack[%d]: %p - %p\n", k, sp, sp + KERNEL_STACK_SIZE);
@@ -112,6 +111,15 @@ void x86_boot_cores(void) {
         gdt[6] = 0;                // TSS
 
         gdt_table[k] = (u64) &boot_info->cores[k].gdt_pointer[0];
+
+        if (cpu->lapic_id+1 > max_lapic_id) {
+            max_lapic_id = cpu->lapic_id+1;
+        }
+    }
+
+    u32* lapic2core = kheap_alloc(max_lapic_id * sizeof(u32));
+    FOR_N(k, 0, boot_info->core_count) {
+        lapic2core[boot_info->cores[k].lapic_id] = k;
     }
 
     // map the bootstrap code
@@ -136,22 +144,28 @@ void x86_boot_cores(void) {
     slots[3] = (u64) sizeof(PerCPU);
     slots[4] = (u64) premain;
     slots[5] = (u64) gdt_table;
+    slots[6] = (u64) lapic2core;
+    slots[7] = (u64) boot_info->lapic_base;
 
+    core_awake = 1;
+
+    // signal all INITs
     FOR_N(i, 1, boot_info->core_count) {
         uint32_t id = boot_info->cores[i].lapic_id;
-        slots[6] = i;
-        core_awake = 0;
-
-        // INIT-SIPI
         x86_send_ipi(id, 0x4500);
-        // 10 millisecond delay
-        powernap(10000);
-        x86_send_ipi(id, 0x4601);
+    }
 
-        // wait until the thread has advanced
-        while (core_awake == 0) {
-            asm volatile ("pause");
-        }
+    // 10 millisecond delay
+    powernap(10000);
+
+    // signal all SIPIs
+    FOR_N(i, 1, boot_info->core_count) {
+        uint32_t id = boot_info->cores[i].lapic_id;
+        x86_send_ipi(id, 0x4601);
+    }
+
+    // wait until the thread has advanced
+    while (core_awake < boot_info->core_count) {
+        asm volatile ("pause");
     }
 }
-

@@ -49,7 +49,7 @@ void* memmap_view(PageTable* address_space, uintptr_t phys_addr, uintptr_t virt_
 
         table_l1->entries[pte_index] = (phys_addr & 0xFFFFFFFFF000) | page_flags | PAGE_PRESENT;
         if (is_current) {
-            asm volatile("invlpg [%0]" ::"r" (virt_addr) : "memory");
+            asm volatile("invlpg [%0]" :: "r" (virt_addr) : "memory");
         }
 
         virt_addr += PAGE_SIZE, phys_addr += PAGE_SIZE;
@@ -75,7 +75,7 @@ void memmap_unview(PageTable* address_space, uintptr_t virt_addr, size_t size) {
         size_t pte_index = (virt_addr >> 12) & 0x1FF; // 4KiB
         table_l1->entries[pte_index] = 0;
         if (is_current) {
-            asm volatile("invlpg [%0]" ::"r" (virt_addr) : "memory");
+            asm volatile("invlpg [%0]" :: "r" (virt_addr) : "memory");
         }
     }
 }
@@ -91,28 +91,6 @@ static void dump_pages(PageTable* pt, int depth, uintptr_t base) {
 
             if (depth < 1) {
                 dump_pages(paddr2kaddr(pt->entries[i] & -PAGE_SIZE), depth + 1, vaddr);
-            }
-        }
-    }
-}
-
-static void memdump(u64 *buffer, size_t size) {
-    int scale = 16;
-    int max_pixel = boot_info->fb.width * boot_info->fb.height;
-    int width = boot_info->fb.width;
-
-    for (int i = 0; i < size; i++) {
-        u32 color = 0xFF000000 | ((buffer[i] > 0) ? buffer[i] : 0xFF050505);
-
-        for (int y = 0; y < scale; y++) {
-            for (int x = 0; x < scale; x++) {
-
-                int sx = ((i * scale) % width) + x;
-                int sy = (((i * scale) / width) * scale) + y;
-                int idx = (sy * width) + sx;
-                if (idx >= max_pixel) return;
-
-                boot_info->fb.pixels[idx] = color;
             }
         }
     }
@@ -151,4 +129,3 @@ bool memmap_translate(PageTable* address_space, uintptr_t virt, u64* out) {
     }
     return true;
 }
-

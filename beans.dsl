@@ -5,8 +5,8 @@
 (syscall debug_log      void      (KHandle size_t))
 
 // Allocate new thread
-//                                 env     ip        sp         arg       utcb      flags
-(syscall thread_create  KHandle   (KHandle uintptr_t uintptr_t  uintptr_t uintptr_t int))
+//                                 env     ip        sp         arg0      arg1      utcb      flags
+(syscall thread_create  KHandle   (KHandle uintptr_t uintptr_t  uintptr_t uintptr_t uintptr_t int))
 
 // Set thread state or send async signals (resume, pause). You can also perform
 // self-signalling such as exit or join (rquire thread=0).

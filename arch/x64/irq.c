@@ -299,9 +299,7 @@ uintptr_t timer_interrupt(CPUState* state, uintptr_t cr3, PerCPU* cpu, u64 now) 
         cpu->current_thread = next;
     }
 
-    if (state->cs != 8) {
-        x86_writemsr(IA32_KERNEL_GS_BASE, next->utcb_addr);
-    }
+    x86_writemsr(IA32_FS_BASE, next->utcb_addr);
 
     #if DEBUG_SPALL
     {

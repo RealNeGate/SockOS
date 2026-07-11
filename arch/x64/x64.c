@@ -15,7 +15,6 @@ static bool has_cpu_support(void) {
     if (eax < 0x80000007) {
         return false;
     }
-
     return true;
 }
 
@@ -37,20 +36,13 @@ static void get_cpu_str(char *str) {
     return;
 }
 
-void x86_set_kernel_gs(int core_id) {
-    // fill GS base with PerCPU*
-    x86_writemsr(IA32_KERNEL_GS_BASE, (uintptr_t) &boot_info->cores[core_id]);
-    asm volatile ("swapgs");
-
-    kprintf("Init GS %p %p\n", x86_readmsr(IA32_GS_BASE), x86_readmsr(IA32_KERNEL_GS_BASE));
-}
-
 static atomic_int cores_ready;
 
 void pci_init(void);
 void arch_init(int id) {
-    // Stuff we only handle once
-    x86_set_kernel_gs(id);
+    // fill GS base with PerCPU*
+    x86_writemsr(IA32_KERNEL_GS_BASE, (uintptr_t) &boot_info->cores[id]);
+    asm volatile ("swapgs");
 
     // Double checking
     uint32_t val = 0x1F80;
@@ -107,7 +99,7 @@ void arch_init(int id) {
         asm volatile ("mov ax, 0x28\nltr ax" ::: "ax");
     }
 
-    kprintf("Hello Mr. CPU! %p %d %p\n", cpu, id, cpu->irq_stack_top);
+    kprintf("Hello Mr. The CPU-%d!\n", id);
 
     // fence to wait for all CPUs to finish init
     cores_ready++;
@@ -188,26 +180,10 @@ void x86_writemsr(u32 r, u64 v) {
     asm volatile ("wrmsr" : : "c" (r), "a" (eax), "d" (edx));
 }
 
-static inline void x86_cli(void) {
-    asm volatile ("cli");
-}
-
-static inline void x86_sti(void) {
-    asm volatile ("sti");
-}
-
-static inline void x86_hlt(void) {
-    asm volatile ("hlt");
-}
-
 void sched_yield(void) {
     asm volatile ("int 32");
 }
 
 uint64_t arch_get_micros(void) {
     return __rdtsc() / boot_info->tsc_freq;
-}
-
-uint64_t get_time_ticks(void) {
-    return __rdtsc();
 }

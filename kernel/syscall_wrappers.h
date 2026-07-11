@@ -15,16 +15,17 @@ static uintptr_t SYSW_debug_log(CPUState* state, PerCPU* cpu) {
     return syscall_debug_log(state, cpu, arg_0, arg_1);
 }
 
-static uintptr_t syscall_thread_create(CPUState* state, PerCPU* cpu, KHandle a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t a4, int a5);
+static uintptr_t syscall_thread_create(CPUState* state, PerCPU* cpu, KHandle a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t a4, uintptr_t a5, int a6);
 static uintptr_t SYSW_thread_create(CPUState* state, PerCPU* cpu) {
     KHandle         arg_0 = (KHandle) SYS_PARAM0;
     uintptr_t       arg_1 = (uintptr_t) SYS_PARAM1;
     uintptr_t       arg_2 = (uintptr_t) SYS_PARAM2;
     uintptr_t       arg_3 = (uintptr_t) SYS_PARAM3;
     uintptr_t       arg_4 = (uintptr_t) SYS_PARAM4;
-    int             arg_5 = (int) SYS_PARAM5;
-    ON_DEBUG(SYSCALL)(kprintf("SYS_thread_create(%p, %p, %p, %p, %p, %p)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2, SYS_PARAM3, SYS_PARAM4, SYS_PARAM5));
-    return syscall_thread_create(state, cpu, arg_0, arg_1, arg_2, arg_3, arg_4, arg_5);
+    uintptr_t       arg_5 = (uintptr_t) SYS_PARAM5;
+    int             arg_6 = (int) SYS_PARAM6;
+    ON_DEBUG(SYSCALL)(kprintf("SYS_thread_create(%p, %p, %p, %p, %p, %p, %p)\n", SYS_PARAM0, SYS_PARAM1, SYS_PARAM2, SYS_PARAM3, SYS_PARAM4, SYS_PARAM5, SYS_PARAM6));
+    return syscall_thread_create(state, cpu, arg_0, arg_1, arg_2, arg_3, arg_4, arg_5, arg_6);
 }
 
 static uintptr_t syscall_thread_control(CPUState* state, PerCPU* cpu, KHandle a0, int a1, uint64_t a2, Rawptr a3);

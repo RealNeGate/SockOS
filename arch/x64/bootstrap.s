@@ -34,8 +34,13 @@ bootstrap_start:
 bits 64
 align 256
 gdt_jump:
-    ; get core number (it's in RBX)
-    mov rbx, [data_start + 48]
+    ; convert LAPIC ID into core number
+    mov rbx, [data_start + 56]
+    mov ebx, [rbx + 0x20]
+    shr ebx, 24
+
+    mov rcx, [data_start + 48]
+    mov ebx, [rcx + rbx*4]
 
     ; use GDT
     mov rax, [data_start + 40]
@@ -61,7 +66,8 @@ bootstrap_data_start:
     dq 0 ; [24] sizeof_core
     dq 0 ; [32] bootstrap_transition
     dq 0 ; [40] gdt_table
-    dq 0 ; [48] core_id
+    dq 0 ; [48] lapic2core
+    dq 0 ; [56] apic_base
 
 bootstrap_gdt64:
     ; zero entry
@@ -84,12 +90,13 @@ premain:
 
     ; reserve core
     ;   cpu_index = ebx * sizeof(PerCPU)
-    mov rdi, [data_start + 48]
+    mov  rdi, rbx
     imul rdi, [data_start + 24]
     ; get core pointer & stack
-    add rdi, [data_start + 16]
+    add  rdi, [data_start + 16]
 
     ; jump into C... finally!
     mov rsp, [rdi + 24] ; irq_stack_top
+    mov rdi, rbx
     call [data_start + 8]
 bootstrap_end:

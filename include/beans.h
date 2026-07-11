@@ -61,7 +61,8 @@ enum {
     THREAD_FLAGS_SUSPEND = 1,
 
     // treats argument as a handle
-    THREAD_FLAGS_GRANT   = 2,
+    THREAD_FLAGS_GRANT0  = 2,
+    THREAD_FLAGS_GRANT1  = 4,
 };
 
 // SYS_thread_control: request type
@@ -126,7 +127,13 @@ typedef struct {
     char*  recv_str;
 } StringDope;
 
-typedef struct {
+typedef struct UTCB {
+    void* tls_addr;
+
+    // since the UTCB is bound to the base of FS, this
+    // allows us to read the UTCB address without READFSBASE.
+    struct UTCB* self;
+
     // R/O Config
     uintptr_t error_code;
     uintptr_t exception_ip;
@@ -169,7 +176,7 @@ typedef struct {
 
 static UTCB* get_utcb(void) {
     uint64_t result;
-    asm volatile ("mov %q0, gs:[0]" : "=r" (result));
+    asm volatile ("mov %q0, fs:[0]" : "=r" (result));
     return (UTCB*) result;
 }
 
@@ -307,10 +314,10 @@ static int event_signal(KHandle event) {
     return syscall2(SYS_event_op, EVENT_OP_SIGNAL, event);
 }
 
-static KHandle thread_create(KHandle env, void* fn, uintptr_t arg, size_t stack_size, int flags) {
+static KHandle thread_create(KHandle env, void* fn, uintptr_t arg0, uintptr_t arg1, size_t stack_size, int flags) {
     char* stack = mem_map_private(env, stack_size, PROT_RW, 0);
     char* utcb  = mem_map_private(env, sizeof(UTCB), PROT_RW, 0);
-    return syscall6(SYS_thread_create, env, (uint64_t) fn, (uint64_t) (stack+stack_size), arg, (uint64_t) utcb, flags);
+    return syscall7(SYS_thread_create, env, (uint64_t) fn, (uint64_t) (stack+stack_size), arg0, arg1, (uint64_t) utcb, flags);
 }
 
 // variants of thread_control

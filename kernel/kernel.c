@@ -1,6 +1,7 @@
 #include <kernel.h>
 #include "term.h"
 #include <elf.h>
+#include <threads.h>
 
 #define EBR_IMPL
 #include "ebr.h"
@@ -8,37 +9,10 @@
 KObject_Mailbox* kernel_root_mailbox;
 BootInfo* boot_info;
 
-// murmur3 32-bit
-uint32_t mur3_32(const void *key, int len, uint32_t h) {
-    // main body, work on 32-bit blocks at a time
-    for (int i=0;i<len/4;i++) {
-        uint32_t k = ((uint32_t*) key)[i]*0xcc9e2d51;
-        k = ((k << 15) | (k >> 17))*0x1b873593;
-        h = (((h^k) << 13) | ((h^k) >> 19))*5 + 0xe6546b64;
-    }
-
-    // load/mix up to 3 remaining tail bytes into a tail block
-    uint32_t t = 0;
-    uint8_t *tail = ((uint8_t*) key) + 4*(len/4);
-    switch(len & 3) {
-        case 3: t ^= tail[2] << 16;
-        case 2: t ^= tail[1] <<  8;
-        case 1: {
-            t ^= tail[0] <<  0;
-            h ^= ((0xcc9e2d51*t << 15) | (0xcc9e2d51*t >> 17))*0x1b873593;
-        }
-    }
-
-    // finalization mix, including key length
-    h = ((h^len) ^ ((h^len) >> 16))*0x85ebca6b;
-    h = (h ^ (h >> 13))*0xc2b2ae35;
-    return h ^ (h >> 16);
-}
-
 ////////////////////////////////
 // Mini-ELF loader
 ////////////////////////////////
-// this is the trusted ELF loader for priveleged programs, normal apps will probably
+// this is the trusted ELF loader for privileged programs, normal apps will probably
 // be loaded via a shared object.
 Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
     ON_DEBUG(ENV)(kprintf("Loading a program! %p\n", program));
@@ -88,13 +62,25 @@ Thread* env_load_elf(Env* env, const u8* program, size_t program_size) {
     size_t stack_size = 2*1024*1024;
     uintptr_t stack_ptr = vmem_map(env, 0, 0, 0, stack_size, VMEM_PAGE_WRITE);
 
+    kassert(sizeof(UTCB) < 4096, "Why is the UTCB huge?");
+    uintptr_t utcb_ptr = vmem_map(env, 0, 0, 0, 4096, VMEM_PAGE_WRITE);
+
     ON_DEBUG(ENV)(kprintf("[elf] entry=%p\n", elf_header->e_entry));
     ON_DEBUG(ENV)(kprintf("[elf] stack=%p\n", stack_ptr));
 
     KObject_VMO* initrd_vmo = vmo_create_physical(kaddr2paddr(boot_info->initrd), boot_info->initrd_size, VMEM_PAGE_WRITE);
     KObjectID initrd_handle = env_grant_rights(env, KACCESS_WRITE, &initrd_vmo->super);
 
-    return thread_create(env, (ThreadEntryFn*) elf_header->e_entry, initrd_handle, stack_ptr + stack_size);
+    Thread* t = thread_create(env, (ThreadEntryFn*) elf_header->e_entry, initrd_handle, stack_ptr + stack_size);
+    t->utcb_addr = utcb_ptr;
+
+    #if __x86_64__
+    t->state.rsi = utcb_ptr;
+    #else
+    #error "TODO param passing"
+    #endif
+
+    return t;
 }
 
 size_t map_entry_count;

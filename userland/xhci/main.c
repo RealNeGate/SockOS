@@ -372,7 +372,7 @@ static void usb_fsm(int msg, int port, int slot) {
             dev->mailbox = mailbox_create();
             dev->ipc_ring_evt[0] = event_create();
 
-            thread_create(NULL_HANDLE, usb_device_thread, (uintptr_t) dev, 8192, 0);
+            thread_create(NULL_HANDLE, usb_device_thread, (uintptr_t) dev, 0, 8192, 0);
         } break;
     }
 }
@@ -630,7 +630,7 @@ static void usb_device_thread(void* d) {
                 int i       = (index - 1)*2 + (dir_in ? 4 : 3);
 
                 uintptr_t val = (i - 2) | (DEV_SLOT(dev) << 32u);
-                thread_create(NULL_HANDLE, usb_endpoint_thread, val, 8192, 0);
+                thread_create(NULL_HANDLE, usb_endpoint_thread, val, 0, 8192, 0);
             }
         }
     }

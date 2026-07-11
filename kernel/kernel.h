@@ -329,8 +329,8 @@ Thread* thread_create(Env* env, ThreadEntryFn* entrypoint, uintptr_t arg, uintpt
 void thread_resume(Thread* thread, PerCPU* cpu);
 void thread_kill(Thread* thread);
 
-void waitqueue_wait(WaitQueue* wq, Thread* t);
-Thread* waitqueue_wake(WaitQueue* wq, PerCPU* cpu, bool resume);
+void waitqueue_wait(WaitQueue* wq, Thread* t, void* wait_obj);
+Thread* waitqueue_wake(WaitQueue* wq, PerCPU* cpu, void* wait_obj, bool resume);
 void waitqueue_broadcast(WaitQueue* wq);
 
 ////////////////////////////////
@@ -382,5 +382,4 @@ void io_out32(u16 port, u32 value);
 ////////////////////////////////
 // Utils
 ////////////////////////////////
-uint32_t mur3_32(const void *key, int len, uint32_t h);
 int itoa(u64 v, uint8_t *buffer, uint8_t base);
